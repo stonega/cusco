@@ -17,12 +17,16 @@ Cusco starts as a standalone native GNOME application.
 - `src/main.js`: process entry point.
 - `src/application.js`: GNOME application lifecycle and actions.
 - `src/window.js`: first window and chat shell.
+- `src/providers/provider.js`: common provider contract and message helper.
+- `src/providers/mockProvider.js`: local streaming provider used while the real API layer is designed.
 - `data/`: GNOME integration files.
 - `tests/import-smoke.js`: fast import smoke check.
+- `tests/mock-provider-smoke.js`: verifies the provider stream path.
 
 ## Early Design Decisions
 
 - Native widgets first. Web rendering can be added for rich markdown/code views only when needed.
 - Provider orchestration is a core domain layer, not UI-specific code.
+- Streaming is represented as an async iterator so real API clients and local providers can use the same UI path.
 - Memory must be visible, editable, and disableable.
 - Secrets must not be stored in GSettings or local JSON.

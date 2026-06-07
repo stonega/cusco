@@ -2,6 +2,9 @@ import Adw from 'gi://Adw?version=1';
 import GObject from 'gi://GObject?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
 
+import { createMessage } from './providers/provider.js';
+import { MockProvider } from './providers/mockProvider.js';
+
 export const CuscoWindow = GObject.registerClass(
 class CuscoWindow extends Adw.ApplicationWindow {
     _init(application) {
@@ -12,6 +15,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
             default_height: 760,
         });
 
+        this._provider = new MockProvider();
+        this._conversation = [];
         this._buildUi();
     }
 
@@ -131,11 +136,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
             placeholder_text: 'Message Cusco',
             hexpand: true,
         });
+        this._composer = composer;
 
         const sendButton = new Gtk.Button({
             icon_name: 'mail-send-symbolic',
             tooltip_text: 'Send',
         });
+        this._sendButton = sendButton;
 
         const sendMessage = () => {
             const text = composer.get_text().trim();
@@ -144,8 +151,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 return;
 
             composer.set_text('');
-            this._addMessage('You', text, 'user');
-            this._addMessage('Cusco', 'Provider integration is not wired yet. This shell is ready for the chat engine.', 'assistant');
+            this._sendMessage(text).catch((error) => {
+                logError(error, 'Failed to stream mock provider response');
+                this._addMessage('Cusco', 'The local mock provider failed while streaming.', 'system');
+                this._setComposerBusy(false);
+            });
         };
 
         composer.connect('activate', sendMessage);
@@ -158,6 +168,30 @@ class CuscoWindow extends Adw.ApplicationWindow {
         main.append(composerRow);
 
         return main;
+    }
+
+    async _sendMessage(text) {
+        this._setComposerBusy(true);
+
+        const userMessage = createMessage('user', text);
+        this._conversation.push(userMessage);
+        this._addMessage('You', text, 'user');
+
+        const assistantLabel = this._addMessage('Cusco', '', 'assistant');
+        let assistantText = '';
+
+        for await (const chunk of this._provider.streamChat(this._conversation)) {
+            assistantText += chunk;
+            assistantLabel.set_label(assistantText);
+        }
+
+        this._conversation.push(createMessage('assistant', assistantText));
+        this._setComposerBusy(false);
+    }
+
+    _setComposerBusy(isBusy) {
+        this._composer.set_sensitive(!isBusy);
+        this._sendButton.set_sensitive(!isBusy);
     }
 
     _addMessage(author, body, kind) {
@@ -189,5 +223,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         wrapper.append(authorLabel);
         wrapper.append(bodyLabel);
         this._messages.append(wrapper);
+
+        return bodyLabel;
     }
 });

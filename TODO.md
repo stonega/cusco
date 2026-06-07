@@ -7,6 +7,7 @@ This list starts from the Alma public feature set: clean chat UI, streaming mark
 - [x] Create native GJS/GTK/libadwaita project scaffold.
 - [x] Add Meson build structure and GNOME data files.
 - [x] Add starter chat shell with sidebar, transcript area, and composer.
+- [x] Add provider interface with a local mock streaming provider.
 - [ ] Add persistent application settings with GSettings.
 - [ ] Add provider configuration model.
 - [ ] Add Secret Service storage for API keys.

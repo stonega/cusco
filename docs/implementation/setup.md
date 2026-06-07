@@ -7,7 +7,7 @@ Cusco uses GJS, GTK 4, libadwaita, Meson, and Ninja.
 Quick smoke check:
 
 ```sh
-gjs -m tests/import-smoke.js
+scripts/check.sh
 ```
 
 Run the current shell:
@@ -32,7 +32,7 @@ meson install -C builddir
 
 ## Next Implementation Steps
 
-1. Add a `src/providers/` directory with a provider interface and a mock provider.
-2. Add a `src/storage/` directory for local conversations.
-3. Add settings and preferences for provider configuration.
+1. Add a `src/storage/` directory for local conversations.
+2. Add settings and preferences for provider configuration.
+3. Add a real provider behind the existing streaming interface.
 4. Add a markdown renderer path for assistant messages.
