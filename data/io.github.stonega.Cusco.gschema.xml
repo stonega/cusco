@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="io.github.stonega.Cusco" path="/io/github/stonega/Cusco/">
+    <key name="active-provider" type="s">
+      <default>''</default>
+      <summary>Active AI provider</summary>
+      <description>The provider identifier selected for new conversations.</description>
+    </key>
+    <key name="active-model" type="s">
+      <default>''</default>
+      <summary>Active AI model</summary>
+      <description>The model identifier selected for new conversations.</description>
+    </key>
+  </schema>
+</schemalist>

@@ -1,0 +1,3 @@
+#!/bin/sh
+export GJS_PATH="@PKGDATADIR@${GJS_PATH:+:$GJS_PATH}"
+exec gjs -m "@PKGDATADIR@/main.js" "$@"

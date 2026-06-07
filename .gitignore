@@ -1,0 +1,6 @@
+builddir/
+.flatpak-builder/
+.local/
+.tmp/
+*.pyc
+node_modules/
