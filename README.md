@@ -1,16 +1,28 @@
 # Cusco
 
-Cusco is a native GNOME AI chat application built with GJS, GTK 4, and libadwaita. The goal is an advanced desktop AI workspace that feels at home on GNOME: fast conversations, provider switching, memory controls, tools, and deep desktop integration.
+Cusco is a native GNOME AI chat application built with GJS, GTK 4, and libadwaita. It is an advanced desktop AI workspace that feels at home on GNOME: persistent conversations, provider switching, memory controls, local tools, reusable workspace assets, installed skills, and desktop integration.
+
+> **Under development:** Cusco is not production-ready yet. Expect incomplete behavior, changing data formats, and rough edges while the app is actively built.
+
+## Features
+
+- Native GTK/libadwaita chat shell with a persistent conversation sidebar.
+- Markdown transcript rendering with highlighted code blocks and copy actions.
+- Message edit, retry, regenerate, branch, archive, delete, search, and export workflows.
+- Provider management for OpenAI, Anthropic, Gemini, Kimi, DeepSeek, Z.ai, and custom OpenAI-compatible APIs.
+- Per-chat provider/model selection, model discovery, response timeouts, and optional provider fallback.
+- Secret Service API key storage, with environment variables as a development fallback.
+- User-approved memory proposals, per-chat memory controls, memory management, import/export, and visible audit notes.
+- Built-in tools for web search, calculator, structured data summaries, file context, and image attachment notes.
+- Workspace preferences for prompt snippets, agent profiles, conversation folders/tags, plugin tool descriptors, and optional MCP server configs.
+- Installed SKILL support from `~/.agents/skills`, with a top-level Skills preferences page and per-chat skill selection.
+- GNOME integration through app actions, keyboard shortcuts, notifications, adaptive layout, high contrast/reduced motion settings, desktop actions, and Shell search provider support.
 
 ## Current Status
 
-This repository contains the first scaffold:
+Cusco is still a development project, but the main local app surfaces are implemented. Remote provider clients currently return complete responses and then stream display chunks in the UI; true network streaming is still pending.
 
-- Native GJS application entry point.
-- GTK/libadwaita shell with sidebar, chat surface, and composer.
-- Meson project structure for GNOME packaging.
-- Desktop entry, app metadata, settings schema, icon, and resource placeholders.
-- Feature roadmap in [TODO.md](TODO.md).
+See [TODO.md](TODO.md) for the roadmap and [docs/user/getting-started.md](docs/user/getting-started.md) for workflow details.
 
 ## Requirements
 
@@ -34,6 +46,16 @@ sudo apt install gjs gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtksource-5 gir1.2-secre
 gjs -m src/main.js
 ```
 
+Configure remote providers from Preferences. API keys are stored through Secret Service; for local development, provider-specific environment variables can also be used.
+
+Installed skills are discovered from:
+
+```sh
+~/.agents/skills/<skill-id>/SKILL.md
+```
+
+Enable skills in the Skills preferences page, then select them from the composer skill menu for a chat. Cusco sends selected skills as instruction context and records a visible transcript note; it does not execute skill files.
+
 ## Build
 
 ```sh
@@ -53,6 +75,8 @@ meson install -C builddir
 ```sh
 scripts/check.sh
 ```
+
+Some smoke tests skip automatically when the current environment has no display server or disallows local sockets.
 
 ## Documentation
 
