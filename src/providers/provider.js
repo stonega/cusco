@@ -1,3 +1,5 @@
+import GLib from 'gi://GLib?version=2.0';
+
 export class ChatProvider {
     constructor({ id, name }) {
         this.id = id;
@@ -9,10 +11,13 @@ export class ChatProvider {
     }
 }
 
-export function createMessage(role, content) {
+export function createMessage(role, content, options = {}) {
     return {
+        id: GLib.uuid_string_random(),
         role,
         content,
+        attachments: Array.isArray(options.attachments) ? options.attachments : [],
+        toolCall: options.toolCall ?? null,
         createdAt: new Date().toISOString(),
     };
 }

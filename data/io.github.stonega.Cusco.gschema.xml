@@ -11,5 +11,55 @@
       <summary>Active AI model</summary>
       <description>The model identifier selected for new conversations.</description>
     </key>
+    <key name="enabled-providers" type="as">
+      <default>['mock']</default>
+      <summary>Enabled AI providers</summary>
+      <description>Provider identifiers available in chat provider pickers.</description>
+    </key>
+    <key name="provider-default-models" type="s">
+      <default>'{}'</default>
+      <summary>Provider default models</summary>
+      <description>JSON object mapping provider identifiers to their default model identifiers.</description>
+    </key>
+    <key name="provider-discovered-models" type="s">
+      <default>'{}'</default>
+      <summary>Provider discovered models</summary>
+      <description>JSON object mapping provider identifiers to discovered model metadata.</description>
+    </key>
+    <key name="send-with-enter" type="b">
+      <default>true</default>
+      <summary>Send messages with Enter</summary>
+      <description>Whether pressing Enter in the composer sends the message.</description>
+    </key>
+    <key name="response-timeout-seconds" type="u">
+      <default>45</default>
+      <summary>Provider response timeout</summary>
+      <description>How many seconds to wait before cancelling a provider request.</description>
+    </key>
+    <key name="provider-fallback-enabled" type="b">
+      <default>false</default>
+      <summary>Provider fallback enabled</summary>
+      <description>Whether failed provider requests should retry with another enabled provider.</description>
+    </key>
+    <key name="high-contrast-enabled" type="b">
+      <default>false</default>
+      <summary>High contrast enabled</summary>
+      <description>Whether Cusco should increase interface contrast.</description>
+    </key>
+    <key name="reduced-motion-enabled" type="b">
+      <default>false</default>
+      <summary>Reduced motion enabled</summary>
+      <description>Whether Cusco should avoid nonessential motion.</description>
+    </key>
+    <key name="custom-openai-compatible-base-url" type="s">
+      <default>''</default>
+      <summary>Custom API base URL</summary>
+      <description>Base URL for the user-defined OpenAI-compatible provider.</description>
+    </key>
+    <key name="custom-openai-compatible-models" type="as">
+      <default>[]</default>
+      <summary>Custom API models</summary>
+      <description>Model identifiers for the user-defined OpenAI-compatible provider.</description>
+    </key>
   </schema>
 </schemalist>

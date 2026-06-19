@@ -20,8 +20,18 @@ install_data(
 )
 
 install_data(
+  application_id + '.search-provider.ini',
+  install_dir: datadir / 'gnome-shell' / 'search-providers',
+)
+
+install_data(
   'icons/hicolor/scalable/apps/' + application_id + '.svg',
   install_dir: datadir / 'icons' / 'hicolor' / 'scalable' / 'apps',
+)
+
+install_subdir(
+  'resources',
+  install_dir: pkgdatadir,
 )
 
 gnome.compile_resources(

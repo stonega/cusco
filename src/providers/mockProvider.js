@@ -25,9 +25,9 @@ export class MockProvider extends ChatProvider {
         });
     }
 
-    async *streamChat(messages, _options = {}) {
+    async *streamChat(messages, options = {}) {
         const latestUserMessage = messages.findLast((message) => message.role === 'user');
-        const response = this._buildResponse(latestUserMessage?.content ?? '');
+        const response = this._buildResponse(latestUserMessage?.content ?? '', options);
 
         for (const chunk of streamChunks(response)) {
             await delay(STREAM_DELAY_MS);
@@ -35,13 +35,15 @@ export class MockProvider extends ChatProvider {
         }
     }
 
-    _buildResponse(prompt) {
+    _buildResponse(prompt, options) {
         if (!prompt)
             return 'Cusco is ready. Ask a question to test the streaming chat flow.';
 
+        const modelName = options.model?.name ?? 'Mock Model';
+
         return [
             `I received: "${prompt}".`,
-            'This response is coming from the local mock provider, streamed one chunk at a time.',
+            `This response is coming from ${modelName}, streamed one chunk at a time.`,
             'Next we can replace this provider with OpenAI, Anthropic, Gemini, DeepSeek, or a custom API without rewriting the chat surface.',
         ].join(' ');
     }

@@ -2,7 +2,7 @@
 
 ## Dependencies
 
-Cusco uses GJS, GTK 4, libadwaita, Meson, and Ninja.
+Cusco uses GJS, GTK 4, libadwaita, GtkSourceView 5, libsecret, libsoup 3, Meson, and Ninja.
 
 Quick smoke check:
 
@@ -32,7 +32,4 @@ meson install -C builddir
 
 ## Next Implementation Steps
 
-1. Add a `src/storage/` directory for local conversations.
-2. Add settings and preferences for provider configuration.
-3. Add a real provider behind the existing streaming interface.
-4. Add a markdown renderer path for assistant messages.
+1. Replace display-level chunking with true provider streaming for remote APIs.

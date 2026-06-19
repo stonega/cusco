@@ -1,0 +1,85 @@
+import GLib from 'gi://GLib?version=2.0';
+import Soup from 'gi://Soup?version=3.0';
+
+import {
+    discoverOpenAiCompatibleModels,
+    OpenAiCompatibleChatProvider,
+} from '../src/providers/remoteProvider.js';
+import { createMessage } from '../src/providers/provider.js';
+
+function assertEqual(actual, expected, label) {
+    if (actual !== expected)
+        throw new Error(`${label}: expected ${expected}, got ${actual}`);
+}
+
+function setJsonResponse(message, body) {
+    message.set_status(Soup.Status.OK, null);
+    message.set_response('application/json', Soup.MemoryUse.COPY, JSON.stringify(body));
+}
+
+const server = new Soup.Server();
+
+GLib.setenv('NO_PROXY', '127.0.0.1,localhost', true);
+GLib.setenv('no_proxy', '127.0.0.1,localhost', true);
+GLib.unsetenv('HTTP_PROXY');
+GLib.unsetenv('HTTPS_PROXY');
+GLib.unsetenv('http_proxy');
+GLib.unsetenv('https_proxy');
+
+server.add_handler('/v1/models', (_server, message) => {
+    setJsonResponse(message, {
+        data: [
+            { id: 'local-model', name: 'Local Model' },
+        ],
+    });
+});
+
+server.add_handler('/v1/chat/completions', (_server, message) => {
+    setJsonResponse(message, {
+        choices: [
+            {
+                message: {
+                    content: 'Local provider response',
+                },
+            },
+        ],
+    });
+});
+
+let listening = false;
+
+try {
+    server.listen_local(0, Soup.ServerListenOptions.IPV4_ONLY);
+    listening = true;
+} catch (error) {
+    print(`Cusco remote provider HTTP smoke skipped: ${error.message}`);
+}
+
+if (listening) {
+    try {
+        const baseUrl = `${server.get_uris()[0].to_string().replace(/\/$/, '')}/v1`;
+        const config = {
+            id: 'local-openai-compatible',
+            name: 'Local OpenAI Compatible',
+            baseUrl,
+            apiKey: 'test-key',
+            defaultModelId: 'local-model',
+        };
+
+        const models = await discoverOpenAiCompatibleModels(config, { timeoutSeconds: 5 });
+        assertEqual(models.length, 1, 'Discovered model count');
+        assertEqual(models[0].id, 'local-model', 'Discovered model id');
+
+        const provider = new OpenAiCompatibleChatProvider(config);
+        let text = '';
+
+        for await (const chunk of provider.streamChat([createMessage('user', 'Hello')], { timeoutSeconds: 5 }))
+            text += chunk;
+
+        assertEqual(text, 'Local provider response', 'Streamed provider text');
+    } finally {
+        server.disconnect();
+    }
+
+    print('Cusco remote provider HTTP smoke passed');
+}

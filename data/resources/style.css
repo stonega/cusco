@@ -1,1 +1,116 @@
-/* Reserved for application-level GTK styling as the UI becomes more specific. */
+.cusco-sidebar {
+    background-color: shade(@window_bg_color, 0.96);
+    border-right: 1px solid alpha(@window_fg_color, 0.12);
+}
+
+.cusco-compact .cusco-sidebar {
+    font-size: 0.94em;
+}
+
+.cusco-shell-paned > separator {
+    background-color: shade(@window_bg_color, 0.96);
+}
+
+.cusco-conversation-list {
+    background-color: transparent;
+}
+
+.cusco-conversation-list row {
+    margin: 0;
+    border-radius: 8px;
+    color: @window_fg_color;
+}
+
+.cusco-conversation-list row:hover {
+    background-color: alpha(@window_fg_color, 0.06);
+}
+
+.cusco-conversation-list row:selected {
+    background-color: alpha(@window_fg_color, 0.10);
+}
+
+.cusco-conversation-list row:selected:hover {
+    background-color: alpha(@window_fg_color, 0.13);
+}
+
+.cusco-conversation-list row:selected .dim-label {
+    color: alpha(@window_fg_color, 0.55);
+}
+
+.cusco-conversation-menu-button {
+    min-width: 32px;
+    min-height: 32px;
+}
+
+.cusco-conversation-menu-item {
+    min-width: 170px;
+}
+
+.cusco-composer-meta {
+    margin-left: 2px;
+    margin-right: 2px;
+}
+
+.cusco-message-bubble {
+    padding: 10px 14px;
+    border-radius: 10px;
+}
+
+.cusco-message-assistant {
+    background-color: alpha(@window_fg_color, 0.07);
+    color: @window_fg_color;
+}
+
+.cusco-high-contrast .cusco-message-assistant,
+.cusco-high-contrast .cusco-code-block {
+    border: 1px solid @window_fg_color;
+}
+
+.cusco-message-user {
+    background-color: @accent_color;
+    color: @accent_fg_color;
+}
+
+.cusco-high-contrast .cusco-message-user {
+    outline: 2px solid alpha(@accent_fg_color, 0.8);
+}
+
+.cusco-reduced-motion * {
+    transition-duration: 0ms;
+    animation-duration: 0ms;
+}
+
+.cusco-message-actions {
+    opacity: 0.74;
+}
+
+.cusco-tool-result {
+    margin-top: 2px;
+    margin-bottom: 2px;
+}
+
+.cusco-message-markdown {
+    line-height: 1.35;
+}
+
+.cusco-code-block {
+    background-color: alpha(@window_fg_color, 0.06);
+    border: 1px solid alpha(@window_fg_color, 0.12);
+    border-radius: 8px;
+    color: @window_fg_color;
+}
+
+.cusco-code-header {
+    border-bottom: 1px solid alpha(@window_fg_color, 0.10);
+}
+
+.cusco-code-view {
+    background-color: transparent;
+    padding: 8px;
+}
+
+.cusco-message-user .cusco-code-block {
+    background-color: alpha(@accent_fg_color, 0.14);
+    border-color: alpha(@accent_fg_color, 0.22);
+    color: @accent_fg_color;
+}

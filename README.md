@@ -19,13 +19,13 @@ Install the GNOME JavaScript and build tooling for your distro.
 Fedora:
 
 ```sh
-sudo dnf install gjs gtk4 libadwaita meson ninja-build desktop-file-utils appstream glib2-devel
+sudo dnf install gjs gtk4 libadwaita gtksourceview5 libsecret libsoup3 meson ninja-build desktop-file-utils appstream glib2-devel
 ```
 
 Ubuntu/Debian:
 
 ```sh
-sudo apt install gjs gir1.2-gtk-4.0 gir1.2-adw-1 meson ninja-build desktop-file-utils libglib2.0-dev
+sudo apt install gjs gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtksource-5 gir1.2-secret-1 gir1.2-soup-3.0 meson ninja-build desktop-file-utils libglib2.0-dev
 ```
 
 ## Run From Source
@@ -51,7 +51,7 @@ meson install -C builddir
 ## Test
 
 ```sh
-gjs -m tests/import-smoke.js
+scripts/check.sh
 ```
 
 ## Documentation

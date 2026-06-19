@@ -1,9 +1,42 @@
 import Adw from 'gi://Adw?version=1';
+import Gio from 'gi://Gio?version=2.0';
+import GLib from 'gi://GLib?version=2.0';
 import GObject from 'gi://GObject?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
+import Pango from 'gi://Pango?version=1.0';
 
+import { ConversationManager } from './chat/conversation.js';
+import { createMessageContent } from './chat/messageView.js';
+import { estimateConversationUsage } from './chat/usage.js';
+import { MemoryManager } from './memory/memory.js';
+import { ProviderConfigStore } from './providers/config.js';
 import { createMessage } from './providers/provider.js';
-import { MockProvider } from './providers/mockProvider.js';
+import { AppSettingsStore } from './settings/appSettings.js';
+import { presentProviderSettingsDialog } from './settings/providerSettings.js';
+import { ConversationFileStore } from './storage/conversationStore.js';
+import { MemoryFileStore } from './storage/memoryStore.js';
+import { WorkspaceFileStore } from './storage/workspaceStore.js';
+import { buildSkillContext } from './skills/skills.js';
+import { formatToolResultForTranscript, ToolManager } from './tools/tools.js';
+import { exportConversation } from './workspace/exports.js';
+import { WorkspaceManager } from './workspace/workspace.js';
+
+function isGioError(error, code) {
+    return typeof error?.matches === 'function' && error.matches(Gio.IOErrorEnum, code);
+}
+
+function getProviderErrorMessage(error) {
+    if (error?.userMessage)
+        return error.userMessage;
+
+    if (isGioError(error, Gio.IOErrorEnum.CANCELLED))
+        return 'The provider request was cancelled.';
+
+    if (isGioError(error, Gio.IOErrorEnum.TIMED_OUT))
+        return 'The provider did not respond before the request timed out.';
+
+    return 'The active provider failed while streaming.';
+}
 
 export const CuscoWindow = GObject.registerClass(
 class CuscoWindow extends Adw.ApplicationWindow {
@@ -15,13 +48,44 @@ class CuscoWindow extends Adw.ApplicationWindow {
             default_height: 760,
         });
 
-        this._provider = new MockProvider();
-        this._conversation = [];
+        this._appSettings = new AppSettingsStore();
+        this._memories = new MemoryManager({ store: new MemoryFileStore() });
+        this._workspace = new WorkspaceManager({ store: new WorkspaceFileStore() });
+        this._tools = new ToolManager();
+        this._pendingAttachments = [];
+        this._providerConfigs = new ProviderConfigStore();
+        const { provider: defaultProvider, model: defaultModel } = this._providerConfigs.getActiveSelection();
+
+        this._conversations = new ConversationManager({
+            providerId: defaultProvider.id,
+            modelId: defaultModel?.id ?? '',
+            store: new ConversationFileStore(),
+        });
+
+        if (this._conversations.allConversations.length === 0) {
+            this._conversations.createConversation({
+                title: 'Welcome to Cusco',
+                messages: [
+                    createMessage('assistant', 'Ask a question, compare providers, or start building a reusable AI workflow.'),
+                    createMessage('system', 'Next steps: markdown rendering, memory controls, web search, and desktop integration.'),
+                ],
+            });
+        }
+
+        this._isRefreshingConversations = false;
+        this._isUpdatingProviderControls = false;
+        this._isUpdatingSkillControls = false;
+        this._activeChatCancellable = null;
+        this.connect('close-request', () => {
+            this._activeChatCancellable?.cancel();
+            return false;
+        });
         this._buildUi();
+        this._refreshConversationList();
+        this._renderActiveConversation();
     }
 
     _buildUi() {
-        const toolbarView = new Adw.ToolbarView();
         const headerBar = new Adw.HeaderBar();
         const title = new Adw.WindowTitle({
             title: 'Cusco',
@@ -29,71 +93,122 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
 
         headerBar.set_title_widget(title);
-        headerBar.pack_start(new Gtk.Button({
-            icon_name: 'list-add-symbolic',
-            tooltip_text: 'New chat',
-        }));
-        headerBar.pack_end(new Gtk.Button({
-            icon_name: 'emblem-system-symbolic',
-            tooltip_text: 'Preferences',
-        }));
-
-        toolbarView.add_top_bar(headerBar);
 
         const split = new Gtk.Paned({
             orientation: Gtk.Orientation.HORIZONTAL,
-            wide_handle: true,
+            wide_handle: false,
             shrink_start_child: false,
             shrink_end_child: false,
             resize_start_child: false,
         });
+        this._split = split;
+        split.add_css_class('cusco-shell-paned');
 
         split.set_start_child(this._createSidebar());
-        split.set_end_child(this._createChatSurface());
-        toolbarView.set_content(split);
 
-        this.set_content(toolbarView);
+        const chatView = new Adw.ToolbarView();
+        chatView.add_top_bar(headerBar);
+        chatView.set_content(this._createChatSurface());
+        split.set_end_child(chatView);
+
+        this.set_content(split);
+        this.connect('notify::width', () => this._updateAdaptiveLayout());
+        this._applyAccessibilityPreferences();
+        this._updateAdaptiveLayout();
     }
 
     _createSidebar() {
         const sidebar = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
-            spacing: 12,
-            margin_top: 12,
-            margin_bottom: 12,
-            margin_start: 12,
-            margin_end: 12,
         });
-
+        sidebar.add_css_class('sidebar');
+        sidebar.add_css_class('cusco-sidebar');
         sidebar.set_size_request(280, -1);
+        this._sidebar = sidebar;
 
-        const search = new Gtk.SearchEntry({
-            placeholder_text: 'Search chats',
-            hexpand: true,
+        const sidebarHandle = new Gtk.WindowHandle();
+        const sidebarHeader = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 6,
+            margin_top: 6,
+            margin_bottom: 6,
+            margin_start: 6,
+            margin_end: 6,
         });
-        sidebar.append(search);
 
-        const list = new Gtk.ListBox({
-            selection_mode: Gtk.SelectionMode.SINGLE,
+        this._newChatButton = new Gtk.Button({
+            icon_name: 'list-add-symbolic',
+            tooltip_text: 'New chat',
+        });
+        this._newChatButton.connect('clicked', () => this._createNewConversation());
+
+        const sidebarTitle = new Gtk.Label({
+            label: 'Chats',
+            hexpand: true,
+            xalign: 0.5,
+        });
+        sidebarTitle.add_css_class('heading');
+
+        this._settingsButton = new Gtk.Button({
+            icon_name: 'emblem-system-symbolic',
+            tooltip_text: 'Preferences',
+        });
+        this._settingsButton.connect('clicked', () => this._showSettingsDialog());
+
+        sidebarHeader.append(this._newChatButton);
+        sidebarHeader.append(sidebarTitle);
+        sidebarHeader.append(this._settingsButton);
+        sidebarHandle.set_child(sidebarHeader);
+        sidebar.append(sidebarHandle);
+
+        const sidebarContent = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 12,
+            margin_top: 6,
+            margin_bottom: 12,
+            margin_start: 6,
+            margin_end: 6,
+            hexpand: true,
             vexpand: true,
         });
 
-        ['Welcome to Cusco', 'Provider orchestration', 'Memory controls'].forEach((name) => {
-            const row = new Gtk.ListBoxRow();
-            const label = new Gtk.Label({
-                label: name,
-                xalign: 0,
-                margin_top: 10,
-                margin_bottom: 10,
-                margin_start: 10,
-                margin_end: 10,
-            });
-
-            row.set_child(label);
-            list.append(row);
+        const searchRow = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 6,
         });
 
-        sidebar.append(list);
+        this._chatSearch = new Gtk.SearchEntry({
+            placeholder_text: 'Search chats',
+            hexpand: true,
+        });
+        this._chatSearch.connect('search-changed', () => this._refreshConversationList());
+        searchRow.append(this._chatSearch);
+
+        this._showArchivedButton = new Gtk.ToggleButton({
+            icon_name: 'folder-symbolic',
+            tooltip_text: 'Show archived chats',
+        });
+        this._showArchivedButton.connect('toggled', () => this._refreshConversationList());
+        searchRow.append(this._showArchivedButton);
+
+        sidebarContent.append(searchRow);
+
+        this._conversationList = new Gtk.ListBox({
+            selection_mode: Gtk.SelectionMode.SINGLE,
+            hexpand: true,
+            vexpand: true,
+        });
+        this._conversationList.add_css_class('cusco-conversation-list');
+        this._conversationList.connect('row-selected', (_list, row) => {
+            if (this._isRefreshingConversations || !row)
+                return;
+
+            this._conversations.selectConversation(row.conversationId);
+            this._renderActiveConversation();
+        });
+
+        sidebarContent.append(this._conversationList);
+        sidebar.append(sidebarContent);
         return sidebar;
     }
 
@@ -109,6 +224,47 @@ class CuscoWindow extends Adw.ApplicationWindow {
             vexpand: true,
         });
 
+        const composerShell = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 6,
+        });
+
+        const composerMetaRow = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 8,
+        });
+        composerMetaRow.add_css_class('cusco-composer-meta');
+
+        this._providerPicker = new Gtk.ComboBoxText();
+        this._modelPicker = new Gtk.ComboBoxText();
+        this._populateProviderPicker();
+        this._providerPicker.connect('changed', () => this._handleProviderChanged());
+        this._modelPicker.connect('changed', () => this._handleModelChanged());
+
+        this._memoryToggleButton = new Gtk.ToggleButton({
+            icon_name: 'user-bookmarks-symbolic',
+            tooltip_text: 'Use memories for this chat',
+        });
+        this._memoryToggleButton.connect('toggled', () => this._handleMemoryToggleChanged());
+
+        this._skillMenuButton = this._createSkillMenuButton();
+
+        this._usageLabel = new Gtk.Label({
+            label: '0 est. tokens · 0 messages',
+            xalign: 1,
+            hexpand: true,
+        });
+        this._usageLabel.add_css_class('caption');
+        this._usageLabel.add_css_class('dim-label');
+
+        composerMetaRow.append(new Gtk.Label({ label: 'Provider', xalign: 0 }));
+        composerMetaRow.append(this._providerPicker);
+        composerMetaRow.append(new Gtk.Label({ label: 'Model', xalign: 0 }));
+        composerMetaRow.append(this._modelPicker);
+        composerMetaRow.append(this._memoryToggleButton);
+        composerMetaRow.append(this._skillMenuButton);
+        composerMetaRow.append(this._usageLabel);
+
         this._messages = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
             spacing: 12,
@@ -118,10 +274,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             margin_end: 8,
         });
 
-        this._addMessage('Cusco', 'Ask a question, compare providers, or start building a reusable AI workflow.', 'assistant');
-        this._addMessage('Roadmap', 'Next steps: provider settings, streaming responses, markdown rendering, and local conversation storage.', 'system');
-
-        const scroller = new Gtk.ScrolledWindow({
+        this._scroller = new Gtk.ScrolledWindow({
             child: this._messages,
             hexpand: true,
             vexpand: true,
@@ -132,69 +285,1130 @@ class CuscoWindow extends Adw.ApplicationWindow {
             spacing: 8,
         });
 
-        const composer = new Gtk.Entry({
+        this._attachmentLabel = new Gtk.Label({
+            label: '',
+            xalign: 0,
+            visible: false,
+        });
+        this._attachmentLabel.add_css_class('caption');
+        this._attachmentLabel.add_css_class('dim-label');
+
+        this._attachButton = new Gtk.Button({
+            icon_name: 'mail-attachment-symbolic',
+            tooltip_text: 'Attach file or image',
+        });
+        this._attachButton.connect('clicked', () => this._attachFileContext());
+
+        this._composer = new Gtk.Entry({
             placeholder_text: 'Message Cusco',
             hexpand: true,
         });
-        this._composer = composer;
 
-        const sendButton = new Gtk.Button({
+        this._sendButton = new Gtk.Button({
             icon_name: 'mail-send-symbolic',
             tooltip_text: 'Send',
         });
-        this._sendButton = sendButton;
 
         const sendMessage = () => {
-            const text = composer.get_text().trim();
+            const text = this._composer.get_text().trim();
 
             if (!text)
                 return;
 
-            composer.set_text('');
+            this._composer.set_text('');
             this._sendMessage(text).catch((error) => {
-                logError(error, 'Failed to stream mock provider response');
-                this._addMessage('Cusco', 'The local mock provider failed while streaming.', 'system');
-                this._setComposerBusy(false);
+                logError(error, 'Failed to stream provider response');
+                this._appendSystemError(getProviderErrorMessage(error));
             });
         };
 
-        composer.connect('activate', sendMessage);
-        sendButton.connect('clicked', sendMessage);
+        this._composer.connect('activate', () => {
+            if (this._appSettings.sendWithEnter)
+                sendMessage();
+        });
+        this._sendButton.connect('clicked', sendMessage);
 
-        composerRow.append(composer);
-        composerRow.append(sendButton);
+        composerRow.append(this._attachButton);
+        composerRow.append(this._composer);
+        composerRow.append(this._sendButton);
 
-        main.append(scroller);
-        main.append(composerRow);
+        composerShell.append(composerMetaRow);
+        composerShell.append(this._attachmentLabel);
+        composerShell.append(composerRow);
+
+        main.append(this._scroller);
+        main.append(composerShell);
 
         return main;
     }
 
-    async _sendMessage(text) {
-        this._setComposerBusy(true);
+    _createNewConversation() {
+        const activeConversation = this._conversations.activeConversation;
+        const providerId = activeConversation?.providerId;
+        const modelId = activeConversation?.modelId;
+        const memoryEnabled = activeConversation?.memoryEnabled !== false;
+        const skillIds = activeConversation?.skillIds ?? [];
 
-        const userMessage = createMessage('user', text);
-        this._conversation.push(userMessage);
-        this._addMessage('You', text, 'user');
+        this._conversations.createConversation({ providerId, modelId, memoryEnabled, skillIds });
+        this._refreshConversationList();
+        this._renderActiveConversation();
+    }
 
-        const assistantLabel = this._addMessage('Cusco', '', 'assistant');
-        let assistantText = '';
+    createNewConversation() {
+        this._createNewConversation();
+    }
 
-        for await (const chunk of this._provider.streamChat(this._conversation)) {
-            assistantText += chunk;
-            assistantLabel.set_label(assistantText);
+    showSettings() {
+        this._showSettingsDialog();
+    }
+
+    focusComposer() {
+        this._composer?.grab_focus();
+    }
+
+    setComposerText(text) {
+        this._composer?.set_text(text);
+        this.focusComposer();
+    }
+
+    selectConversation(conversationId) {
+        if (!this._conversations.getConversation(conversationId))
+            return;
+
+        this._conversations.selectConversation(conversationId);
+        this._refreshConversationList();
+        this._renderActiveConversation();
+        this.present();
+    }
+
+    showCommandPalette() {
+        const dialog = new Adw.AlertDialog({
+            heading: 'Command Palette',
+        });
+        dialog.add_response('cancel', 'Cancel');
+        dialog.add_response('new-chat', 'New Chat');
+        dialog.add_response('preferences', 'Preferences');
+        dialog.add_response('focus-composer', 'Focus Composer');
+        dialog.set_default_response('focus-composer');
+        dialog.set_close_response('cancel');
+        dialog.choose(this, null, (_dialog, result) => {
+            switch (dialog.choose_finish(result)) {
+            case 'new-chat':
+                this._createNewConversation();
+                break;
+            case 'preferences':
+                this._showSettingsDialog();
+                break;
+            case 'focus-composer':
+                this.focusComposer();
+                break;
+            default:
+                break;
+            }
+        });
+    }
+
+    _showSettingsDialog() {
+        presentProviderSettingsDialog(
+            this,
+            this._providerConfigs,
+            this._appSettings,
+            this._memories,
+            this._workspace,
+            () => this._handleProviderSettingsChanged(),
+        );
+    }
+
+    _handleProviderSettingsChanged() {
+        const conversation = this._conversations.activeConversation;
+
+        if (conversation && !this._providerConfigs.isProviderAvailable(conversation.providerId)) {
+            const defaultProvider = this._providerConfigs.getDefaultProvider();
+            const defaultModel = this._providerConfigs.getDefaultModel(defaultProvider.id);
+            this._conversations.updateProviderConfig(conversation.id, {
+                providerId: defaultProvider.id,
+                modelId: defaultModel?.id ?? '',
+            });
+            this._providerConfigs.setActiveSelection(defaultProvider.id, defaultModel?.id ?? '');
         }
 
-        this._conversation.push(createMessage('assistant', assistantText));
-        this._setComposerBusy(false);
+        this._populateProviderPicker();
+        this._syncProviderControls(this._conversations.activeConversation);
+        this._refreshSkillMenu(this._conversations.activeConversation);
+        this._applyAccessibilityPreferences();
+        this._refreshConversationList();
+    }
+
+    async _sendMessage(text) {
+        const conversation = this._conversations.activeConversation ?? this._conversations.createConversation();
+        const attachments = this._consumePendingAttachments();
+        const userMessage = createMessage(
+            'user',
+            this._formatUserMessageContent(text, attachments),
+            { attachments },
+        );
+
+        this._conversations.appendMessage(conversation.id, userMessage);
+        this._addMessage(userMessage.content, userMessage.role, userMessage);
+        this._promptMemoryProposal(userMessage, conversation);
+        await this._runRequestedTool(text, conversation.id);
+        this._refreshConversationList();
+        await this._streamAssistantResponse(conversation.id);
+    }
+
+    async _runRequestedTool(text, conversationId) {
+        const request = this._tools.parseRequest(text);
+
+        if (!request)
+            return;
+
+        if (request.requiresPermission && !await this._confirmToolPermission(request)) {
+            const message = createMessage('system', `${request.label} was not run because permission was denied.`);
+            this._conversations.appendMessage(conversationId, message);
+            this._addMessage(message.content, message.role, message);
+            return;
+        }
+
+        this._setComposerBusy(true);
+
+        try {
+            const result = await this._tools.runRequest(request, {
+                timeoutSeconds: this._appSettings.responseTimeoutSeconds,
+            });
+            const message = createMessage('system', formatToolResultForTranscript(result), {
+                toolCall: {
+                    name: result.name,
+                    label: result.label,
+                    input: result.input,
+                    output: result.output ?? '',
+                    results: result.results ?? [],
+                    createdAt: new Date().toISOString(),
+                },
+            });
+            this._conversations.appendMessage(conversationId, message);
+            this._addMessage(message.content, message.role, message);
+        } catch (error) {
+            const message = createMessage('system', error.userMessage ?? `Tool failed: ${error.message}`);
+            this._conversations.appendMessage(conversationId, message);
+            this._addMessage(message.content, message.role, message);
+            logError(error, 'Failed to run tool request');
+        } finally {
+            this._setComposerBusy(false);
+        }
+    }
+
+    _confirmToolPermission(request) {
+        return new Promise((resolve) => {
+            const dialog = new Adw.AlertDialog({
+                heading: `Run ${request.label}?`,
+                body: request.name === 'search'
+                    ? `Cusco will send this query to DuckDuckGo:\n${request.input}`
+                    : request.input,
+            });
+            dialog.add_response('deny', 'Deny');
+            dialog.add_response('allow', 'Allow');
+            dialog.set_default_response('allow');
+            dialog.set_close_response('deny');
+            dialog.set_response_appearance('allow', Adw.ResponseAppearance.SUGGESTED);
+            dialog.choose(this, null, (_dialog, result) => {
+                resolve(dialog.choose_finish(result) === 'allow');
+            });
+        });
+    }
+
+    _attachFileContext() {
+        const dialog = new Gtk.FileDialog({
+            title: 'Attach File or Image',
+        });
+
+        dialog.open(this, null, (_dialog, result) => {
+            try {
+                const file = dialog.open_finish(result);
+                const path = file.get_path();
+
+                if (!path)
+                    throw new Error('Only local file attachments are supported right now');
+
+                this._pendingAttachments.push(this._createAttachmentFromPath(path));
+                this._updateAttachmentLabel();
+            } catch (error) {
+                logError(error, 'Failed to attach file');
+            }
+        });
+    }
+
+    _createAttachmentFromPath(path) {
+        const name = GLib.path_get_basename(path);
+        const lowerName = name.toLowerCase();
+        const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].some((extension) => (
+            lowerName.endsWith(extension)
+        ));
+
+        if (isImage) {
+            return {
+                kind: 'image',
+                name,
+                path,
+            };
+        }
+
+        const [, contents] = GLib.file_get_contents(path);
+        const text = new TextDecoder().decode(contents);
+
+        return {
+            kind: 'file',
+            name,
+            path,
+            content: text.slice(0, 20000),
+            truncated: text.length > 20000,
+        };
+    }
+
+    _consumePendingAttachments() {
+        const attachments = this._pendingAttachments.map((attachment) => ({ ...attachment }));
+        this._pendingAttachments = [];
+        this._updateAttachmentLabel();
+        return attachments;
+    }
+
+    _updateAttachmentLabel() {
+        if (this._pendingAttachments.length === 0) {
+            this._attachmentLabel.set_visible(false);
+            this._attachmentLabel.set_label('');
+            return;
+        }
+
+        this._attachmentLabel.set_label(`Attached: ${this._pendingAttachments.map((attachment) => attachment.name).join(', ')}`);
+        this._attachmentLabel.set_visible(true);
+    }
+
+    _formatUserMessageContent(text, attachments) {
+        if (attachments.length === 0)
+            return text;
+
+        const attachmentText = attachments.map((attachment) => {
+            if (attachment.kind === 'image')
+                return `Image attachment: ${attachment.name}`;
+
+            return [
+                `File attachment: ${attachment.name}${attachment.truncated ? ' (truncated)' : ''}`,
+                '```text',
+                attachment.content,
+                '```',
+            ].join('\n');
+        }).join('\n\n');
+
+        return `${text}\n\n${attachmentText}`;
+    }
+
+    async _streamAssistantResponse(conversationId) {
+        const conversation = this._conversations.getConversation(conversationId);
+
+        if (!conversation)
+            return;
+
+        const cancellable = new Gio.Cancellable();
+        this._activeChatCancellable = cancellable;
+        this._setComposerBusy(true);
+        this._startLongResponseNotification();
+
+        try {
+            this._injectMemoryContext(conversation);
+            const activeSkills = this._injectSkillContext(conversation);
+            const providerMessages = this._buildProviderMessages(conversation, activeSkills);
+            const assistantView = this._addMessage('', 'assistant');
+            let assistantText = '';
+            const streamWithSelection = async (providerId, modelId) => {
+                const activeProvider = this._providerConfigs.createProvider(providerId);
+                const providerConfig = this._providerConfigs.resolve(providerId, modelId);
+
+                for await (const chunk of activeProvider.streamChat(providerMessages, {
+                    ...providerConfig,
+                    cancellable,
+                    timeoutSeconds: this._appSettings.responseTimeoutSeconds,
+                })) {
+                    assistantText += chunk;
+                    assistantView.set_label(assistantText);
+                    this._updateUsageDisplay(conversation, assistantText);
+                    this._scrollToBottom();
+                }
+            };
+
+            try {
+                await streamWithSelection(conversation.providerId, conversation.modelId);
+            } catch (error) {
+                const fallback = this._getProviderFallback(conversation.providerId, error);
+
+                if (!fallback.provider)
+                    throw error;
+
+                assistantText = '';
+                assistantView.set_label(`Retrying with ${fallback.provider.name}...`);
+                this._conversations.updateProviderConfig(conversation.id, {
+                    providerId: fallback.provider.id,
+                    modelId: fallback.model?.id ?? '',
+                });
+                this._syncProviderControls(conversation);
+                this._refreshConversationList();
+                await streamWithSelection(fallback.provider.id, fallback.model?.id ?? '');
+            }
+
+            this._conversations.appendMessage(conversation.id, createMessage('assistant', assistantText));
+            this._refreshConversationList();
+            this._renderActiveConversation();
+        } finally {
+            if (this._activeChatCancellable === cancellable)
+                this._activeChatCancellable = null;
+
+            this._setComposerBusy(false);
+            this._stopLongResponseNotification();
+        }
+    }
+
+    _startLongResponseNotification() {
+        this._stopLongResponseNotification();
+        this._longResponseNotificationId = `long-response-${GLib.uuid_string_random()}`;
+        this._longResponseNotificationSent = false;
+        this._longResponseTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
+            const notification = new Gio.Notification();
+            notification.set_title('Cusco is still responding');
+            notification.set_body('The current response is taking longer than usual.');
+            this.get_application()?.send_notification(this._longResponseNotificationId, notification);
+            this._longResponseNotificationSent = true;
+            this._longResponseTimeoutId = 0;
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _stopLongResponseNotification() {
+        if (this._longResponseTimeoutId) {
+            GLib.source_remove(this._longResponseTimeoutId);
+            this._longResponseTimeoutId = 0;
+        }
+
+        if (this._longResponseNotificationSent && this._longResponseNotificationId)
+            this.get_application()?.withdraw_notification(this._longResponseNotificationId);
+
+        this._longResponseNotificationSent = false;
+        this._longResponseNotificationId = null;
+    }
+
+    _applyAccessibilityPreferences() {
+        if (this._appSettings.highContrastEnabled)
+            this.add_css_class('cusco-high-contrast');
+        else
+            this.remove_css_class('cusco-high-contrast');
+
+        if (this._appSettings.reducedMotionEnabled)
+            this.add_css_class('cusco-reduced-motion');
+        else
+            this.remove_css_class('cusco-reduced-motion');
+    }
+
+    _updateAdaptiveLayout() {
+        if (!this._sidebar)
+            return;
+
+        const compact = this.get_width() > 0 && this.get_width() < 820;
+        this._sidebar.set_size_request(compact ? 220 : 280, -1);
+
+        if (compact)
+            this.add_css_class('cusco-compact');
+        else
+            this.remove_css_class('cusco-compact');
+    }
+
+    _getProviderFallback(providerId, error) {
+        if (!this._appSettings.providerFallbackEnabled)
+            return { provider: null, model: null };
+
+        if (isGioError(error, Gio.IOErrorEnum.CANCELLED))
+            return { provider: null, model: null };
+
+        return this._providerConfigs.getFallbackSelection(providerId);
+    }
+
+    _injectMemoryContext(conversation) {
+        const latestUserMessage = [...conversation.messages]
+            .reverse()
+            .find((message) => message.role === 'user');
+        const memories = this._memories.getMemoriesForConversation(conversation, {
+            latestText: latestUserMessage?.content ?? '',
+        });
+
+        if (memories.length === 0)
+            return;
+
+        const auditMessage = createMessage(
+            'system',
+            `Memory used for this response:\n${memories.map((memory) => `- ${memory.content}`).join('\n')}`,
+        );
+        this._conversations.appendMessage(conversation.id, auditMessage);
+        this._memories.recordMemoryUse(memories.map((memory) => memory.id), {
+            conversationId: conversation.id,
+            messageId: auditMessage.id,
+        });
+        this._addMessage(auditMessage.content, auditMessage.role, auditMessage);
+        this._updateUsageDisplay(conversation);
+    }
+
+    _injectSkillContext(conversation) {
+        const skills = this._workspace.getSkillsForConversation(conversation);
+
+        if (skills.length === 0)
+            return [];
+
+        const auditMessage = createMessage(
+            'system',
+            `Skills used for this response:\n${skills.map((skill) => `- ${skill.name}`).join('\n')}`,
+        );
+        this._conversations.appendMessage(conversation.id, auditMessage);
+        this._addMessage(auditMessage.content, auditMessage.role, auditMessage);
+        this._updateUsageDisplay(conversation);
+        return skills;
+    }
+
+    _buildProviderMessages(conversation, skills) {
+        const skillContext = buildSkillContext(skills);
+
+        if (!skillContext)
+            return conversation.messages;
+
+        return [
+            {
+                role: 'system',
+                content: skillContext,
+            },
+            ...conversation.messages,
+        ];
+    }
+
+    _promptMemoryProposal(message, conversation) {
+        const proposal = this._memories.createProposalFromMessage(message, conversation);
+
+        if (!proposal)
+            return;
+
+        const label = new Gtk.Label({
+            label: `${proposal.content}\n\n${proposal.reason}`,
+            wrap: true,
+            selectable: true,
+            xalign: 0,
+        });
+        const dialog = new Adw.AlertDialog({
+            heading: 'Save Memory?',
+        });
+        dialog.set_extra_child(label);
+        dialog.add_response('dismiss', 'Dismiss');
+        dialog.add_response('save', 'Save');
+        dialog.set_default_response('save');
+        dialog.set_close_response('dismiss');
+        dialog.set_response_appearance('save', Adw.ResponseAppearance.SUGGESTED);
+        dialog.choose(this, null, (_dialog, result) => {
+            if (dialog.choose_finish(result) !== 'save')
+                return;
+
+            try {
+                this._memories.addMemory(proposal);
+            } catch (error) {
+                logError(error, 'Failed to save memory');
+            }
+        });
+    }
+
+    _appendSystemError(text) {
+        const conversation = this._conversations.activeConversation;
+
+        if (conversation)
+            this._conversations.appendMessage(conversation.id, createMessage('system', text));
+
+        this._addMessage(text, 'system');
+        this._updateUsageDisplay(conversation);
+    }
+
+    _populateProviderPicker() {
+        this._providerPicker.remove_all();
+
+        for (const provider of this._providerConfigs.listProviders({ enabledOnly: true }))
+            this._providerPicker.append(provider.id, provider.name);
+    }
+
+    _populateModelPicker(providerId, selectedModelId = null) {
+        const provider = this._providerConfigs.getProvider(providerId);
+        this._modelPicker.remove_all();
+
+        for (const model of provider?.models ?? [])
+            this._modelPicker.append(model.id, model.name);
+
+        const fallbackModel = this._providerConfigs.getDefaultModel(providerId);
+        this._modelPicker.set_active_id(selectedModelId ?? fallbackModel?.id ?? null);
+    }
+
+    _createSkillMenuButton() {
+        const menuButton = new Gtk.MenuButton({
+            icon_name: 'emblem-system-symbolic',
+            tooltip_text: 'Skills',
+        });
+        const popover = new Gtk.Popover();
+
+        menuButton.set_popover(popover);
+        this._skillMenuPopover = popover;
+        this._refreshSkillMenu();
+        return menuButton;
+    }
+
+    _refreshSkillMenu(conversation = this._conversations?.activeConversation) {
+        if (!this._skillMenuPopover || !this._skillMenuButton)
+            return;
+
+        this._isUpdatingSkillControls = true;
+
+        const selectedSkillIds = new Set(conversation?.skillIds ?? []);
+        const enabledSkills = this._workspace.enabledSkills;
+        const box = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 4,
+            margin_top: 8,
+            margin_bottom: 8,
+            margin_start: 8,
+            margin_end: 8,
+        });
+
+        if (enabledSkills.length === 0) {
+            const emptyLabel = new Gtk.Label({
+                label: 'No enabled skills',
+                xalign: 0,
+            });
+            emptyLabel.add_css_class('dim-label');
+            box.append(emptyLabel);
+        }
+
+        for (const skill of enabledSkills) {
+            const row = new Gtk.Box({
+                orientation: Gtk.Orientation.HORIZONTAL,
+                spacing: 8,
+                margin_top: 3,
+                margin_bottom: 3,
+                margin_start: 3,
+                margin_end: 3,
+            });
+            const check = new Gtk.CheckButton({
+                active: selectedSkillIds.has(skill.id),
+                tooltip_text: skill.description || skill.path,
+            });
+            const labels = new Gtk.Box({
+                orientation: Gtk.Orientation.VERTICAL,
+                spacing: 2,
+                hexpand: true,
+            });
+            const nameLabel = new Gtk.Label({
+                label: skill.name,
+                xalign: 0,
+                hexpand: true,
+            });
+            const descriptionLabel = new Gtk.Label({
+                label: skill.description || skill.path,
+                xalign: 0,
+                hexpand: true,
+                wrap: true,
+            });
+            descriptionLabel.add_css_class('caption');
+            descriptionLabel.add_css_class('dim-label');
+
+            check.connect('toggled', () => {
+                if (this._isUpdatingSkillControls)
+                    return;
+
+                this._setConversationSkillSelected(skill.id, check.get_active());
+            });
+
+            labels.append(nameLabel);
+            labels.append(descriptionLabel);
+            row.append(check);
+            row.append(labels);
+            box.append(row);
+        }
+
+        const selectedCount = enabledSkills.filter((skill) => selectedSkillIds.has(skill.id)).length;
+        this._skillMenuButton.set_tooltip_text(selectedCount > 0
+            ? `${selectedCount} skill${selectedCount === 1 ? '' : 's'} selected`
+            : 'Skills');
+        this._skillMenuPopover.set_child(box);
+        this._isUpdatingSkillControls = false;
+    }
+
+    _syncProviderControls(conversation) {
+        if (!conversation)
+            return;
+
+        this._isUpdatingProviderControls = true;
+        this._providerPicker.set_active_id(conversation.providerId);
+        this._populateModelPicker(conversation.providerId, conversation.modelId);
+        this._memoryToggleButton.set_active(conversation.memoryEnabled !== false);
+        this._refreshSkillMenu(conversation);
+        this._isUpdatingProviderControls = false;
+    }
+
+    _setConversationSkillSelected(skillId, selected) {
+        const conversation = this._conversations.activeConversation;
+
+        if (!conversation)
+            return;
+
+        const skillIds = new Set(conversation.skillIds ?? []);
+
+        if (selected)
+            skillIds.add(skillId);
+        else
+            skillIds.delete(skillId);
+
+        this._conversations.setSkillIds(conversation.id, [...skillIds]);
+        this._refreshSkillMenu(conversation);
+    }
+
+    _handleMemoryToggleChanged() {
+        if (this._isUpdatingProviderControls)
+            return;
+
+        const conversation = this._conversations.activeConversation;
+
+        if (!conversation)
+            return;
+
+        this._conversations.setMemoryEnabled(conversation.id, this._memoryToggleButton.get_active());
+        this._refreshConversationList();
+    }
+
+    _handleProviderChanged() {
+        if (this._isUpdatingProviderControls)
+            return;
+
+        const conversation = this._conversations.activeConversation;
+        const providerId = this._providerPicker.get_active_id();
+
+        if (!conversation || !providerId)
+            return;
+
+        const model = this._providerConfigs.getDefaultModel(providerId);
+        this._conversations.updateProviderConfig(conversation.id, {
+            providerId,
+            modelId: model?.id ?? '',
+        });
+        this._providerConfigs.setActiveSelection(providerId, model?.id ?? '');
+        this._syncProviderControls(conversation);
+        this._refreshConversationList();
+    }
+
+    _handleModelChanged() {
+        if (this._isUpdatingProviderControls)
+            return;
+
+        const conversation = this._conversations.activeConversation;
+        const modelId = this._modelPicker.get_active_id();
+
+        if (!conversation || !modelId)
+            return;
+
+        this._conversations.updateProviderConfig(conversation.id, {
+            providerId: conversation.providerId,
+            modelId,
+        });
+        this._providerConfigs.setActiveSelection(conversation.providerId, modelId);
+        this._refreshConversationList();
+    }
+
+    _refreshConversationList() {
+        this._isRefreshingConversations = true;
+        this._clearBox(this._conversationList);
+
+        const activeConversation = this._conversations.activeConversation;
+
+        for (const conversation of this._getVisibleConversations()) {
+            const row = new Gtk.ListBoxRow();
+            row.conversationId = conversation.id;
+            row.set_child(this._createConversationRow(conversation, row));
+            this._conversationList.append(row);
+
+            if (conversation.id === activeConversation?.id)
+                this._conversationList.select_row(row);
+        }
+
+        this._isRefreshingConversations = false;
+    }
+
+    _getVisibleConversations() {
+        return this._conversations.searchConversations(this._chatSearch?.get_text() ?? '', {
+            includeArchived: this._showArchivedButton?.get_active() ?? false,
+        });
+    }
+
+    _createConversationRow(conversation, hoverTarget = null) {
+        const providerConfig = this._providerConfigs.resolve(conversation.providerId, conversation.modelId);
+        const rowBox = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 6,
+            margin_top: 4,
+            margin_bottom: 4,
+            margin_start: 6,
+            margin_end: 6,
+        });
+
+        const box = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 2,
+            hexpand: true,
+            valign: Gtk.Align.CENTER,
+        });
+
+        const title = new Gtk.Label({
+            label: conversation.title,
+            xalign: 0,
+            ellipsize: Pango.EllipsizeMode.END,
+        });
+
+        const organizationLabel = [
+            conversation.folderId ? `Folder ${conversation.folderId}` : '',
+            ...(conversation.tags ?? []).map((tag) => `#${tag}`),
+        ].filter(Boolean).join(' ');
+        const subtitle = new Gtk.Label({
+            label: [
+                conversation.archived ? 'Archived' : '',
+                `${providerConfig.provider.name} / ${providerConfig.model?.name ?? 'No model'}`,
+                organizationLabel,
+            ].filter(Boolean).join(' / '),
+            xalign: 0,
+            ellipsize: Pango.EllipsizeMode.END,
+        });
+        subtitle.add_css_class('caption');
+        subtitle.add_css_class('dim-label');
+
+        box.append(title);
+        box.append(subtitle);
+
+        const actions = this._createConversationMenuButton(conversation, hoverTarget ?? rowBox);
+
+        rowBox.append(box);
+        rowBox.append(actions);
+        return rowBox;
+    }
+
+    _createConversationMenuButton(conversation, hoverTarget) {
+        const menuButton = new Gtk.MenuButton({
+            icon_name: 'open-menu-symbolic',
+            tooltip_text: 'Chat actions',
+            valign: Gtk.Align.CENTER,
+        });
+        menuButton.add_css_class('flat');
+        menuButton.add_css_class('cusco-conversation-menu-button');
+
+        const popover = new Gtk.Popover();
+        const menu = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 2,
+            margin_top: 6,
+            margin_bottom: 6,
+            margin_start: 6,
+            margin_end: 6,
+        });
+        menu.add_css_class('cusco-conversation-menu');
+
+        const addMenuItem = (iconName, label, onClicked, options = {}) => {
+            menu.append(this._createConversationMenuItem(iconName, label, () => {
+                popover.popdown();
+                onClicked();
+            }, options));
+        };
+
+        addMenuItem('document-edit-symbolic', 'Rename chat', () => {
+            this._renameConversation(conversation.id);
+        });
+        addMenuItem('document-properties-symbolic', 'Organize chat', () => {
+            this._organizeConversation(conversation.id);
+        });
+        addMenuItem('document-save-symbolic', 'Export chat', () => {
+            this._exportConversation(conversation.id);
+        });
+        addMenuItem(
+            conversation.archived ? 'view-refresh-symbolic' : 'folder-symbolic',
+            conversation.archived ? 'Unarchive chat' : 'Archive chat',
+            () => this._toggleConversationArchive(conversation.id),
+        );
+        addMenuItem('user-trash-symbolic', 'Delete chat', () => {
+            this._confirmDeleteConversation(conversation.id);
+        }, { destructive: true });
+
+        popover.set_child(menu);
+        menuButton.set_popover(popover);
+
+        const setMenuVisible = (visible) => {
+            menuButton.set_opacity(visible ? 1 : 0);
+            menuButton.set_sensitive(visible);
+        };
+        let isHovered = false;
+        const syncMenuVisibility = () => setMenuVisible(isHovered || popover.get_visible());
+        const motionController = new Gtk.EventControllerMotion();
+
+        motionController.connect('enter', () => {
+            isHovered = true;
+            syncMenuVisibility();
+        });
+        motionController.connect('leave', () => {
+            isHovered = false;
+            syncMenuVisibility();
+        });
+        popover.connect('closed', syncMenuVisibility);
+
+        hoverTarget.add_controller(motionController);
+        setMenuVisible(false);
+
+        return menuButton;
+    }
+
+    _createConversationMenuItem(iconName, label, onClicked, options = {}) {
+        const button = new Gtk.Button({
+            icon_name: iconName,
+            tooltip_text: label,
+            halign: Gtk.Align.FILL,
+        });
+        button.add_css_class('flat');
+        button.add_css_class('cusco-conversation-menu-item');
+
+        if (options.destructive)
+            button.add_css_class('destructive-action');
+
+        const content = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 8,
+            margin_top: 4,
+            margin_bottom: 4,
+            margin_start: 6,
+            margin_end: 6,
+        });
+        content.append(new Gtk.Image({ icon_name: iconName }));
+        content.append(new Gtk.Label({
+            label,
+            xalign: 0,
+            hexpand: true,
+        }));
+        button.set_child(content);
+        button.connect('clicked', onClicked);
+        return button;
+    }
+
+    _renameConversation(conversationId) {
+        const conversation = this._conversations.getConversation(conversationId);
+
+        if (!conversation)
+            return;
+
+        const entry = new Gtk.Entry({
+            text: conversation.title,
+            hexpand: true,
+        });
+        const dialog = new Adw.AlertDialog({
+            heading: 'Rename Chat',
+        });
+        dialog.set_extra_child(entry);
+        dialog.add_response('cancel', 'Cancel');
+        dialog.add_response('rename', 'Rename');
+        dialog.set_default_response('rename');
+        dialog.set_close_response('cancel');
+        dialog.set_response_appearance('rename', Adw.ResponseAppearance.SUGGESTED);
+        dialog.choose(this, null, (_dialog, result) => {
+            if (dialog.choose_finish(result) !== 'rename')
+                return;
+
+            this._conversations.renameConversation(conversationId, entry.get_text());
+            this._refreshConversationList();
+            this._renderActiveConversation();
+        });
+    }
+
+    _toggleConversationArchive(conversationId) {
+        const conversation = this._conversations.getConversation(conversationId);
+
+        if (!conversation)
+            return;
+
+        this._conversations.archiveConversation(conversationId, !conversation.archived);
+
+        if (this._conversations.conversations.length === 0)
+            this._showArchivedButton.set_active(true);
+
+        this._refreshConversationList();
+        this._renderActiveConversation();
+    }
+
+    _organizeConversation(conversationId) {
+        const conversation = this._conversations.getConversation(conversationId);
+
+        if (!conversation)
+            return;
+
+        const box = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 8,
+        });
+        const folderEntry = new Gtk.Entry({
+            placeholder_text: 'Folder ID',
+            text: conversation.folderId ?? '',
+        });
+        const tagsEntry = new Gtk.Entry({
+            placeholder_text: 'Tags',
+            text: (conversation.tags ?? []).join(', '),
+        });
+        const profileEntry = new Gtk.Entry({
+            placeholder_text: 'Profile ID',
+            text: conversation.profileId ?? '',
+        });
+        box.append(folderEntry);
+        box.append(tagsEntry);
+        box.append(profileEntry);
+
+        const dialog = new Adw.AlertDialog({
+            heading: 'Organize Chat',
+            body: 'Use folder/profile IDs from Workspace preferences and comma-separated tags.',
+        });
+        dialog.set_extra_child(box);
+        dialog.add_response('cancel', 'Cancel');
+        dialog.add_response('save', 'Save');
+        dialog.set_default_response('save');
+        dialog.set_close_response('cancel');
+        dialog.set_response_appearance('save', Adw.ResponseAppearance.SUGGESTED);
+        dialog.choose(this, null, (_dialog, result) => {
+            if (dialog.choose_finish(result) !== 'save')
+                return;
+
+            this._conversations.updateWorkspaceMetadata(conversation.id, {
+                folderId: folderEntry.get_text(),
+                tags: tagsEntry.get_text(),
+                profileId: profileEntry.get_text(),
+            });
+            this._refreshConversationList();
+        });
+    }
+
+    _exportConversation(conversationId) {
+        const conversation = this._conversations.getConversation(conversationId);
+
+        if (!conversation)
+            return;
+
+        const dialog = new Adw.AlertDialog({
+            heading: 'Export Chat',
+            body: conversation.title,
+        });
+        dialog.add_response('cancel', 'Cancel');
+        dialog.add_response('markdown', 'Markdown');
+        dialog.add_response('json', 'JSON');
+        dialog.add_response('pdf', 'PDF');
+        dialog.set_default_response('markdown');
+        dialog.set_close_response('cancel');
+        dialog.choose(this, null, (_dialog, result) => {
+            const format = dialog.choose_finish(result);
+
+            if (format === 'cancel')
+                return;
+
+            this._saveConversationExport(conversation, format);
+        });
+    }
+
+    _saveConversationExport(conversation, format) {
+        const extension = format === 'markdown' ? 'md' : format;
+        const dialog = new Gtk.FileDialog({
+            title: 'Save Conversation',
+            initial_name: `${conversation.title.replace(/[^\w.-]+/g, '-').replace(/^-|-$/g, '') || 'conversation'}.${extension}`,
+        });
+
+        dialog.save(this, null, (_dialog, result) => {
+            try {
+                const file = dialog.save_finish(result);
+                const path = file.get_path();
+
+                if (!path)
+                    throw new Error('Only local export paths are supported right now');
+
+                GLib.file_set_contents(path, exportConversation(conversation, format));
+            } catch (error) {
+                logError(error, 'Failed to export conversation');
+            }
+        });
+    }
+
+    _confirmDeleteConversation(conversationId) {
+        const conversation = this._conversations.getConversation(conversationId);
+
+        if (!conversation)
+            return;
+
+        const dialog = new Adw.AlertDialog({
+            heading: 'Delete Chat?',
+            body: conversation.title,
+        });
+        dialog.add_response('cancel', 'Cancel');
+        dialog.add_response('delete', 'Delete');
+        dialog.set_default_response('cancel');
+        dialog.set_close_response('cancel');
+        dialog.set_response_appearance('delete', Adw.ResponseAppearance.DESTRUCTIVE);
+        dialog.choose(this, null, (_dialog, result) => {
+            if (dialog.choose_finish(result) !== 'delete')
+                return;
+
+            this._conversations.deleteConversation(conversationId);
+
+            if (this._conversations.allConversations.length === 0)
+                this._conversations.createConversation();
+
+            this._refreshConversationList();
+            this._renderActiveConversation();
+        });
+    }
+
+    _renderActiveConversation() {
+        const conversation = this._conversations.activeConversation;
+        this._clearBox(this._messages);
+        this._syncProviderControls(conversation);
+
+        for (const message of conversation?.messages ?? [])
+            this._addMessage(message.content, message.role, message);
+
+        this._updateUsageDisplay(conversation);
+        this._scrollToBottom();
+    }
+
+    _updateUsageDisplay(conversation = this._conversations.activeConversation, pendingAssistantText = '') {
+        if (!this._usageLabel)
+            return;
+
+        const messages = [...(conversation?.messages ?? [])];
+
+        if (pendingAssistantText)
+            messages.push({ content: pendingAssistantText });
+
+        const usage = estimateConversationUsage(messages);
+        this._usageLabel.set_label(`${usage.tokens} est. tokens · ${usage.messages} messages`);
     }
 
     _setComposerBusy(isBusy) {
         this._composer.set_sensitive(!isBusy);
+        this._attachButton.set_sensitive(!isBusy);
         this._sendButton.set_sensitive(!isBusy);
+        this._newChatButton.set_sensitive(!isBusy);
+        this._chatSearch.set_sensitive(!isBusy);
+        this._showArchivedButton.set_sensitive(!isBusy);
+        this._conversationList.set_sensitive(!isBusy);
+        this._providerPicker.set_sensitive(!isBusy);
+        this._modelPicker.set_sensitive(!isBusy);
+        this._memoryToggleButton.set_sensitive(!isBusy);
+        this._skillMenuButton.set_sensitive(!isBusy);
+        this._settingsButton.set_sensitive(!isBusy);
     }
 
-    _addMessage(author, body, kind) {
+    _addMessage(body, kind, message = null) {
+        if (message?.toolCall)
+            return this._addToolMessage(message);
+
         const wrapper = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
             spacing: 4,
@@ -203,27 +1417,219 @@ class CuscoWindow extends Adw.ApplicationWindow {
             halign: kind === 'user' ? Gtk.Align.END : Gtk.Align.START,
         });
 
-        const authorLabel = new Gtk.Label({
-            label: author,
-            xalign: kind === 'user' ? 1 : 0,
+        const bodyContent = createMessageContent(body, {
+            role: kind,
         });
-        authorLabel.add_css_class('caption');
-        authorLabel.add_css_class('dim-label');
+        bodyContent.add_css_class('cusco-message-bubble');
+        bodyContent.add_css_class(kind === 'user' ? 'cusco-message-user' : 'cusco-message-assistant');
 
-        const bodyLabel = new Gtk.Label({
-            label: body,
-            wrap: true,
-            selectable: true,
-            xalign: 0,
-            width_chars: 48,
-            max_width_chars: 72,
-        });
-        bodyLabel.add_css_class(kind === 'user' ? 'accent' : 'card');
+        wrapper.append(bodyContent);
 
-        wrapper.append(authorLabel);
-        wrapper.append(bodyLabel);
+        if (message?.id && kind !== 'system')
+            wrapper.append(this._createMessageActions(message));
+
         this._messages.append(wrapper);
+        this._scrollToBottom();
 
-        return bodyLabel;
+        return {
+            set_label: (text) => bodyContent.updateContent(text),
+        };
+    }
+
+    _addToolMessage(message) {
+        const wrapper = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            margin_top: 4,
+            margin_bottom: 4,
+            halign: Gtk.Align.START,
+        });
+        const expander = new Gtk.Expander({
+            label: `${message.toolCall.label} result`,
+            expanded: true,
+        });
+        expander.add_css_class('cusco-tool-result');
+
+        const bodyContent = createMessageContent(message.content, {
+            role: 'system',
+        });
+        bodyContent.add_css_class('cusco-message-bubble');
+        bodyContent.add_css_class('cusco-message-assistant');
+        expander.set_child(bodyContent);
+        wrapper.append(expander);
+        this._messages.append(wrapper);
+        this._scrollToBottom();
+
+        return {
+            set_label: () => {},
+        };
+    }
+
+    _createMessageActions(message) {
+        const actions = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 2,
+            halign: message.role === 'user' ? Gtk.Align.END : Gtk.Align.START,
+        });
+        actions.add_css_class('cusco-message-actions');
+
+        if (message.role === 'user') {
+            actions.append(this._createMessageActionButton('document-edit-symbolic', 'Edit message', () => {
+                this._editMessage(message);
+            }));
+            actions.append(this._createMessageActionButton('view-refresh-symbolic', 'Retry from message', () => {
+                this._retryFromMessage(message);
+            }));
+        } else if (message.role === 'assistant') {
+            actions.append(this._createMessageActionButton('view-refresh-symbolic', 'Regenerate response', () => {
+                this._regenerateFromMessage(message);
+            }));
+        }
+
+        actions.append(this._createMessageActionButton('tab-new-symbolic', 'Branch from message', () => {
+            this._branchFromMessage(message);
+        }));
+
+        return actions;
+    }
+
+    _createMessageActionButton(iconName, tooltipText, onClicked) {
+        const button = new Gtk.Button({
+            icon_name: iconName,
+            tooltip_text: tooltipText,
+            valign: Gtk.Align.CENTER,
+        });
+        button.add_css_class('flat');
+        button.add_css_class('circular');
+        button.connect('clicked', onClicked);
+        return button;
+    }
+
+    _handleChatActionError(error) {
+        logError(error, 'Failed to update conversation');
+        this._appendSystemError(getProviderErrorMessage(error));
+    }
+
+    _editMessage(message) {
+        const conversation = this._conversations.activeConversation;
+
+        if (!conversation)
+            return;
+
+        const buffer = new Gtk.TextBuffer();
+        buffer.set_text(message.content, -1);
+
+        const textView = new Gtk.TextView({
+            buffer,
+            wrap_mode: Gtk.WrapMode.WORD_CHAR,
+            monospace: false,
+            vexpand: true,
+        });
+        const scroller = new Gtk.ScrolledWindow({
+            child: textView,
+            min_content_height: 160,
+            max_content_height: 260,
+            propagate_natural_height: true,
+        });
+        const dialog = new Adw.AlertDialog({
+            heading: 'Edit Message',
+        });
+        dialog.set_extra_child(scroller);
+        dialog.add_response('cancel', 'Cancel');
+        dialog.add_response('save', 'Save');
+        dialog.set_default_response('save');
+        dialog.set_close_response('cancel');
+        dialog.set_response_appearance('save', Adw.ResponseAppearance.SUGGESTED);
+        dialog.choose(this, null, (_dialog, result) => {
+            if (dialog.choose_finish(result) !== 'save')
+                return;
+
+            const [start, end] = buffer.get_bounds();
+            const content = buffer.get_text(start, end, true).trim();
+
+            if (!content)
+                return;
+
+            try {
+                this._conversations.updateMessageContent(conversation.id, message.id, content);
+
+                if (message.role === 'user') {
+                    this._conversations.truncateAfterMessage(conversation.id, message.id);
+                    this._renderActiveConversation();
+                    this._streamAssistantResponse(conversation.id).catch((error) => this._handleChatActionError(error));
+                } else {
+                    this._renderActiveConversation();
+                }
+
+                this._refreshConversationList();
+            } catch (error) {
+                this._handleChatActionError(error);
+            }
+        });
+    }
+
+    _retryFromMessage(message) {
+        const conversation = this._conversations.activeConversation;
+
+        if (!conversation)
+            return;
+
+        try {
+            this._conversations.truncateAfterMessage(conversation.id, message.id);
+            this._renderActiveConversation();
+            this._streamAssistantResponse(conversation.id).catch((error) => this._handleChatActionError(error));
+        } catch (error) {
+            this._handleChatActionError(error);
+        }
+    }
+
+    _regenerateFromMessage(message) {
+        const conversation = this._conversations.activeConversation;
+
+        if (!conversation)
+            return;
+
+        try {
+            this._conversations.truncateAfterMessage(conversation.id, message.id, { includeMessage: true });
+            this._renderActiveConversation();
+            this._streamAssistantResponse(conversation.id).catch((error) => this._handleChatActionError(error));
+        } catch (error) {
+            this._handleChatActionError(error);
+        }
+    }
+
+    _branchFromMessage(message) {
+        const conversation = this._conversations.activeConversation;
+
+        if (!conversation)
+            return;
+
+        try {
+            this._conversations.branchFromMessage(conversation.id, message.id);
+            this._refreshConversationList();
+            this._renderActiveConversation();
+        } catch (error) {
+            this._handleChatActionError(error);
+        }
+    }
+
+    _clearBox(box) {
+        let child = box.get_first_child();
+
+        while (child) {
+            const next = child.get_next_sibling();
+            box.remove(child);
+            child = next;
+        }
+    }
+
+    _scrollToBottom() {
+        if (!this._scroller)
+            return;
+
+        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            const adjustment = this._scroller.get_vadjustment();
+            adjustment.set_value(adjustment.get_upper() - adjustment.get_page_size());
+            return GLib.SOURCE_REMOVE;
+        });
     }
 });

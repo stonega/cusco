@@ -7,3 +7,12 @@ Terminal=false
 Type=Application
 Categories=GNOME;GTK;Utility;Network;
 StartupNotify=true
+Actions=new-chat;quick-prompt;
+
+[Desktop Action new-chat]
+Name=New Chat
+Exec=cusco --new-chat
+
+[Desktop Action quick-prompt]
+Name=Quick Prompt
+Exec=cusco --quick-prompt
