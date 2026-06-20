@@ -1,5 +1,7 @@
 # Cusco
 
+![Cusco banner](assets/banner.png)
+
 Cusco is a native GNOME AI chat application built with GJS, GTK 4, and libadwaita. It is an advanced desktop AI workspace that feels at home on GNOME: persistent conversations, provider switching, memory controls, local tools, reusable workspace assets, installed skills, and desktop integration.
 
 > **Under development:** Cusco is not production-ready yet. Expect incomplete behavior, changing data formats, and rough edges while the app is actively built.
