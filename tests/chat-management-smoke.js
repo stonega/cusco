@@ -35,6 +35,11 @@ conversations.setMemoryEnabled(firstChat.id, false);
 if (firstChat.memoryEnabled !== false)
     throw new Error('Conversation memory flag was not updated');
 
+conversations.setAgentModeEnabled(firstChat.id, true);
+
+if (firstChat.agentModeEnabled !== true)
+    throw new Error('Conversation Agent Mode flag was not updated');
+
 conversations.setSkillIds(firstChat.id, ['review', 'writing']);
 
 if (firstChat.skillIds.length !== 2 || firstChat.skillIds[0] !== 'review')
@@ -57,7 +62,7 @@ if (firstChat.messages.length !== 1)
 
 const branch = conversations.branchFromMessage(firstChat.id, firstMessageId);
 
-if (branch.messages.length !== 1 || branch.id === firstChat.id || branch.skillIds[1] !== 'writing')
+if (branch.messages.length !== 1 || branch.id === firstChat.id || branch.skillIds[1] !== 'writing' || !branch.agentModeEnabled)
     throw new Error('Conversation branch was not created from message');
 
 conversations.archiveConversation(branch.id);

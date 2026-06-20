@@ -1,12 +1,141 @@
+import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 import Soup from 'gi://Soup?version=3.0';
 
+import { normalizePermissionPolicy, TOOL_PERMISSION_ALLOW, TOOL_PERMISSION_ASK } from './permissions.js';
+
 const DEFAULT_SEARCH_TIMEOUT_SECONDS = 15;
+const DEFAULT_BASH_TIMEOUT_SECONDS = 30;
+const MAX_FILE_READ_BYTES = 120000;
+const MAX_FILE_LIST_ITEMS = 200;
+const MAX_TOOL_OUTPUT_CHARS = 60000;
+const MAX_BASH_OUTPUT_CHARS = 40000;
+
+const SENSITIVE_PATHS = [
+    '.ssh',
+    '.gnupg',
+    '.local/share/keyrings',
+    '.pki',
+    '.mozilla',
+    '.config/google-chrome',
+    '.config/chromium',
+];
+
+const BUILT_IN_TOOLS = {
+    calc: {
+        name: 'calc',
+        label: 'Calculator',
+        description: 'Evaluate a basic arithmetic expression.',
+        inputDescription: 'Arithmetic expression using numbers, parentheses, and +, -, *, /, or ^.',
+        permissionPolicy: TOOL_PERMISSION_ALLOW,
+        requiresPermission: false,
+        concurrencySafe: true,
+    },
+    data: {
+        name: 'data',
+        label: 'Structured Data',
+        description: 'Summarize JSON or CSV-like structured text.',
+        inputDescription: 'Valid JSON or CSV-like text to summarize.',
+        permissionPolicy: TOOL_PERMISSION_ALLOW,
+        requiresPermission: false,
+        concurrencySafe: true,
+    },
+    search: {
+        name: 'search',
+        label: 'Web Search',
+        description: 'Search the web through DuckDuckGo and return cited results.',
+        inputDescription: 'A concise web search query.',
+        permissionPolicy: TOOL_PERMISSION_ASK,
+        requiresPermission: true,
+        concurrencySafe: false,
+    },
+    file_list: {
+        name: 'file_list',
+        label: 'File List',
+        description: 'List files in a local directory with type and size information.',
+        inputDescription: 'A local directory path, such as ~/Documents or /tmp.',
+        permissionPolicy: TOOL_PERMISSION_ASK,
+        requiresPermission: true,
+        concurrencySafe: true,
+    },
+    file_read: {
+        name: 'file_read',
+        label: 'File Read',
+        description: 'Read a bounded local text file.',
+        inputDescription: `A local file path. Files larger than ${MAX_FILE_READ_BYTES} bytes are rejected.`,
+        permissionPolicy: TOOL_PERMISSION_ASK,
+        requiresPermission: true,
+        concurrencySafe: true,
+    },
+    bash: {
+        name: 'bash',
+        label: 'Bash',
+        description: 'Run a shell command with timeout and bounded output.',
+        inputDescription: 'A shell command to execute through bash -lc.',
+        permissionPolicy: TOOL_PERMISSION_ASK,
+        requiresPermission: true,
+        concurrencySafe: false,
+    },
+};
 
 function userVisibleError(message) {
     const error = new Error(message);
     error.userMessage = message;
     return error;
+}
+
+function truncateText(text, maxChars = MAX_TOOL_OUTPUT_CHARS) {
+    const source = String(text ?? '');
+
+    if (source.length <= maxChars)
+        return {
+            text: source,
+            truncated: false,
+        };
+
+    return {
+        text: `${source.slice(0, maxChars)}\n\n[Output truncated after ${maxChars} characters.]`,
+        truncated: true,
+    };
+}
+
+function normalizeLocalPath(path) {
+    const text = String(path ?? '').trim();
+
+    if (!text)
+        throw userVisibleError('Path cannot be empty.');
+
+    const expandedPath = text === '~' || text.startsWith('~/')
+        ? GLib.build_filenamev([GLib.get_home_dir(), text.slice(2)])
+        : text;
+
+    return GLib.canonicalize_filename(expandedPath, null);
+}
+
+function assertPathIsNotSensitive(path) {
+    const home = GLib.canonicalize_filename(GLib.get_home_dir(), null);
+
+    if (!path.startsWith(`${home}/`))
+        return;
+
+    const relativePath = path.slice(home.length + 1);
+
+    for (const sensitivePath of SENSITIVE_PATHS) {
+        if (relativePath === sensitivePath || relativePath.startsWith(`${sensitivePath}/`))
+            throw userVisibleError(`Access to ${sensitivePath} is blocked by Cusco's file safety policy.`);
+    }
+}
+
+function queryFileInfo(path, attributes) {
+    const file = Gio.File.new_for_path(path);
+
+    if (!file.query_exists(null))
+        throw userVisibleError(`Path does not exist: ${path}`);
+
+    return {
+        file,
+        info: file.query_info(attributes, Gio.FileQueryInfoFlags.NONE, null),
+    };
 }
 
 function sendAndRead(session, message, cancellable) {
@@ -271,25 +400,192 @@ export async function searchWeb(query, options = {}) {
     };
 }
 
+export function listLocalDirectory(path) {
+    const normalizedPath = normalizeLocalPath(path);
+    assertPathIsNotSensitive(normalizedPath);
+
+    const { file, info } = queryFileInfo(normalizedPath, 'standard::type');
+
+    if (info.get_file_type() !== Gio.FileType.DIRECTORY)
+        throw userVisibleError(`Path is not a directory: ${normalizedPath}`);
+
+    const enumerator = file.enumerate_children(
+        'standard::name,standard::type,standard::size',
+        Gio.FileQueryInfoFlags.NONE,
+        null,
+    );
+    const entries = [];
+    let truncated = false;
+
+    try {
+        let childInfo = enumerator.next_file(null);
+
+        while (childInfo) {
+            if (entries.length >= MAX_FILE_LIST_ITEMS) {
+                truncated = true;
+                break;
+            }
+
+            entries.push({
+                name: childInfo.get_name(),
+                type: childInfo.get_file_type() === Gio.FileType.DIRECTORY ? 'directory' : 'file',
+                size: Number(childInfo.get_size()),
+            });
+            childInfo = enumerator.next_file(null);
+        }
+    } finally {
+        enumerator.close(null);
+    }
+
+    entries.sort((left, right) => (
+        left.type === right.type
+            ? left.name.localeCompare(right.name)
+            : left.type === 'directory' ? -1 : 1
+    ));
+
+    const output = entries.length === 0
+        ? 'Directory is empty.'
+        : entries.map((entry) => (
+            `${entry.type === 'directory' ? 'dir ' : 'file'}\t${entry.size}\t${entry.name}`
+        )).join('\n');
+
+    return {
+        path: normalizedPath,
+        entries,
+        truncated,
+        output: truncated
+            ? `${output}\n\n[Listing truncated after ${MAX_FILE_LIST_ITEMS} entries.]`
+            : output,
+    };
+}
+
+export function readLocalTextFile(path) {
+    const normalizedPath = normalizeLocalPath(path);
+    assertPathIsNotSensitive(normalizedPath);
+
+    const { info } = queryFileInfo(normalizedPath, 'standard::type,standard::size');
+
+    if (info.get_file_type() !== Gio.FileType.REGULAR)
+        throw userVisibleError(`Path is not a regular file: ${normalizedPath}`);
+
+    const size = Number(info.get_size());
+
+    if (size > MAX_FILE_READ_BYTES)
+        throw userVisibleError(`File is too large to read safely (${size} bytes, limit ${MAX_FILE_READ_BYTES}).`);
+
+    const [, contents] = GLib.file_get_contents(normalizedPath);
+    const decoded = new TextDecoder().decode(contents);
+
+    if (decoded.includes('\0'))
+        throw userVisibleError('File appears to be binary and cannot be read as text.');
+    const truncated = truncateText(decoded);
+
+    return {
+        path: normalizedPath,
+        size,
+        content: truncated.text,
+        truncated: truncated.truncated,
+        output: truncated.text,
+    };
+}
+
+function bashProgram() {
+    const path = GLib.find_program_in_path('bash');
+
+    if (!path)
+        throw userVisibleError('bash was not found in PATH.');
+
+    return path;
+}
+
+export function runBashCommand(command, options = {}) {
+    const normalizedCommand = String(command ?? '').trim();
+
+    if (!normalizedCommand)
+        throw userVisibleError('Bash command cannot be empty.');
+
+    const timeoutSeconds = Math.min(
+        DEFAULT_BASH_TIMEOUT_SECONDS,
+        Math.max(1, Math.round(options.timeoutSeconds ?? DEFAULT_BASH_TIMEOUT_SECONDS)),
+    );
+    const cancellable = new Gio.Cancellable();
+    let timedOut = false;
+    const subprocess = Gio.Subprocess.new(
+        [bashProgram(), '-lc', normalizedCommand],
+        Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+    );
+
+    let timeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, timeoutSeconds, () => {
+        timedOut = true;
+        timeoutId = 0;
+        subprocess.force_exit();
+        cancellable.cancel();
+        return GLib.SOURCE_REMOVE;
+    });
+
+    return new Promise((resolve, reject) => {
+        subprocess.communicate_utf8_async(null, cancellable, (_process, result) => {
+            if (timeoutId)
+                GLib.source_remove(timeoutId);
+
+            try {
+                const [, stdout, stderr] = subprocess.communicate_utf8_finish(result);
+                const truncatedStdout = truncateText(stdout, MAX_BASH_OUTPUT_CHARS);
+                const truncatedStderr = truncateText(stderr, MAX_BASH_OUTPUT_CHARS);
+                const exitStatus = subprocess.get_if_exited() ? subprocess.get_exit_status() : 124;
+
+                resolve({
+                    command: normalizedCommand,
+                    exitStatus: timedOut ? 124 : exitStatus,
+                    stdout: truncatedStdout.text,
+                    stderr: truncatedStderr.text,
+                    stdoutTruncated: truncatedStdout.truncated,
+                    stderrTruncated: truncatedStderr.truncated,
+                    timedOut,
+                    output: [
+                        `exit status: ${timedOut ? 124 : exitStatus}`,
+                        truncatedStdout.text ? `stdout:\n${truncatedStdout.text}` : 'stdout: <empty>',
+                        truncatedStderr.text ? `stderr:\n${truncatedStderr.text}` : 'stderr: <empty>',
+                    ].join('\n\n'),
+                });
+            } catch (error) {
+                if (timedOut) {
+                    resolve({
+                        command: normalizedCommand,
+                        exitStatus: 124,
+                        stdout: '',
+                        stderr: `Command timed out after ${timeoutSeconds} seconds.`,
+                        stdoutTruncated: false,
+                        stderrTruncated: false,
+                        timedOut: true,
+                        output: `exit status: 124\n\nstderr:\nCommand timed out after ${timeoutSeconds} seconds.`,
+                    });
+                    return;
+                }
+
+                reject(error);
+            }
+        });
+    });
+}
+
 export function parseToolRequest(text) {
     const trimmed = String(text ?? '').trim();
-    const match = trimmed.match(/^\/(calc|data|search)\s+([\s\S]+)$/i);
+    const match = trimmed.match(/^\/(calc|data|search|file_list|file_read|bash)\s+([\s\S]+)$/i);
 
     if (!match)
         return null;
 
     const [, toolName, input] = match;
     const normalizedToolName = toolName.toLowerCase();
+    const tool = BUILT_IN_TOOLS[normalizedToolName];
 
     return {
         name: normalizedToolName,
         input: input.trim(),
-        requiresPermission: normalizedToolName === 'search',
-        label: normalizedToolName === 'calc'
-            ? 'Calculator'
-            : normalizedToolName === 'data'
-                ? 'Structured Data'
-                : 'Web Search',
+        requiresPermission: tool.requiresPermission,
+        permissionPolicy: tool.permissionPolicy,
+        label: tool.label,
     };
 }
 
@@ -308,6 +604,29 @@ export function formatToolResultForTranscript(result) {
         return `Web search results for "${result.input}"\n\n${citations || 'No cited results returned.'}`;
     }
 
+    if (result.name === 'file_list')
+        return `File list for ${result.path}\n\n${result.output}`;
+
+    if (result.name === 'file_read')
+        return [
+            `File read: ${result.path}`,
+            `${result.size} bytes${result.truncated ? ' (truncated)' : ''}`,
+            '```text',
+            result.content,
+            '```',
+        ].join('\n');
+
+    if (result.name === 'bash')
+        return [
+            `Bash command`,
+            '```sh',
+            result.command,
+            '```',
+            `Exit status: ${result.exitStatus}${result.timedOut ? ' (timed out)' : ''}`,
+            result.stdout ? `\nstdout\n\`\`\`text\n${result.stdout}\n\`\`\`` : '\nstdout: <empty>',
+            result.stderr ? `\nstderr\n\`\`\`text\n${result.stderr}\n\`\`\`` : '\nstderr: <empty>',
+        ].join('\n');
+
     return result.output;
 }
 
@@ -325,31 +644,78 @@ export class ToolManager {
         if (typeof tool.run !== 'function')
             throw userVisibleError(`Plugin tool ${name} does not provide a run function.`);
 
+        const permissionPolicy = normalizePermissionPolicy(tool.permissionPolicy, {
+            requiresPermission: tool.requiresPermission !== false,
+        });
+
         this._registeredTools.set(name, {
             label: tool.label ?? name,
-            requiresPermission: tool.requiresPermission !== false,
+            description: String(tool.description ?? '').trim(),
+            inputDescription: String(tool.inputDescription ?? '').trim(),
+            permissionPolicy,
+            requiresPermission: permissionPolicy === TOOL_PERMISSION_ASK,
+            concurrencySafe: Boolean(tool.concurrencySafe),
             run: tool.run,
         });
     }
 
     listTools() {
         return [
-            { name: 'calc', label: 'Calculator', requiresPermission: false },
-            { name: 'data', label: 'Structured Data', requiresPermission: false },
-            { name: 'search', label: 'Web Search', requiresPermission: true },
+            ...Object.values(BUILT_IN_TOOLS).map((tool) => ({ ...tool })),
             ...[...this._registeredTools.entries()].map(([name, tool]) => ({
                 name,
                 label: tool.label,
+                description: tool.description,
+                inputDescription: tool.inputDescription,
+                permissionPolicy: tool.permissionPolicy,
                 requiresPermission: tool.requiresPermission,
+                concurrencySafe: tool.concurrencySafe,
             })),
         ];
+    }
+
+    getTool(name) {
+        const normalizedName = String(name ?? '').trim();
+
+        if (Object.hasOwn(BUILT_IN_TOOLS, normalizedName))
+            return { ...BUILT_IN_TOOLS[normalizedName] };
+
+        const registeredTool = this._registeredTools.get(normalizedName);
+
+        if (!registeredTool)
+            return null;
+
+        return {
+            name: normalizedName,
+            label: registeredTool.label,
+            description: registeredTool.description,
+            inputDescription: registeredTool.inputDescription,
+            permissionPolicy: registeredTool.permissionPolicy,
+            requiresPermission: registeredTool.requiresPermission,
+            concurrencySafe: registeredTool.concurrencySafe,
+        };
+    }
+
+    createRequest(name, input) {
+        const tool = this.getTool(name);
+
+        if (!tool)
+            throw userVisibleError(`Unknown tool: ${name}`);
+
+        return {
+            name: tool.name,
+            input: String(input ?? '').trim(),
+            requiresPermission: tool.requiresPermission,
+            permissionPolicy: tool.permissionPolicy,
+            label: tool.label,
+        };
     }
 
     parseRequest(text) {
         const builtInRequest = parseToolRequest(text);
 
         if (builtInRequest)
-            return builtInRequest;
+            return this.createRequest(builtInRequest.name, builtInRequest.input);
 
         const trimmed = String(text ?? '').trim();
         const match = trimmed.match(/^\/([\w-]+)\s+([\s\S]+)$/);
@@ -357,13 +723,7 @@ export class ToolManager {
         if (!match || !this._registeredTools.has(match[1]))
             return null;
 
-        const tool = this._registeredTools.get(match[1]);
-        return {
-            name: match[1],
-            input: match[2].trim(),
-            requiresPermission: tool.requiresPermission,
-            label: tool.label,
-        };
+        return this.createRequest(match[1], match[2]);
     }
 
     async runRequest(request, options = {}) {
@@ -390,6 +750,21 @@ export class ToolManager {
             return {
                 ...request,
                 ...(await searchWeb(request.input, options)),
+            };
+        case 'file_list':
+            return {
+                ...request,
+                ...listLocalDirectory(request.input),
+            };
+        case 'file_read':
+            return {
+                ...request,
+                ...readLocalTextFile(request.input),
+            };
+        case 'bash':
+            return {
+                ...request,
+                ...(await runBashCommand(request.input, options)),
             };
         default:
             throw userVisibleError(`Unknown tool: ${request.name}`);

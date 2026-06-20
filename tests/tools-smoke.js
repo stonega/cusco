@@ -1,3 +1,5 @@
+import GLib from 'gi://GLib?version=2.0';
+
 import {
     calculateExpression,
     extractSearchResults,
@@ -31,6 +33,19 @@ if (!request?.requiresPermission || request.name !== 'search')
     throw new Error('Search tool request was not parsed with permission requirement');
 
 const manager = new ToolManager();
+const listedTools = manager.listTools();
+
+if (!listedTools.find((tool) => tool.name === 'calc')?.description)
+    throw new Error('Tool metadata did not include descriptions');
+
+if (manager.createRequest('search', 'native GNOME chat app').permissionPolicy !== 'ask')
+    throw new Error('Tool request did not preserve permission policy');
+
+for (const toolName of ['file_list', 'file_read', 'bash']) {
+    if (manager.createRequest(toolName, '/tmp').permissionPolicy !== 'ask')
+        throw new Error(`${toolName} did not require approval`);
+}
+
 const calcResult = await manager.runRequest(parseToolRequest('/calc 10 / 2 + 7'));
 
 if (calcResult.output !== '12')
@@ -38,5 +53,29 @@ if (calcResult.output !== '12')
 
 if (!formatToolResultForTranscript(calcResult).includes('Calculator result'))
     throw new Error('Tool result transcript formatting failed');
+
+const tempRoot = GLib.build_filenamev([
+    GLib.get_tmp_dir(),
+    `cusco-tools-${GLib.uuid_string_random()}`,
+]);
+const tempFile = GLib.build_filenamev([tempRoot, 'note.txt']);
+
+GLib.mkdir_with_parents(tempRoot, 0o700);
+GLib.file_set_contents(tempFile, 'Cusco file read smoke');
+
+const listResult = await manager.runRequest(manager.createRequest('file_list', tempRoot));
+
+if (!listResult.output.includes('note.txt') || !formatToolResultForTranscript(listResult).includes(tempRoot))
+    throw new Error('File list tool did not return the temporary file');
+
+const readResult = await manager.runRequest(manager.createRequest('file_read', tempFile));
+
+if (!readResult.content.includes('Cusco file read smoke') || !formatToolResultForTranscript(readResult).includes('```text'))
+    throw new Error('File read tool did not return the temporary file contents');
+
+const bashResult = await manager.runRequest(manager.createRequest('bash', 'printf cusco-bash-smoke'));
+
+if (bashResult.exitStatus !== 0 || !bashResult.stdout.includes('cusco-bash-smoke'))
+    throw new Error(`Bash tool failed: ${bashResult.output}`);
 
 print('Cusco tools smoke passed');

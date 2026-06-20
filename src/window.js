@@ -5,6 +5,14 @@ import GObject from 'gi://GObject?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
 import Pango from 'gi://Pango?version=1.0';
 
+import {
+    buildAgentModeSystemPrompt,
+    createAgentToolFailurePrompt,
+    createAgentToolResultPrompt,
+    DEFAULT_AGENT_MAX_ITERATIONS,
+    isPartialAgentToolCall,
+    parseAgentToolCall,
+} from './chat/agentMode.js';
 import { ConversationManager } from './chat/conversation.js';
 import { createMessageContent } from './chat/messageView.js';
 import { estimateConversationUsage } from './chat/usage.js';
@@ -17,6 +25,7 @@ import { ConversationFileStore } from './storage/conversationStore.js';
 import { MemoryFileStore } from './storage/memoryStore.js';
 import { WorkspaceFileStore } from './storage/workspaceStore.js';
 import { buildSkillContext } from './skills/skills.js';
+import { createToolPermissionDecision } from './tools/permissions.js';
 import { formatToolResultForTranscript, ToolManager } from './tools/tools.js';
 import { exportConversation } from './workspace/exports.js';
 import { WorkspaceManager } from './workspace/workspace.js';
@@ -218,8 +227,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
             spacing: 12,
             margin_top: 18,
             margin_bottom: 18,
-            margin_start: 18,
-            margin_end: 18,
             hexpand: true,
             vexpand: true,
         });
@@ -227,6 +234,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const composerShell = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
             spacing: 6,
+            margin_start: 18,
+            margin_end: 18,
         });
 
         const composerMetaRow = new Gtk.Box({
@@ -247,6 +256,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         this._memoryToggleButton.connect('toggled', () => this._handleMemoryToggleChanged());
 
+        this._agentModeToggleButton = new Gtk.ToggleButton({
+            icon_name: 'applications-engineering-symbolic',
+            tooltip_text: 'Agent mode',
+        });
+        this._agentModeToggleButton.connect('toggled', () => this._handleAgentModeToggleChanged());
+
         this._skillMenuButton = this._createSkillMenuButton();
 
         this._usageLabel = new Gtk.Label({
@@ -257,11 +272,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._usageLabel.add_css_class('caption');
         this._usageLabel.add_css_class('dim-label');
 
-        composerMetaRow.append(new Gtk.Label({ label: 'Provider', xalign: 0 }));
         composerMetaRow.append(this._providerPicker);
-        composerMetaRow.append(new Gtk.Label({ label: 'Model', xalign: 0 }));
         composerMetaRow.append(this._modelPicker);
         composerMetaRow.append(this._memoryToggleButton);
+        composerMetaRow.append(this._agentModeToggleButton);
         composerMetaRow.append(this._skillMenuButton);
         composerMetaRow.append(this._usageLabel);
 
@@ -270,8 +284,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
             spacing: 12,
             margin_top: 8,
             margin_bottom: 8,
-            margin_start: 8,
-            margin_end: 8,
+            margin_start: 26,
+            margin_end: 26,
         });
 
         this._scroller = new Gtk.ScrolledWindow({
@@ -347,9 +361,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const providerId = activeConversation?.providerId;
         const modelId = activeConversation?.modelId;
         const memoryEnabled = activeConversation?.memoryEnabled !== false;
+        const agentModeEnabled = Boolean(activeConversation?.agentModeEnabled);
         const skillIds = activeConversation?.skillIds ?? [];
 
-        this._conversations.createConversation({ providerId, modelId, memoryEnabled, skillIds });
+        this._conversations.createConversation({ providerId, modelId, memoryEnabled, agentModeEnabled, skillIds });
         this._refreshConversationList();
         this._renderActiveConversation();
     }
@@ -462,7 +477,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (!request)
             return;
 
-        if (request.requiresPermission && !await this._confirmToolPermission(request)) {
+        const permissionDecision = createToolPermissionDecision(request);
+
+        if (permissionDecision.status === 'deny') {
+            const message = createMessage('system', `${request.label} was not run because it is blocked by policy.`);
+            this._conversations.appendMessage(conversationId, message);
+            this._addMessage(message.content, message.role, message);
+            return;
+        }
+
+        if (permissionDecision.requiresUserApproval && !await this._confirmToolPermission(request)) {
             const message = createMessage('system', `${request.label} was not run because permission was denied.`);
             this._conversations.appendMessage(conversationId, message);
             this._addMessage(message.content, message.role, message);
@@ -615,43 +639,22 @@ class CuscoWindow extends Adw.ApplicationWindow {
         try {
             this._injectMemoryContext(conversation);
             const activeSkills = this._injectSkillContext(conversation);
-            const providerMessages = this._buildProviderMessages(conversation, activeSkills);
+            const providerMessages = this._buildProviderMessages(conversation, activeSkills, {
+                agentMode: Boolean(conversation.agentModeEnabled),
+            });
             const assistantView = this._addMessage('', 'assistant');
-            let assistantText = '';
-            const streamWithSelection = async (providerId, modelId) => {
-                const activeProvider = this._providerConfigs.createProvider(providerId);
-                const providerConfig = this._providerConfigs.resolve(providerId, modelId);
-
-                for await (const chunk of activeProvider.streamChat(providerMessages, {
-                    ...providerConfig,
+            const assistantText = conversation.agentModeEnabled
+                ? await this._runAgentModeResponse(conversation, providerMessages, assistantView, cancellable)
+                : await this._collectProviderResponseWithFallback(
+                    conversation,
+                    providerMessages,
                     cancellable,
-                    timeoutSeconds: this._appSettings.responseTimeoutSeconds,
-                })) {
-                    assistantText += chunk;
-                    assistantView.set_label(assistantText);
-                    this._updateUsageDisplay(conversation, assistantText);
-                    this._scrollToBottom();
-                }
-            };
-
-            try {
-                await streamWithSelection(conversation.providerId, conversation.modelId);
-            } catch (error) {
-                const fallback = this._getProviderFallback(conversation.providerId, error);
-
-                if (!fallback.provider)
-                    throw error;
-
-                assistantText = '';
-                assistantView.set_label(`Retrying with ${fallback.provider.name}...`);
-                this._conversations.updateProviderConfig(conversation.id, {
-                    providerId: fallback.provider.id,
-                    modelId: fallback.model?.id ?? '',
-                });
-                this._syncProviderControls(conversation);
-                this._refreshConversationList();
-                await streamWithSelection(fallback.provider.id, fallback.model?.id ?? '');
-            }
+                    (text) => {
+                        assistantView.set_label(text);
+                        this._updateUsageDisplay(conversation, text);
+                        this._scrollToBottom();
+                    },
+                );
 
             this._conversations.appendMessage(conversation.id, createMessage('assistant', assistantText));
             this._refreshConversationList();
@@ -663,6 +666,214 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._setComposerBusy(false);
             this._stopLongResponseNotification();
         }
+    }
+
+    async _collectProviderResponse(providerId, modelId, providerMessages, cancellable, onChunk = null) {
+        const activeProvider = this._providerConfigs.createProvider(providerId);
+        const providerConfig = this._providerConfigs.resolve(providerId, modelId);
+        let responseText = '';
+
+        for await (const chunk of activeProvider.streamChat(providerMessages, {
+            ...providerConfig,
+            cancellable,
+            timeoutSeconds: this._appSettings.responseTimeoutSeconds,
+        })) {
+            responseText += chunk;
+            onChunk?.(responseText, chunk);
+        }
+
+        return responseText;
+    }
+
+    async _collectProviderResponseWithFallback(conversation, providerMessages, cancellable, onChunk = null) {
+        try {
+            return await this._collectProviderResponse(
+                conversation.providerId,
+                conversation.modelId,
+                providerMessages,
+                cancellable,
+                onChunk,
+            );
+        } catch (error) {
+            const fallback = this._getProviderFallback(conversation.providerId, error);
+
+            if (!fallback.provider)
+                throw error;
+
+            this._conversations.updateProviderConfig(conversation.id, {
+                providerId: fallback.provider.id,
+                modelId: fallback.model?.id ?? '',
+            });
+            this._syncProviderControls(conversation);
+            this._refreshConversationList();
+
+            return await this._collectProviderResponse(
+                fallback.provider.id,
+                fallback.model?.id ?? '',
+                providerMessages,
+                cancellable,
+                onChunk,
+            );
+        }
+    }
+
+    async _runAgentModeResponse(conversation, providerMessages, assistantView, cancellable) {
+        const runtimeMessages = providerMessages.map((message) => ({ ...message }));
+
+        for (let iteration = 0; iteration < DEFAULT_AGENT_MAX_ITERATIONS; iteration++) {
+            assistantView.set_label(iteration === 0 ? 'Agent Mode is thinking...' : 'Agent Mode is continuing...');
+            const responseText = await this._collectProviderResponseWithFallback(
+                conversation,
+                runtimeMessages,
+                cancellable,
+                (text) => this._updateAgentModeAssistantView(conversation, assistantView, text),
+            );
+            const toolCall = this._parseAgentToolCallForRuntime(responseText, conversation, runtimeMessages);
+
+            if (!toolCall)
+                return responseText;
+
+            if (toolCall.invalid)
+                continue;
+
+            const request = this._createAgentToolRequest(toolCall, responseText, conversation, runtimeMessages);
+
+            if (!request)
+                continue;
+
+            const ranTool = await this._runAgentToolRequest(request, responseText, conversation, runtimeMessages);
+
+            if (!ranTool)
+                continue;
+        }
+
+        const limitMessage = createMessage(
+            'system',
+            `Agent Mode stopped after ${DEFAULT_AGENT_MAX_ITERATIONS} tool-use iterations.`,
+        );
+        this._conversations.appendMessage(conversation.id, limitMessage);
+        this._addMessage(limitMessage.content, limitMessage.role, limitMessage);
+
+        return 'Agent Mode stopped because it reached the tool-use limit. Review the tool results above or send a narrower request.';
+    }
+
+    _updateAgentModeAssistantView(conversation, assistantView, text) {
+        if (isPartialAgentToolCall(text)) {
+            assistantView.set_label('Agent Mode is preparing a tool call...');
+        } else {
+            try {
+                const toolCall = parseAgentToolCall(text);
+                const tool = toolCall ? this._tools.getTool(toolCall.name) : null;
+                assistantView.set_label(toolCall
+                    ? (tool ? `Agent Mode requested ${tool.label}...` : 'Agent Mode requested a tool...')
+                    : text);
+            } catch (_error) {
+                assistantView.set_label(text);
+            }
+        }
+
+        this._updateUsageDisplay(conversation, text);
+        this._scrollToBottom();
+    }
+
+    _parseAgentToolCallForRuntime(responseText, conversation, runtimeMessages) {
+        try {
+            return parseAgentToolCall(responseText);
+        } catch (error) {
+            const reason = error.userMessage ?? error.message;
+            const message = createMessage('system', reason);
+            this._conversations.appendMessage(conversation.id, message);
+            this._addMessage(message.content, message.role, message);
+            runtimeMessages.push(
+                { role: 'assistant', content: responseText },
+                { role: 'user', content: createAgentToolFailurePrompt({ name: 'unknown' }, reason) },
+            );
+            return { invalid: true };
+        }
+    }
+
+    _createAgentToolRequest(toolCall, responseText, conversation, runtimeMessages) {
+        try {
+            return this._tools.createRequest(toolCall.name, toolCall.input);
+        } catch (error) {
+            const reason = error.userMessage ?? error.message;
+            const message = createMessage('system', reason);
+            this._conversations.appendMessage(conversation.id, message);
+            this._addMessage(message.content, message.role, message);
+            runtimeMessages.push(
+                { role: 'assistant', content: responseText },
+                { role: 'user', content: createAgentToolFailurePrompt(toolCall, reason) },
+            );
+            return null;
+        }
+    }
+
+    async _runAgentToolRequest(request, responseText, conversation, runtimeMessages) {
+        const permissionDecision = createToolPermissionDecision(request);
+
+        if (permissionDecision.status === 'deny') {
+            const reason = `${request.label} is blocked by policy.`;
+            this._appendAgentToolFailure(request, responseText, conversation, runtimeMessages, reason);
+            return false;
+        }
+
+        if (permissionDecision.requiresUserApproval && !await this._confirmToolPermission(request)) {
+            const reason = `${request.label} was not run because permission was denied.`;
+            this._appendAgentToolFailure(request, responseText, conversation, runtimeMessages, reason);
+            return false;
+        }
+
+        try {
+            const result = await this._tools.runRequest(request, {
+                timeoutSeconds: this._appSettings.responseTimeoutSeconds,
+            });
+            const transcriptText = formatToolResultForTranscript(result);
+            const message = createMessage('system', transcriptText, {
+                toolCall: {
+                    name: result.name,
+                    label: result.label,
+                    input: result.input,
+                    output: result.output ?? '',
+                    results: result.results ?? [],
+                    status: 'completed',
+                    agentMode: true,
+                    createdAt: new Date().toISOString(),
+                },
+            });
+            this._conversations.appendMessage(conversation.id, message);
+            this._addMessage(message.content, message.role, message);
+            runtimeMessages.push(
+                { role: 'assistant', content: responseText },
+                { role: 'user', content: createAgentToolResultPrompt(request, transcriptText) },
+            );
+            return true;
+        } catch (error) {
+            const reason = error.userMessage ?? `Tool failed: ${error.message}`;
+            this._appendAgentToolFailure(request, responseText, conversation, runtimeMessages, reason);
+            logError(error, 'Failed to run Agent Mode tool request');
+            return false;
+        }
+    }
+
+    _appendAgentToolFailure(request, responseText, conversation, runtimeMessages, reason) {
+        const message = createMessage('system', reason, {
+            toolCall: {
+                name: request.name,
+                label: request.label,
+                input: request.input,
+                output: reason,
+                results: [],
+                status: 'failed',
+                agentMode: true,
+                createdAt: new Date().toISOString(),
+            },
+        });
+        this._conversations.appendMessage(conversation.id, message);
+        this._addMessage(message.content, message.role, message);
+        runtimeMessages.push(
+            { role: 'assistant', content: responseText },
+            { role: 'user', content: createAgentToolFailurePrompt(request, reason) },
+        );
     }
 
     _startLongResponseNotification() {
@@ -768,17 +979,26 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return skills;
     }
 
-    _buildProviderMessages(conversation, skills) {
+    _buildProviderMessages(conversation, skills, options = {}) {
+        const systemMessages = [];
+        if (options.agentMode) {
+            systemMessages.push({
+                role: 'system',
+                content: buildAgentModeSystemPrompt(this._tools.listTools()),
+            });
+        }
+
         const skillContext = buildSkillContext(skills);
 
-        if (!skillContext)
-            return conversation.messages;
-
-        return [
-            {
+        if (skillContext) {
+            systemMessages.push({
                 role: 'system',
                 content: skillContext,
-            },
+            });
+        }
+
+        return [
+            ...systemMessages,
             ...conversation.messages,
         ];
     }
@@ -945,6 +1165,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._providerPicker.set_active_id(conversation.providerId);
         this._populateModelPicker(conversation.providerId, conversation.modelId);
         this._memoryToggleButton.set_active(conversation.memoryEnabled !== false);
+        this._agentModeToggleButton.set_active(Boolean(conversation.agentModeEnabled));
         this._refreshSkillMenu(conversation);
         this._isUpdatingProviderControls = false;
     }
@@ -976,6 +1197,19 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return;
 
         this._conversations.setMemoryEnabled(conversation.id, this._memoryToggleButton.get_active());
+        this._refreshConversationList();
+    }
+
+    _handleAgentModeToggleChanged() {
+        if (this._isUpdatingProviderControls)
+            return;
+
+        const conversation = this._conversations.activeConversation;
+
+        if (!conversation)
+            return;
+
+        this._conversations.setAgentModeEnabled(conversation.id, this._agentModeToggleButton.get_active());
         this._refreshConversationList();
     }
 
@@ -1073,6 +1307,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const subtitle = new Gtk.Label({
             label: [
                 conversation.archived ? 'Archived' : '',
+                conversation.agentModeEnabled ? 'Agent Mode' : '',
                 `${providerConfig.provider.name} / ${providerConfig.model?.name ?? 'No model'}`,
                 organizationLabel,
             ].filter(Boolean).join(' / '),
@@ -1401,6 +1636,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._providerPicker.set_sensitive(!isBusy);
         this._modelPicker.set_sensitive(!isBusy);
         this._memoryToggleButton.set_sensitive(!isBusy);
+        this._agentModeToggleButton.set_sensitive(!isBusy);
         this._skillMenuButton.set_sensitive(!isBusy);
         this._settingsButton.set_sensitive(!isBusy);
     }
@@ -1441,16 +1677,22 @@ class CuscoWindow extends Adw.ApplicationWindow {
             orientation: Gtk.Orientation.VERTICAL,
             margin_top: 4,
             margin_bottom: 4,
+            hexpand: true,
             halign: Gtk.Align.START,
         });
+        const statusLabel = message.toolCall.status === 'failed' ? 'failed' : 'result';
         const expander = new Gtk.Expander({
-            label: `${message.toolCall.label} result`,
+            label: `${message.toolCall.label} ${statusLabel}`,
             expanded: true,
+            hexpand: true,
         });
+        expander.set_size_request(460, -1);
         expander.add_css_class('cusco-tool-result');
 
         const bodyContent = createMessageContent(message.content, {
             role: 'system',
+            hexpand: true,
+            codeMinWidth: 380,
         });
         bodyContent.add_css_class('cusco-message-bubble');
         bodyContent.add_css_class('cusco-message-assistant');

@@ -16,6 +16,7 @@ const LANGUAGE_ALIASES = {
     rs: 'rust',
     yml: 'yaml',
 };
+const DEFAULT_CODE_MIN_WIDTH = 360;
 
 function clearBox(box) {
     let child = box.get_first_child();
@@ -61,6 +62,7 @@ function createCodeBlock(block, options) {
     const outer = new Gtk.Box({
         orientation: Gtk.Orientation.VERTICAL,
         spacing: 0,
+        hexpand: true,
     });
     outer.add_css_class('cusco-code-block');
 
@@ -111,14 +113,17 @@ function createCodeBlock(block, options) {
         editable: false,
         cursor_visible: false,
         monospace: true,
+        hexpand: true,
     });
     view.add_css_class('cusco-code-view');
 
     const lineCount = Math.max(1, block.content.split('\n').length);
     const scroller = new Gtk.ScrolledWindow({
         child: view,
+        hexpand: true,
         hscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
         vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+        min_content_width: options.codeMinWidth ?? DEFAULT_CODE_MIN_WIDTH,
         min_content_height: Math.min(220, Math.max(72, lineCount * 22)),
         max_content_height: 280,
         propagate_natural_height: true,
@@ -143,6 +148,7 @@ export function createMessageContent(body, options = {}) {
     const container = new Gtk.Box({
         orientation: Gtk.Orientation.VERTICAL,
         spacing: 8,
+        hexpand: Boolean(options.hexpand),
     });
     renderMessageContent(container, body, options);
     container.updateContent = (nextBody) => renderMessageContent(container, nextBody, options);

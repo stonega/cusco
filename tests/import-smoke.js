@@ -1,4 +1,5 @@
 import { APP_ID, CuscoApplication } from '../src/application.js';
+import { buildAgentModeSystemPrompt, parseAgentToolCall } from '../src/chat/agentMode.js';
 import { ConversationManager } from '../src/chat/conversation.js';
 import { markdownToPangoMarkup, parseMarkdownBlocks } from '../src/chat/markdown.js';
 import { createMessageContent } from '../src/chat/messageView.js';
@@ -22,6 +23,7 @@ import { buildSkillContext, discoverInstalledSkills, loadSkillFromPath } from '.
 import { ConversationFileStore } from '../src/storage/conversationStore.js';
 import { MemoryFileStore } from '../src/storage/memoryStore.js';
 import { WorkspaceFileStore } from '../src/storage/workspaceStore.js';
+import { createToolPermissionDecision } from '../src/tools/permissions.js';
 import { ToolManager, calculateExpression, parseToolRequest } from '../src/tools/tools.js';
 import { exportConversation } from '../src/workspace/exports.js';
 import { WorkspaceManager } from '../src/workspace/workspace.js';
@@ -42,6 +44,9 @@ if (typeof ProviderConfigStore !== 'function')
 
 if (typeof ConversationManager !== 'function')
     throw new Error('ConversationManager did not import as a class');
+
+if (typeof buildAgentModeSystemPrompt !== 'function' || typeof parseAgentToolCall !== 'function')
+    throw new Error('Agent Mode helpers did not import');
 
 if (typeof parseMarkdownBlocks !== 'function' || typeof markdownToPangoMarkup !== 'function')
     throw new Error('Markdown helpers did not import as functions');
@@ -66,6 +71,9 @@ if (typeof MemoryFileStore !== 'function')
 
 if (typeof ToolManager !== 'function' || typeof calculateExpression !== 'function' || typeof parseToolRequest !== 'function')
     throw new Error('Tool helpers did not import');
+
+if (typeof createToolPermissionDecision !== 'function')
+    throw new Error('Tool permission helpers did not import');
 
 if (typeof buildSkillContext !== 'function' || typeof discoverInstalledSkills !== 'function' || typeof loadSkillFromPath !== 'function')
     throw new Error('Skill helpers did not import');

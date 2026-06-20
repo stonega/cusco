@@ -50,6 +50,7 @@ function normalizeConversation(conversation) {
             : [],
         archived: Boolean(conversation?.archived),
         memoryEnabled: conversation?.memoryEnabled !== false,
+        agentModeEnabled: Boolean(conversation?.agentModeEnabled),
         folderId: normalizeString(conversation?.folderId),
         tags: normalizeStringList(conversation?.tags),
         profileId: normalizeString(conversation?.profileId),

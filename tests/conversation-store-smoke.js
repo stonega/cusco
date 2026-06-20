@@ -28,6 +28,7 @@ conversations.appendMessage(chat.id, createMessage('system', 'Calculator result'
 }));
 conversations.renameConversation(chat.id, 'Persistent chat');
 conversations.setMemoryEnabled(chat.id, false);
+conversations.setAgentModeEnabled(chat.id, true);
 conversations.setSkillIds(chat.id, ['review']);
 
 const reloaded = new ConversationManager({
@@ -48,6 +49,9 @@ if (reloadedChat.messages[1].toolCall?.name !== 'calc')
 
 if (reloadedChat.memoryEnabled !== false)
     throw new Error('Persisted memory-enabled flag was not loaded');
+
+if (reloadedChat.agentModeEnabled !== true)
+    throw new Error('Persisted Agent Mode flag was not loaded');
 
 if (reloadedChat.skillIds[0] !== 'review')
     throw new Error('Persisted skill selection was not loaded');

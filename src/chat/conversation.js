@@ -80,6 +80,7 @@ export class ConversationManager {
             messages: options.messages ? options.messages.map(normalizeMessage) : [],
             archived: false,
             memoryEnabled: options.memoryEnabled !== false,
+            agentModeEnabled: Boolean(options.agentModeEnabled),
             folderId: options.folderId ?? '',
             tags: normalizeList(options.tags),
             profileId: options.profileId ?? '',
@@ -161,6 +162,7 @@ export class ConversationManager {
             providerId: conversation.providerId,
             modelId: conversation.modelId,
             memoryEnabled: conversation.memoryEnabled !== false,
+            agentModeEnabled: Boolean(conversation.agentModeEnabled),
             folderId: conversation.folderId,
             tags: conversation.tags,
             profileId: conversation.profileId,
@@ -252,6 +254,18 @@ export class ConversationManager {
             throw new Error(`Conversation does not exist: ${conversationId}`);
 
         conversation.memoryEnabled = Boolean(enabled);
+        conversation.updatedAt = now();
+        this._persist();
+        return conversation;
+    }
+
+    setAgentModeEnabled(conversationId, enabled) {
+        const conversation = this.getConversation(conversationId);
+
+        if (!conversation)
+            throw new Error(`Conversation does not exist: ${conversationId}`);
+
+        conversation.agentModeEnabled = Boolean(enabled);
         conversation.updatedAt = now();
         this._persist();
         return conversation;

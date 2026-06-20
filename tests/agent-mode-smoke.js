@@ -1,0 +1,70 @@
+import {
+    buildAgentModeSystemPrompt,
+    createAgentToolFailurePrompt,
+    createAgentToolResultPrompt,
+    isPartialAgentToolCall,
+    parseAgentToolCall,
+} from '../src/chat/agentMode.js';
+import { createToolPermissionDecision, TOOL_PERMISSION_DENY } from '../src/tools/permissions.js';
+import { ToolManager } from '../src/tools/tools.js';
+
+const tools = new ToolManager();
+const prompt = buildAgentModeSystemPrompt(tools.listTools(), { maxIterations: 2 });
+
+if (!prompt.includes('Agent Mode is enabled') || !prompt.includes('calc') || !prompt.includes('<cusco_tool_call>'))
+    throw new Error('Agent Mode prompt did not describe the tool protocol');
+
+const parsedCall = parseAgentToolCall('<cusco_tool_call>{"name":"calc","input":"2 + 2"}</cusco_tool_call>');
+
+if (parsedCall.name !== 'calc' || parsedCall.input !== '2 + 2')
+    throw new Error('Agent tool call was not parsed');
+
+const objectInput = parseAgentToolCall('<cusco_tool_call>{"tool":"data","input":{"a":1}}</cusco_tool_call>');
+
+if (objectInput.name !== 'data' || objectInput.input !== '{"a":1}')
+    throw new Error('Agent tool call object input was not stringified');
+
+if (!isPartialAgentToolCall('<cusco_tool_call>{"name":"calc"'))
+    throw new Error('Partial Agent Mode tool call was not detected');
+
+let invalidJsonFailed = false;
+
+try {
+    parseAgentToolCall('<cusco_tool_call>{"name":</cusco_tool_call>');
+} catch (error) {
+    invalidJsonFailed = error.userMessage?.includes('invalid tool request');
+}
+
+if (!invalidJsonFailed)
+    throw new Error('Invalid Agent Mode tool call did not produce a user-visible error');
+
+const calcRequest = tools.createRequest('calc', '4 * 5');
+const calcResult = await tools.runRequest(calcRequest);
+
+if (calcResult.output !== '20')
+    throw new Error(`Agent Mode calculator request returned ${calcResult.output}`);
+
+const searchRequest = tools.createRequest('search', 'GNOME AI chat app');
+const searchDecision = createToolPermissionDecision(searchRequest);
+
+if (searchDecision.status !== 'ask' || !searchDecision.requiresUserApproval)
+    throw new Error('Search tool did not require approval');
+
+tools.registerTool({
+    name: 'blocked',
+    label: 'Blocked Tool',
+    permissionPolicy: TOOL_PERMISSION_DENY,
+    run: () => 'should not run',
+});
+const denyDecision = createToolPermissionDecision(tools.createRequest('blocked', 'test'));
+
+if (denyDecision.status !== 'deny')
+    throw new Error('Denied tool policy was not preserved');
+
+if (!createAgentToolResultPrompt(calcRequest, 'Calculator result').includes('Tool result for calc'))
+    throw new Error('Agent tool result prompt was not formatted');
+
+if (!createAgentToolFailurePrompt(calcRequest, 'nope').includes('could not be run'))
+    throw new Error('Agent tool failure prompt was not formatted');
+
+print('Cusco Agent Mode smoke passed');
