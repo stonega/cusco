@@ -6,6 +6,7 @@ cusco_sources = files(
 )
 
 chat_sources = files(
+  'chat/agentMode.js',
   'chat/conversation.js',
   'chat/markdown.js',
   'chat/messageView.js',
@@ -45,6 +46,7 @@ skill_sources = files(
 )
 
 tool_sources = files(
+  'tools/permissions.js',
   'tools/tools.js',
 )
 
