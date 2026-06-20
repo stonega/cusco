@@ -70,6 +70,9 @@ jobs:
       contents: write
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
       - name: Download release package
         uses: actions/download-artifact@v4
         with:
@@ -81,6 +84,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "$GITHUB_REF_NAME" \
             --notes "Release $GITHUB_REF_NAME"
