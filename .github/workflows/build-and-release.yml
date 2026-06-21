@@ -45,20 +45,163 @@ jobs:
       - name: Run smoke checks and build
         run: scripts/check.sh
 
-      - name: Package install tree
+      - name: Install package build dependencies
         if: startsWith(github.ref, 'refs/tags/')
+        run: sudo apt-get install -y rpm
+
+      - name: Package release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
         run: |
           tag="${GITHUB_REF_NAME}"
-          staging="$PWD/dist/cusco-${tag}"
-          meson install -C builddir --destdir "$staging"
-          tar -C "$PWD/dist" -czf "cusco-${tag}.tar.gz" "cusco-${tag}"
+          version="${tag#v}"
+          rpm_version="${version//-/_}"
 
-      - name: Upload release package
+          dist_dir="$PWD/dist"
+          install_root="$dist_dir/install-root"
+          package_root="$dist_dir/package-root"
+          rpm_topdir="$PWD/rpmbuild"
+          tar_root="$dist_dir/cusco-${tag}"
+
+          rm -rf "$dist_dir" "$rpm_topdir" release-builddir
+          mkdir -p "$dist_dir" "$install_root"
+
+          meson setup release-builddir --prefix=/usr
+          meson compile -C release-builddir
+          meson install -C release-builddir --destdir "$install_root"
+
+          mkdir -p "$tar_root"
+          cp -a "$install_root/." "$tar_root/"
+          tar -C "$dist_dir" -czf "$dist_dir/cusco-${tag}.tar.gz" "cusco-${tag}"
+
+          mkdir -p "$package_root"
+          cp -a "$install_root/." "$package_root/"
+          mkdir -p "$package_root/DEBIAN"
+          cat > "$package_root/DEBIAN/control" <<CONTROL
+          Package: cusco
+          Version: ${version}
+          Section: gnome
+          Priority: optional
+          Architecture: all
+          Maintainer: Cusco maintainers <noreply@github.com>
+          Depends: gjs, gir1.2-adw-1, gir1.2-gtk-4.0, gir1.2-gtksource-5, gir1.2-secret-1, gir1.2-soup-3.0
+          Homepage: https://github.com/stonega/cusco
+          Description: Native GNOME AI chat application
+           Cusco is a native GTK/libadwaita AI chat application for GNOME.
+          CONTROL
+          sed -i 's/^          //' "$package_root/DEBIAN/control"
+          cat > "$package_root/DEBIAN/postinst" <<'POSTINST'
+          #!/bin/sh
+          set -e
+          if command -v glib-compile-schemas >/dev/null 2>&1; then
+            glib-compile-schemas /usr/share/glib-2.0/schemas || true
+          fi
+          if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications || true
+          fi
+          if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
+          fi
+          POSTINST
+          sed -i 's/^          //' "$package_root/DEBIAN/postinst"
+          cat > "$package_root/DEBIAN/postrm" <<'POSTRM'
+          #!/bin/sh
+          set -e
+          if command -v glib-compile-schemas >/dev/null 2>&1; then
+            glib-compile-schemas /usr/share/glib-2.0/schemas || true
+          fi
+          if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications || true
+          fi
+          if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
+          fi
+          POSTRM
+          sed -i 's/^          //' "$package_root/DEBIAN/postrm"
+          chmod 755 "$package_root/DEBIAN/postinst" "$package_root/DEBIAN/postrm"
+          dpkg-deb --root-owner-group --build "$package_root" "$dist_dir/cusco_${version}_all.deb"
+
+          mkdir -p "$rpm_topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS,TMP}
+          tar -C "$install_root" -czf "$rpm_topdir/SOURCES/cusco-${rpm_version}.tar.gz" .
+          cat > "$rpm_topdir/SPECS/cusco.spec" <<SPEC
+          Name: cusco
+          Version: ${rpm_version}
+          Release: 1%{?dist}
+          Summary: Native GNOME AI chat application
+          License: GPL-3.0-or-later
+          URL: https://github.com/stonega/cusco
+          Source0: cusco-${rpm_version}.tar.gz
+          BuildArch: noarch
+
+          Requires: gjs
+          Requires: gtk4
+          Requires: libadwaita
+          Requires: gtksourceview5
+          Requires: libsecret
+          Requires: libsoup3
+
+          %description
+          Cusco is a native GTK/libadwaita AI chat application for GNOME.
+
+          %prep
+          %setup -q -c -T
+          tar -xzf %{SOURCE0}
+
+          %build
+
+          %install
+          mkdir -p %{buildroot}
+          cp -a . %{buildroot}/
+
+          %post
+          if command -v glib-compile-schemas >/dev/null 2>&1; then
+            glib-compile-schemas /usr/share/glib-2.0/schemas || :
+          fi
+          if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications || :
+          fi
+          if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || :
+          fi
+
+          %postun
+          if command -v glib-compile-schemas >/dev/null 2>&1; then
+            glib-compile-schemas /usr/share/glib-2.0/schemas || :
+          fi
+          if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications || :
+          fi
+          if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || :
+          fi
+
+          %files
+          %{_bindir}/cusco
+          %{_datadir}/applications/io.github.stonega.Cusco.desktop
+          %{_datadir}/metainfo/io.github.stonega.Cusco.appdata.xml
+          %{_datadir}/glib-2.0/schemas/io.github.stonega.Cusco.gschema.xml
+          %{_datadir}/gnome-shell/search-providers/io.github.stonega.Cusco.search-provider.ini
+          %{_datadir}/icons/hicolor/*/apps/io.github.stonega.Cusco.*
+          %{_datadir}/cusco
+          SPEC
+          sed -i 's/^          //' "$rpm_topdir/SPECS/cusco.spec"
+          rpmbuild -bb \
+            --define "_topdir $rpm_topdir" \
+            --define "_tmppath $rpm_topdir/TMP" \
+            "$rpm_topdir/SPECS/cusco.spec"
+          find "$rpm_topdir/RPMS" -name '*.rpm' -exec cp {} "$dist_dir/" \;
+
+          ls -lh "$dist_dir"/cusco-"$tag".tar.gz "$dist_dir"/*.deb "$dist_dir"/*.rpm
+
+      - name: Upload release assets
         if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
-          name: release-package
-          path: cusco-${{ github.ref_name }}.tar.gz
+          name: release-assets
+          path: |
+            dist/cusco-${{ github.ref_name }}.tar.gz
+            dist/*.deb
+            dist/*.rpm
           if-no-files-found: error
 
   release:
@@ -73,10 +216,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Download release package
+      - name: Download release assets
         uses: actions/download-artifact@v4
         with:
-          name: release-package
+          name: release-assets
           path: dist
 
       - name: Create GitHub Release
