@@ -193,13 +193,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._chatSearch.connect('search-changed', () => this._refreshConversationList());
         searchRow.append(this._chatSearch);
 
-        this._showArchivedButton = new Gtk.ToggleButton({
-            icon_name: 'folder-symbolic',
-            tooltip_text: 'Show archived chats',
-        });
-        this._showArchivedButton.connect('toggled', () => this._refreshConversationList());
-        searchRow.append(this._showArchivedButton);
-
         sidebarContent.append(searchRow);
 
         this._conversationList = new Gtk.ListBox({
@@ -1271,9 +1264,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _getVisibleConversations() {
-        return this._conversations.searchConversations(this._chatSearch?.get_text() ?? '', {
-            includeArchived: this._showArchivedButton?.get_active() ?? false,
-        });
+        return this._conversations.searchConversations(this._chatSearch?.get_text() ?? '');
     }
 
     _createConversationRow(conversation, hoverTarget = null) {
@@ -1357,17 +1348,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         addMenuItem('document-edit-symbolic', 'Rename chat', () => {
             this._renameConversation(conversation.id);
         });
-        addMenuItem('document-properties-symbolic', 'Organize chat', () => {
-            this._organizeConversation(conversation.id);
-        });
         addMenuItem('document-save-symbolic', 'Export chat', () => {
             this._exportConversation(conversation.id);
         });
-        addMenuItem(
-            conversation.archived ? 'view-refresh-symbolic' : 'folder-symbolic',
-            conversation.archived ? 'Unarchive chat' : 'Archive chat',
-            () => this._toggleConversationArchive(conversation.id),
-        );
         addMenuItem('user-trash-symbolic', 'Delete chat', () => {
             this._confirmDeleteConversation(conversation.id);
         }, { destructive: true });
@@ -1456,70 +1439,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._conversations.renameConversation(conversationId, entry.get_text());
             this._refreshConversationList();
             this._renderActiveConversation();
-        });
-    }
-
-    _toggleConversationArchive(conversationId) {
-        const conversation = this._conversations.getConversation(conversationId);
-
-        if (!conversation)
-            return;
-
-        this._conversations.archiveConversation(conversationId, !conversation.archived);
-
-        if (this._conversations.conversations.length === 0)
-            this._showArchivedButton.set_active(true);
-
-        this._refreshConversationList();
-        this._renderActiveConversation();
-    }
-
-    _organizeConversation(conversationId) {
-        const conversation = this._conversations.getConversation(conversationId);
-
-        if (!conversation)
-            return;
-
-        const box = new Gtk.Box({
-            orientation: Gtk.Orientation.VERTICAL,
-            spacing: 8,
-        });
-        const folderEntry = new Gtk.Entry({
-            placeholder_text: 'Folder ID',
-            text: conversation.folderId ?? '',
-        });
-        const tagsEntry = new Gtk.Entry({
-            placeholder_text: 'Tags',
-            text: (conversation.tags ?? []).join(', '),
-        });
-        const profileEntry = new Gtk.Entry({
-            placeholder_text: 'Profile ID',
-            text: conversation.profileId ?? '',
-        });
-        box.append(folderEntry);
-        box.append(tagsEntry);
-        box.append(profileEntry);
-
-        const dialog = new Adw.AlertDialog({
-            heading: 'Organize Chat',
-            body: 'Use folder/profile IDs from Workspace preferences and comma-separated tags.',
-        });
-        dialog.set_extra_child(box);
-        dialog.add_response('cancel', 'Cancel');
-        dialog.add_response('save', 'Save');
-        dialog.set_default_response('save');
-        dialog.set_close_response('cancel');
-        dialog.set_response_appearance('save', Adw.ResponseAppearance.SUGGESTED);
-        dialog.choose(this, null, (_dialog, result) => {
-            if (dialog.choose_finish(result) !== 'save')
-                return;
-
-            this._conversations.updateWorkspaceMetadata(conversation.id, {
-                folderId: folderEntry.get_text(),
-                tags: tagsEntry.get_text(),
-                profileId: profileEntry.get_text(),
-            });
-            this._refreshConversationList();
         });
     }
 
@@ -1631,7 +1550,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._sendButton.set_sensitive(!isBusy);
         this._newChatButton.set_sensitive(!isBusy);
         this._chatSearch.set_sensitive(!isBusy);
-        this._showArchivedButton.set_sensitive(!isBusy);
         this._conversationList.set_sensitive(!isBusy);
         this._providerPicker.set_sensitive(!isBusy);
         this._modelPicker.set_sensitive(!isBusy);

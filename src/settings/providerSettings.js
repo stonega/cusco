@@ -65,23 +65,27 @@ function canDiscoverModels(provider) {
         && (!provider.customizable || Boolean(provider.baseUrl));
 }
 
+function createProviderEnabledSwitch() {
+    return new Gtk.Switch({
+        tooltip_text: 'Show this provider in chat provider pickers.',
+        valign: Gtk.Align.CENTER,
+    });
+}
+
 function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows) {
     const provider = providerConfigs.getProvider(providerId);
     const row = new Adw.ExpanderRow({
         title: provider.name,
         subtitle: provider.description,
-        expanded: provider.enabled,
     });
 
-    const enabledRow = new Adw.SwitchRow({
-        title: 'Enabled',
-    });
-    enabledRow.connect('notify::active', () => {
-        if (enabledRow._syncing)
+    const enabledSwitch = createProviderEnabledSwitch();
+    enabledSwitch.connect('notify::active', () => {
+        if (enabledSwitch._syncing)
             return;
 
         try {
-            providerConfigs.setProviderEnabled(providerId, enabledRow.get_active());
+            providerConfigs.setProviderEnabled(providerId, enabledSwitch.get_active());
             syncAllRows();
             onChanged();
         } catch (error) {
@@ -89,7 +93,7 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows) 
             logError(error, 'Failed to update provider enabled state');
         }
     });
-    row.add_row(enabledRow);
+    row.add_suffix(enabledSwitch);
 
     const applyCustomProviderConfig = () => {
         try {
@@ -253,16 +257,14 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows) 
         const currentProvider = providerConfigs.getProvider(providerId);
         const canEnableProvider = providerConfigs.canEnableProvider(providerId);
 
-        row.set_expanded(currentProvider.enabled);
-
-        enabledRow._syncing = true;
-        enabledRow.set_active(currentProvider.enabled);
-        enabledRow.set_sensitive(currentProvider.implemented
+        enabledSwitch._syncing = true;
+        enabledSwitch.set_active(currentProvider.enabled);
+        enabledSwitch.set_sensitive(currentProvider.implemented
             && (currentProvider.enabled
                 ? canDisableProvider(providerConfigs, currentProvider)
                 : canEnableProvider));
-        enabledRow.set_subtitle(getEnabledRowSubtitle(currentProvider, canEnableProvider));
-        enabledRow._syncing = false;
+        enabledSwitch.set_tooltip_text(getEnabledRowSubtitle(currentProvider, canEnableProvider));
+        enabledSwitch._syncing = false;
 
         if (row._endpointRow)
             row._endpointRow.set_text(currentProvider.baseUrl ?? '');
