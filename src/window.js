@@ -243,19 +243,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
             vexpand: true,
         });
 
-        const searchRow = new Gtk.Box({
-            orientation: Gtk.Orientation.HORIZONTAL,
-            spacing: 6,
-        });
-
         this._chatSearch = new Gtk.SearchEntry({
             placeholder_text: 'Search chats',
             hexpand: true,
         });
         this._chatSearch.connect('search-changed', () => this._refreshConversationList());
-        searchRow.append(this._chatSearch);
 
-        sidebarContent.append(searchRow);
+        sidebarContent.append(this._chatSearch);
 
         this._conversationList = new Gtk.ListBox({
             selection_mode: Gtk.SelectionMode.SINGLE,

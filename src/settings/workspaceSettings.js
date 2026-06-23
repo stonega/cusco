@@ -185,62 +185,8 @@ export function createWorkspaceSettingsPage(parent, workspaceManager, onChanged 
     refreshers.push(renderProfiles);
     renderProfiles();
 
-    const foldersGroup = new Adw.PreferencesGroup({
-        title: 'Folders',
-    });
-    const addFolderRow = new Adw.ActionRow({
-        title: 'Add folder',
-        subtitle: 'Create a conversation folder.',
-    });
-    addFolderRow.add_suffix(createActionButton('list-add-symbolic', 'Add folder', () => {
-        promptForText(parent, 'Add Folder', 'Folder name', (name) => {
-            workspaceManager.createFolder({ name });
-            refresh();
-        });
-    }));
-    foldersGroup.add(addFolderRow);
-    let folderRows = [];
-    const renderFolders = () => {
-        for (const row of folderRows)
-            foldersGroup.remove(row);
-
-        folderRows = addRecordRows(foldersGroup, workspaceManager.folders, 'folders', workspaceManager, refresh);
-    };
-    refreshers.push(renderFolders);
-    renderFolders();
-
-    const pluginGroup = new Adw.PreferencesGroup({
-        title: 'Plugin Tools',
-    });
-    const addPluginRow = new Adw.ActionRow({
-        title: 'Register plugin tool',
-        subtitle: 'Store a command descriptor for future tool extension loading.',
-    });
-    addPluginRow.add_suffix(createActionButton('list-add-symbolic', 'Register plugin tool', () => {
-        promptForText(parent, 'Register Plugin Tool', 'Command', (command) => {
-            workspaceManager.registerPluginTool({
-                name: command.split(/\s+/)[0] || 'Plugin Tool',
-                command,
-                enabled: false,
-            });
-            refresh();
-        });
-    }));
-    pluginGroup.add(addPluginRow);
-    let pluginRows = [];
-    const renderPlugins = () => {
-        for (const row of pluginRows)
-            pluginGroup.remove(row);
-
-        pluginRows = addRecordRows(pluginGroup, workspaceManager.pluginTools, 'pluginTools', workspaceManager, refresh);
-    };
-    refreshers.push(renderPlugins);
-    renderPlugins();
-
     page.add(promptsGroup);
     page.add(profilesGroup);
-    page.add(foldersGroup);
-    page.add(pluginGroup);
     return page;
 }
 
