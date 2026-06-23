@@ -15,6 +15,7 @@ chat_sources = files(
 
 provider_sources = files(
   'providers/config.js',
+  'providers/icons.js',
   'providers/provider.js',
   'providers/mockProvider.js',
   'providers/remoteProvider.js',

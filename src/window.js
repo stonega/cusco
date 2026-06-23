@@ -20,6 +20,7 @@ import { estimateConversationUsage } from './chat/usage.js';
 import { MemoryManager } from './memory/memory.js';
 import { McpManager } from './mcp/manager.js';
 import { ProviderConfigStore } from './providers/config.js';
+import { getProviderGIcon } from './providers/icons.js';
 import { createMessage } from './providers/provider.js';
 import { AppSettingsStore } from './settings/appSettings.js';
 import { presentProviderSettingsDialog } from './settings/providerSettings.js';
@@ -32,7 +33,12 @@ import { formatToolResultForTranscript, ToolManager } from './tools/tools.js';
 import { exportConversation } from './workspace/exports.js';
 import { WorkspaceManager } from './workspace/workspace.js';
 
+const PAPER_PLANE_ICON_FILE = 'paper-plane-symbolic.svg';
+const GIT_BRANCH_ICON_FILE = 'git-branch-symbolic.svg';
 const STOP_ICON_NAME = 'process-stop-symbolic';
+const PROVIDER_PICKER_ID_COLUMN = 0;
+const PROVIDER_PICKER_NAME_COLUMN = 1;
+const PROVIDER_PICKER_ICON_COLUMN = 2;
 
 function isGioError(error, code) {
     return typeof error?.matches === 'function' && error.matches(Gio.IOErrorEnum, code);
@@ -44,6 +50,31 @@ function isCancellableCancelled(cancellable) {
 
 function wasOperationCancelled(error, cancellable = null) {
     return isCancellableCancelled(cancellable) || isGioError(error, Gio.IOErrorEnum.CANCELLED);
+}
+
+function getBundledResourcePath(filename) {
+    const modulePath = Gio.File.new_for_uri(import.meta.url).get_path();
+
+    if (!modulePath)
+        return null;
+
+    const moduleDir = GLib.path_get_dirname(modulePath);
+    const candidates = [
+        GLib.build_filenamev([moduleDir, 'resources', filename]),
+        GLib.build_filenamev([moduleDir, '..', 'data', 'resources', filename]),
+    ];
+
+    return candidates.find((path) => GLib.file_test(path, GLib.FileTest.EXISTS)) ?? null;
+}
+
+function createBundledIcon(filename, fallbackIconName) {
+    const iconPath = getBundledResourcePath(filename);
+    const image = iconPath
+        ? new Gtk.Image({ file: iconPath })
+        : new Gtk.Image({ icon_name: fallbackIconName });
+
+    image.set_pixel_size(16);
+    return image;
 }
 
 function getProviderErrorMessage(error) {
@@ -268,7 +299,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         composerMetaRow.add_css_class('cusco-composer-meta');
 
-        this._providerPicker = new Gtk.ComboBoxText();
+        this._providerPicker = this._createProviderPicker();
         this._modelPicker = new Gtk.ComboBoxText();
         this._populateProviderPicker();
         this._providerPicker.connect('changed', () => this._handleProviderChanged());
@@ -337,15 +368,17 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         this._attachButton.connect('clicked', () => this._attachFileContext());
 
+        this._promptMenuButton = this._createPromptMenuButton();
+
         this._composer = new Gtk.Entry({
             placeholder_text: 'Message Cusco',
             hexpand: true,
         });
 
         this._sendButton = new Gtk.Button({
-            icon_name: 'mail-send-symbolic',
             tooltip_text: 'Send',
         });
+        this._sendButton.set_child(createBundledIcon(PAPER_PLANE_ICON_FILE, 'document-send-symbolic'));
 
         const sendMessage = () => {
             if (this._activeChatCancellable) {
@@ -372,6 +405,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._sendButton.connect('clicked', sendMessage);
 
         composerRow.append(this._attachButton);
+        composerRow.append(this._promptMenuButton);
         composerRow.append(this._composer);
         composerRow.append(this._sendButton);
 
@@ -480,6 +514,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         this._populateProviderPicker();
         this._syncProviderControls(this._conversations.activeConversation);
+        this._refreshPromptMenu();
         this._refreshSkillMenu(this._conversations.activeConversation);
         this._applyAccessibilityPreferences();
         this._refreshConversationList();
@@ -1322,10 +1357,29 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _populateProviderPicker() {
-        this._providerPicker.remove_all();
+        const providerStore = new Gtk.ListStore();
 
-        for (const provider of this._providerConfigs.listProviders({ enabledOnly: true }))
-            this._providerPicker.append(provider.id, provider.name);
+        providerStore.set_column_types([
+            GObject.TYPE_STRING,
+            GObject.TYPE_STRING,
+            Gio.Icon.$gtype,
+        ]);
+
+        for (const provider of this._providerConfigs.listProviders({ enabledOnly: true })) {
+            const iter = providerStore.append();
+            providerStore.set(iter, [
+                PROVIDER_PICKER_ID_COLUMN,
+                PROVIDER_PICKER_NAME_COLUMN,
+                PROVIDER_PICKER_ICON_COLUMN,
+            ], [
+                provider.id,
+                provider.name,
+                getProviderGIcon(provider),
+            ]);
+        }
+
+        this._providerPicker.set_model(providerStore);
+        this._providerPicker.set_id_column(PROVIDER_PICKER_ID_COLUMN);
     }
 
     _populateModelPicker(providerId, selectedModelId = null) {
@@ -1339,6 +1393,25 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._modelPicker.set_active_id(selectedModelId ?? fallbackModel?.id ?? null);
     }
 
+    _createProviderPicker() {
+        const picker = new Gtk.ComboBox({
+            id_column: PROVIDER_PICKER_ID_COLUMN,
+        });
+        const iconRenderer = new Gtk.CellRendererPixbuf({
+            xpad: 2,
+        });
+        const textRenderer = new Gtk.CellRendererText({
+            ellipsize: Pango.EllipsizeMode.END,
+        });
+
+        picker.pack_start(iconRenderer, false);
+        picker.add_attribute(iconRenderer, 'gicon', PROVIDER_PICKER_ICON_COLUMN);
+        picker.pack_start(textRenderer, true);
+        picker.add_attribute(textRenderer, 'text', PROVIDER_PICKER_NAME_COLUMN);
+
+        return picker;
+    }
+
     _createSkillMenuButton() {
         const menuButton = new Gtk.MenuButton({
             icon_name: 'emblem-system-symbolic',
@@ -1350,6 +1423,108 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._skillMenuPopover = popover;
         this._refreshSkillMenu();
         return menuButton;
+    }
+
+    _createPromptMenuButton() {
+        const menuButton = new Gtk.MenuButton({
+            icon_name: 'insert-text-symbolic',
+            tooltip_text: 'Insert prompt',
+        });
+        const popover = new Gtk.Popover();
+
+        menuButton.set_popover(popover);
+        this._promptMenuButton = menuButton;
+        this._promptMenuPopover = popover;
+        this._refreshPromptMenu();
+        return menuButton;
+    }
+
+    _refreshPromptMenu() {
+        if (!this._promptMenuPopover || !this._promptMenuButton)
+            return;
+
+        const prompts = this._workspace.prompts;
+        const box = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 4,
+            margin_top: 8,
+            margin_bottom: 8,
+            margin_start: 8,
+            margin_end: 8,
+        });
+
+        if (prompts.length === 0) {
+            const emptyLabel = new Gtk.Label({
+                label: 'No saved prompts',
+                xalign: 0,
+            });
+            emptyLabel.add_css_class('dim-label');
+            box.append(emptyLabel);
+        }
+
+        for (const prompt of prompts) {
+            const button = new Gtk.Button({
+                halign: Gtk.Align.FILL,
+                tooltip_text: prompt.content,
+            });
+            button.add_css_class('flat');
+
+            const labels = new Gtk.Box({
+                orientation: Gtk.Orientation.VERTICAL,
+                spacing: 2,
+                margin_top: 4,
+                margin_bottom: 4,
+                margin_start: 6,
+                margin_end: 6,
+            });
+            const titleLabel = new Gtk.Label({
+                label: prompt.title,
+                xalign: 0,
+                ellipsize: Pango.EllipsizeMode.END,
+            });
+            const contentLabel = new Gtk.Label({
+                label: prompt.content,
+                xalign: 0,
+                ellipsize: Pango.EllipsizeMode.END,
+            });
+            contentLabel.add_css_class('caption');
+            contentLabel.add_css_class('dim-label');
+
+            labels.append(titleLabel);
+            labels.append(contentLabel);
+            button.set_child(labels);
+            button.connect('clicked', () => {
+                this._promptMenuPopover.popdown();
+                this._insertPrompt(prompt);
+            });
+            box.append(button);
+        }
+
+        this._promptMenuPopover.set_child(new Gtk.ScrolledWindow({
+            child: box,
+            max_content_height: 360,
+            min_content_width: 320,
+            propagate_natural_height: true,
+        }));
+    }
+
+    _insertPrompt(prompt) {
+        const content = String(prompt?.content ?? '').trim();
+
+        if (!content || !this._composer)
+            return;
+
+        const existingText = this._composer.get_text();
+        const cursorPosition = Math.max(this._composer.get_position(), 0);
+        const before = existingText.slice(0, cursorPosition);
+        const after = existingText.slice(cursorPosition);
+        const beforeSeparator = before && !/\s$/.test(before) ? ' ' : '';
+        const afterSeparator = after && !/^\s/.test(after) ? ' ' : '';
+        const nextText = `${before}${beforeSeparator}${content}${afterSeparator}${after}`;
+
+        this._composer.set_text(nextText);
+        this._composer.set_position(before.length + beforeSeparator.length + content.length);
+        this.focusComposer();
     }
 
     _refreshSkillMenu(conversation = this._conversations?.activeConversation) {
@@ -1831,15 +2006,20 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._attachButton.set_sensitive(!isBusy);
         this._sendButton.set_sensitive(true);
         this._sendButton.set_tooltip_text(isBusy ? 'Stop response' : 'Send');
-        this._sendButton.set_icon_name(isBusy ? STOP_ICON_NAME : 'mail-send-symbolic');
 
-        if (isBusy)
+        if (isBusy) {
+            const stopIcon = new Gtk.Image({ icon_name: STOP_ICON_NAME });
+            stopIcon.set_pixel_size(16);
+            this._sendButton.set_child(stopIcon);
             this._sendButton.add_css_class('destructive-action');
-        else
+        } else {
+            this._sendButton.set_child(createBundledIcon(PAPER_PLANE_ICON_FILE, 'document-send-symbolic'));
             this._sendButton.remove_css_class('destructive-action');
+        }
 
         this._newChatButton.set_sensitive(!isBusy);
         this._chatSearch.set_sensitive(!isBusy);
+        this._promptMenuButton.set_sensitive(!isBusy);
         this._conversationList.set_sensitive(!isBusy);
         this._providerPicker.set_sensitive(!isBusy);
         this._modelPicker.set_sensitive(!isBusy);
@@ -1941,12 +2121,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         actions.append(this._createMessageActionButton('tab-new-symbolic', 'Branch from message', () => {
             this._branchFromMessage(message);
-        }));
+        }, { iconFile: GIT_BRANCH_ICON_FILE }));
 
         return actions;
     }
 
-    _createMessageActionButton(iconName, tooltipText, onClicked) {
+    _createMessageActionButton(iconName, tooltipText, onClicked, options = {}) {
         const button = new Gtk.Button({
             icon_name: iconName,
             tooltip_text: tooltipText,
@@ -1954,6 +2134,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         button.add_css_class('flat');
         button.add_css_class('circular');
+        if (options.iconFile)
+            button.set_child(createBundledIcon(options.iconFile, iconName));
+
         button.connect('clicked', onClicked);
         return button;
     }

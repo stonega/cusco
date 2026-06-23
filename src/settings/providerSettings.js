@@ -1,6 +1,7 @@
 import Adw from 'gi://Adw?version=1';
 import Gtk from 'gi://Gtk?version=4.0';
 
+import { createProviderIcon } from '../providers/icons.js';
 import { createApplicationSettingsPage } from './appSettings.js';
 import { createMemorySettingsPage } from './memorySettings.js';
 import { createMcpSettingsPage } from './mcpSettings.js';
@@ -79,6 +80,7 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows) 
         title: provider.name,
         subtitle: provider.description,
     });
+    row.add_prefix(createProviderIcon(provider, { pixelSize: 32 }));
 
     const enabledSwitch = createProviderEnabledSwitch();
     enabledSwitch.connect('notify::active', () => {

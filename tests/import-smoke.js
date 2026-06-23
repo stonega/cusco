@@ -9,6 +9,7 @@ import { defaultMcpConfigFilePath, parseMcpConfigFile } from '../src/mcp/config.
 import { McpClient } from '../src/mcp/client.js';
 import { McpManager } from '../src/mcp/manager.js';
 import { ProviderConfigStore } from '../src/providers/config.js';
+import { createProviderIcon, getProviderGIcon } from '../src/providers/icons.js';
 import { MockProvider } from '../src/providers/mockProvider.js';
 import {
     AnthropicMessagesProvider,
@@ -45,6 +46,9 @@ if (provider.id !== 'mock')
 
 if (typeof ProviderConfigStore !== 'function')
     throw new Error('ProviderConfigStore did not import as a class');
+
+if (typeof getProviderGIcon !== 'function' || typeof createProviderIcon !== 'function')
+    throw new Error('Provider icon helpers did not import as functions');
 
 if (typeof ConversationManager !== 'function')
     throw new Error('ConversationManager did not import as a class');
