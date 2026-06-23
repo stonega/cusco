@@ -4,6 +4,10 @@ import { ChatProvider } from './provider.js';
 
 const STREAM_DELAY_MS = 35;
 
+function isCancelled(cancellable) {
+    return Boolean(cancellable?.is_cancelled?.());
+}
+
 function delay(milliseconds) {
     return new Promise((resolve) => {
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, milliseconds, () => {
@@ -30,7 +34,14 @@ export class MockProvider extends ChatProvider {
         const response = this._buildResponse(latestUserMessage?.content ?? '', options);
 
         for (const chunk of streamChunks(response)) {
+            if (isCancelled(options.cancellable))
+                return;
+
             await delay(STREAM_DELAY_MS);
+
+            if (isCancelled(options.cancellable))
+                return;
+
             yield chunk;
         }
     }

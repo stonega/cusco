@@ -54,7 +54,7 @@ Keep this path boring and explicit. Most agent features should attach around it,
 | Memory | `src/memory/memory.js` | Keep approval and audit behavior. Improve selection and extraction before adding autonomous memory writes. |
 | Tasks | not implemented | Add a persisted task graph separately from transient todos. Use it for long-running goals, dependencies, and resumable work. |
 | Background work | partially notification-only | Run slow or external work outside the active UI path and inject completion notifications back into the conversation. |
-| MCP/plugins | records only | Treat MCP tools as another tool pool source with namespaced tool names, discovery, permission checks, and connection lifecycle handling. |
+| MCP/plugins | MCP implemented for Agent Mode; plugins are descriptors | MCP servers are loaded from settings or `mcp.json`, discovered into namespaced tools, and routed through the existing permission and transcript audit path. |
 
 ## Tool Development Rules
 
@@ -164,11 +164,12 @@ Compaction must preserve user instructions, current goal, decisions, pending tas
 
 ### Stage 6: MCP and Plugin Tools
 
-- Discover MCP tools from enabled workspace server configs.
+- Discover MCP tools, resources, and prompts from enabled workspace and config-file server configs.
 - Namespace external tools, for example `mcp__server__tool`.
-- Merge built-in, plugin, and MCP tools into one tool pool.
+- Merge built-in, plugin, and MCP tools into one Agent Mode tool pool.
 - Apply the same permission pipeline to external tools.
 - Track connection status and surface failures in settings and transcripts.
+- Future work: map this tool pool to provider-native tool-call APIs once provider capability metadata exists.
 
 ### Stage 7: Multi-Agent Workflows
 

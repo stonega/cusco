@@ -174,8 +174,11 @@ export function createMemorySettingsPage(parent, memoryManager, onChanged = () =
         hexpand: true,
         margin_top: 6,
         margin_bottom: 6,
-        margin_start: 12,
-        margin_end: 12,
+    });
+    const searchRow = new Gtk.ListBoxRow({
+        activatable: false,
+        child: searchEntry,
+        selectable: false,
     });
     const rows = [];
 
@@ -208,7 +211,7 @@ export function createMemorySettingsPage(parent, memoryManager, onChanged = () =
     };
 
     searchEntry.connect('search-changed', refreshRows);
-    managementGroup.add(searchEntry);
+    managementGroup.add(searchRow);
     refreshRows();
 
     const transferGroup = new Adw.PreferencesGroup({

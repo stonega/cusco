@@ -1,3 +1,4 @@
+import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 
 import {
@@ -77,5 +78,22 @@ const bashResult = await manager.runRequest(manager.createRequest('bash', 'print
 
 if (bashResult.exitStatus !== 0 || !bashResult.stdout.includes('cusco-bash-smoke'))
     throw new Error(`Bash tool failed: ${bashResult.output}`);
+
+const bashCancellable = new Gio.Cancellable();
+GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+    bashCancellable.cancel();
+    return GLib.SOURCE_REMOVE;
+});
+
+const cancelledBashResult = await manager.runRequest(
+    manager.createRequest('bash', 'printf before-cancel; sleep 2; printf after-cancel'),
+    { cancellable: bashCancellable, timeoutSeconds: 5 },
+);
+
+if (!cancelledBashResult.cancelled || cancelledBashResult.exitStatus !== 130)
+    throw new Error(`Bash cancellation was not reported: ${cancelledBashResult.output}`);
+
+if (!formatToolResultForTranscript(cancelledBashResult).includes('(cancelled)'))
+    throw new Error('Cancelled bash result was not formatted as cancelled');
 
 print('Cusco tools smoke passed');

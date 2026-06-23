@@ -17,7 +17,16 @@ export function normalizePermissionPolicy(policy, { requiresPermission = true } 
     return requiresPermission ? TOOL_PERMISSION_ASK : TOOL_PERMISSION_ALLOW;
 }
 
-export function createToolPermissionDecision(request) {
+export function createToolPermissionDecision(request, options = {}) {
+    if (options.autoModeEnabled) {
+        return {
+            policy: TOOL_PERMISSION_ALLOW,
+            status: 'allow',
+            requiresUserApproval: false,
+            reason: '',
+        };
+    }
+
     const permissionPolicy = normalizePermissionPolicy(request?.permissionPolicy, {
         requiresPermission: request?.requiresPermission !== false,
     });

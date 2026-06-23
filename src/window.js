@@ -1,4 +1,5 @@
 import Adw from 'gi://Adw?version=1';
+import Gdk from 'gi://Gdk?version=4.0';
 import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 import GObject from 'gi://GObject?version=2.0';
@@ -17,7 +18,9 @@ import { ConversationManager } from './chat/conversation.js';
 import { createMessageContent } from './chat/messageView.js';
 import { estimateConversationUsage } from './chat/usage.js';
 import { MemoryManager } from './memory/memory.js';
+import { McpManager } from './mcp/manager.js';
 import { ProviderConfigStore } from './providers/config.js';
+import { getProviderGIcon } from './providers/icons.js';
 import { createMessage } from './providers/provider.js';
 import { AppSettingsStore } from './settings/appSettings.js';
 import { presentProviderSettingsDialog } from './settings/providerSettings.js';
@@ -30,8 +33,48 @@ import { formatToolResultForTranscript, ToolManager } from './tools/tools.js';
 import { exportConversation } from './workspace/exports.js';
 import { WorkspaceManager } from './workspace/workspace.js';
 
+const PAPER_PLANE_ICON_FILE = 'paper-plane-symbolic.svg';
+const GIT_BRANCH_ICON_FILE = 'git-branch-symbolic.svg';
+const STOP_ICON_NAME = 'process-stop-symbolic';
+const PROVIDER_PICKER_ID_COLUMN = 0;
+const PROVIDER_PICKER_NAME_COLUMN = 1;
+const PROVIDER_PICKER_ICON_COLUMN = 2;
+
 function isGioError(error, code) {
     return typeof error?.matches === 'function' && error.matches(Gio.IOErrorEnum, code);
+}
+
+function isCancellableCancelled(cancellable) {
+    return Boolean(cancellable?.is_cancelled?.());
+}
+
+function wasOperationCancelled(error, cancellable = null) {
+    return isCancellableCancelled(cancellable) || isGioError(error, Gio.IOErrorEnum.CANCELLED);
+}
+
+function getBundledResourcePath(filename) {
+    const modulePath = Gio.File.new_for_uri(import.meta.url).get_path();
+
+    if (!modulePath)
+        return null;
+
+    const moduleDir = GLib.path_get_dirname(modulePath);
+    const candidates = [
+        GLib.build_filenamev([moduleDir, 'resources', filename]),
+        GLib.build_filenamev([moduleDir, '..', 'data', 'resources', filename]),
+    ];
+
+    return candidates.find((path) => GLib.file_test(path, GLib.FileTest.EXISTS)) ?? null;
+}
+
+function createBundledIcon(filename, fallbackIconName) {
+    const iconPath = getBundledResourcePath(filename);
+    const image = iconPath
+        ? new Gtk.Image({ file: iconPath })
+        : new Gtk.Image({ icon_name: fallbackIconName });
+
+    image.set_pixel_size(16);
+    return image;
 }
 
 function getProviderErrorMessage(error) {
@@ -61,6 +104,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._memories = new MemoryManager({ store: new MemoryFileStore() });
         this._workspace = new WorkspaceManager({ store: new WorkspaceFileStore() });
         this._tools = new ToolManager();
+        this._mcp = new McpManager({ workspaceManager: this._workspace });
         this._pendingAttachments = [];
         this._providerConfigs = new ProviderConfigStore();
         const { provider: defaultProvider, model: defaultModel } = this._providerConfigs.getActiveSelection();
@@ -86,7 +130,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._isUpdatingSkillControls = false;
         this._activeChatCancellable = null;
         this.connect('close-request', () => {
-            this._activeChatCancellable?.cancel();
+            this._stopActiveConversation();
+            this._mcp.shutdown();
             return false;
         });
         this._buildUi();
@@ -121,9 +166,26 @@ class CuscoWindow extends Adw.ApplicationWindow {
         split.set_end_child(chatView);
 
         this.set_content(split);
+        this._installKeyboardShortcuts();
         this.connect('notify::width', () => this._updateAdaptiveLayout());
         this._applyAccessibilityPreferences();
         this._updateAdaptiveLayout();
+    }
+
+    _installKeyboardShortcuts() {
+        const keyController = new Gtk.EventControllerKey();
+
+        keyController.set_propagation_phase(Gtk.PropagationPhase.CAPTURE);
+        keyController.connect('key-pressed', (_controller, keyval) => {
+            if (keyval === Gdk.KEY_Escape && this._activeChatCancellable) {
+                this._stopActiveConversation();
+                return true;
+            }
+
+            return false;
+        });
+
+        this.add_controller(keyController);
     }
 
     _createSidebar() {
@@ -237,7 +299,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         composerMetaRow.add_css_class('cusco-composer-meta');
 
-        this._providerPicker = new Gtk.ComboBoxText();
+        this._providerPicker = this._createProviderPicker();
         this._modelPicker = new Gtk.ComboBoxText();
         this._populateProviderPicker();
         this._providerPicker.connect('changed', () => this._handleProviderChanged());
@@ -306,17 +368,24 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         this._attachButton.connect('clicked', () => this._attachFileContext());
 
+        this._promptMenuButton = this._createPromptMenuButton();
+
         this._composer = new Gtk.Entry({
             placeholder_text: 'Message Cusco',
             hexpand: true,
         });
 
         this._sendButton = new Gtk.Button({
-            icon_name: 'mail-send-symbolic',
             tooltip_text: 'Send',
         });
+        this._sendButton.set_child(createBundledIcon(PAPER_PLANE_ICON_FILE, 'document-send-symbolic'));
 
         const sendMessage = () => {
+            if (this._activeChatCancellable) {
+                this._stopActiveConversation();
+                return;
+            }
+
             const text = this._composer.get_text().trim();
 
             if (!text)
@@ -336,6 +405,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._sendButton.connect('clicked', sendMessage);
 
         composerRow.append(this._attachButton);
+        composerRow.append(this._promptMenuButton);
         composerRow.append(this._composer);
         composerRow.append(this._sendButton);
 
@@ -423,11 +493,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._appSettings,
             this._memories,
             this._workspace,
+            this._mcp,
             () => this._handleProviderSettingsChanged(),
         );
     }
 
     _handleProviderSettingsChanged() {
+        this._mcp.reloadConfig();
         const conversation = this._conversations.activeConversation;
 
         if (conversation && !this._providerConfigs.isProviderAvailable(conversation.providerId)) {
@@ -442,12 +514,18 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         this._populateProviderPicker();
         this._syncProviderControls(this._conversations.activeConversation);
+        this._refreshPromptMenu();
         this._refreshSkillMenu(this._conversations.activeConversation);
         this._applyAccessibilityPreferences();
         this._refreshConversationList();
     }
 
     async _sendMessage(text) {
+        const cancellable = this._beginActiveTurn();
+
+        if (!cancellable)
+            return;
+
         const conversation = this._conversations.activeConversation ?? this._conversations.createConversation();
         const attachments = this._consumePendingAttachments();
         const userMessage = createMessage(
@@ -456,42 +534,67 @@ class CuscoWindow extends Adw.ApplicationWindow {
             { attachments },
         );
 
-        this._conversations.appendMessage(conversation.id, userMessage);
-        this._addMessage(userMessage.content, userMessage.role, userMessage);
-        this._promptMemoryProposal(userMessage, conversation);
-        await this._runRequestedTool(text, conversation.id);
-        this._refreshConversationList();
-        await this._streamAssistantResponse(conversation.id);
+        try {
+            this._conversations.appendMessage(conversation.id, userMessage);
+            this._addMessage(userMessage.content, userMessage.role, userMessage);
+            this._promptMemoryProposal(userMessage, conversation);
+
+            const toolStatus = await this._runRequestedTool(text, conversation.id, cancellable);
+            this._refreshConversationList();
+
+            if (isCancellableCancelled(cancellable)) {
+                if (toolStatus !== 'cancelled')
+                    this._appendStoppedMessage(conversation.id, 'Response stopped before the provider request started.');
+
+                return;
+            }
+
+            await this._streamAssistantResponse(conversation.id, { cancellable });
+        } finally {
+            this._finishActiveTurn(cancellable);
+        }
     }
 
-    async _runRequestedTool(text, conversationId) {
+    async _runRequestedTool(text, conversationId, cancellable = null) {
         const request = this._tools.parseRequest(text);
 
         if (!request)
-            return;
+            return 'skipped';
 
-        const permissionDecision = createToolPermissionDecision(request);
+        if (isCancellableCancelled(cancellable)) {
+            this._appendToolCancellation(conversationId, request);
+            return 'cancelled';
+        }
+
+        const permissionDecision = createToolPermissionDecision(request, {
+            autoModeEnabled: this._appSettings.autoModeEnabled,
+        });
 
         if (permissionDecision.status === 'deny') {
             const message = createMessage('system', `${request.label} was not run because it is blocked by policy.`);
             this._conversations.appendMessage(conversationId, message);
             this._addMessage(message.content, message.role, message);
-            return;
+            return 'blocked';
         }
 
-        if (permissionDecision.requiresUserApproval && !await this._confirmToolPermission(request)) {
+        if (permissionDecision.requiresUserApproval && !await this._confirmToolPermission(request, cancellable)) {
+            if (isCancellableCancelled(cancellable)) {
+                this._appendToolCancellation(conversationId, request);
+                return 'cancelled';
+            }
+
             const message = createMessage('system', `${request.label} was not run because permission was denied.`);
             this._conversations.appendMessage(conversationId, message);
             this._addMessage(message.content, message.role, message);
-            return;
+            return 'denied';
         }
-
-        this._setComposerBusy(true);
 
         try {
             const result = await this._tools.runRequest(request, {
                 timeoutSeconds: this._appSettings.responseTimeoutSeconds,
+                cancellable,
             });
+            const status = result.cancelled ? 'cancelled' : 'completed';
             const message = createMessage('system', formatToolResultForTranscript(result), {
                 toolCall: {
                     name: result.name,
@@ -499,23 +602,35 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     input: result.input,
                     output: result.output ?? '',
                     results: result.results ?? [],
+                    status,
                     createdAt: new Date().toISOString(),
                 },
             });
             this._conversations.appendMessage(conversationId, message);
             this._addMessage(message.content, message.role, message);
+            this._updateUsageDisplay(this._conversations.getConversation(conversationId));
+            return status;
         } catch (error) {
+            if (wasOperationCancelled(error, cancellable)) {
+                this._appendToolCancellation(conversationId, request);
+                return 'cancelled';
+            }
+
             const message = createMessage('system', error.userMessage ?? `Tool failed: ${error.message}`);
             this._conversations.appendMessage(conversationId, message);
             this._addMessage(message.content, message.role, message);
             logError(error, 'Failed to run tool request');
-        } finally {
-            this._setComposerBusy(false);
+            return 'failed';
         }
     }
 
-    _confirmToolPermission(request) {
+    _confirmToolPermission(request, cancellable = null) {
         return new Promise((resolve) => {
+            if (isCancellableCancelled(cancellable)) {
+                resolve(false);
+                return;
+            }
+
             const dialog = new Adw.AlertDialog({
                 heading: `Run ${request.label}?`,
                 body: request.name === 'search'
@@ -523,12 +638,26 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     : request.input,
             });
             dialog.add_response('deny', 'Deny');
+            dialog.add_response('stop', 'Stop');
             dialog.add_response('allow', 'Allow');
             dialog.set_default_response('allow');
-            dialog.set_close_response('deny');
+            dialog.set_close_response('stop');
+            dialog.set_response_appearance('stop', Adw.ResponseAppearance.DESTRUCTIVE);
             dialog.set_response_appearance('allow', Adw.ResponseAppearance.SUGGESTED);
-            dialog.choose(this, null, (_dialog, result) => {
-                resolve(dialog.choose_finish(result) === 'allow');
+            dialog.choose(this, cancellable, (_dialog, result) => {
+                try {
+                    const response = dialog.choose_finish(result);
+
+                    if (response === 'stop')
+                        cancellable?.cancel();
+
+                    resolve(response === 'allow');
+                } catch (error) {
+                    if (!wasOperationCancelled(error, cancellable))
+                        logError(error, 'Failed to resolve tool permission dialog');
+
+                    resolve(false);
+                }
             });
         });
     }
@@ -618,24 +747,34 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return `${text}\n\n${attachmentText}`;
     }
 
-    async _streamAssistantResponse(conversationId) {
+    async _streamAssistantResponse(conversationId, options = {}) {
         const conversation = this._conversations.getConversation(conversationId);
 
         if (!conversation)
             return;
 
-        const cancellable = new Gio.Cancellable();
-        this._activeChatCancellable = cancellable;
-        this._setComposerBusy(true);
+        const ownsActiveTurn = !options.cancellable;
+        const cancellable = options.cancellable ?? this._beginActiveTurn();
+
+        if (!cancellable)
+            return;
+
+        let assistantView = null;
         this._startLongResponseNotification();
 
         try {
             this._injectMemoryContext(conversation);
             const activeSkills = this._injectSkillContext(conversation);
+            if (conversation.agentModeEnabled)
+                await this._mcp.refreshTools(this._tools, {
+                    timeoutSeconds: this._appSettings.responseTimeoutSeconds,
+                    cancellable,
+                });
+
             const providerMessages = this._buildProviderMessages(conversation, activeSkills, {
                 agentMode: Boolean(conversation.agentModeEnabled),
             });
-            const assistantView = this._addMessage('', 'assistant');
+            assistantView = this._createStreamingAssistantView(conversation);
             const assistantText = conversation.agentModeEnabled
                 ? await this._runAgentModeResponse(conversation, providerMessages, assistantView, cancellable)
                 : await this._collectProviderResponseWithFallback(
@@ -644,20 +783,41 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     cancellable,
                     (text) => {
                         assistantView.set_label(text);
-                        this._updateUsageDisplay(conversation, text);
+                        this._updateUsageDisplay(conversation);
                         this._scrollToBottom();
                     },
                 );
 
-            this._conversations.appendMessage(conversation.id, createMessage('assistant', assistantText));
+            if (isCancellableCancelled(cancellable)) {
+                this._appendStoppedMessage(
+                    conversation.id,
+                    assistantView.hasContent()
+                        ? 'Response stopped. Partial assistant text was saved.'
+                        : 'Response stopped before the assistant returned text.',
+                );
+                return;
+            }
+
+            assistantView.set_stream_text(assistantText, assistantText);
             this._refreshConversationList();
             this._renderActiveConversation();
-        } finally {
-            if (this._activeChatCancellable === cancellable)
-                this._activeChatCancellable = null;
+        } catch (error) {
+            if (wasOperationCancelled(error, cancellable)) {
+                this._appendStoppedMessage(
+                    conversation.id,
+                    assistantView?.hasContent()
+                        ? 'Response stopped. Partial assistant text was saved.'
+                        : 'Response stopped before the assistant returned text.',
+                );
+                return;
+            }
 
-            this._setComposerBusy(false);
+            throw error;
+        } finally {
             this._stopLongResponseNotification();
+
+            if (ownsActiveTurn)
+                this._finishActiveTurn(cancellable);
         }
     }
 
@@ -712,15 +872,28 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     async _runAgentModeResponse(conversation, providerMessages, assistantView, cancellable) {
         const runtimeMessages = providerMessages.map((message) => ({ ...message }));
+        const setAssistantStatus = (text) => {
+            if (typeof assistantView.set_status === 'function')
+                assistantView.set_status(text);
+            else
+                assistantView.set_label(text);
+        };
 
         for (let iteration = 0; iteration < DEFAULT_AGENT_MAX_ITERATIONS; iteration++) {
-            assistantView.set_label(iteration === 0 ? 'Agent Mode is thinking...' : 'Agent Mode is continuing...');
+            if (isCancellableCancelled(cancellable))
+                return '';
+
+            setAssistantStatus(iteration === 0 ? 'Agent Mode is thinking...' : 'Agent Mode is continuing...');
             const responseText = await this._collectProviderResponseWithFallback(
                 conversation,
                 runtimeMessages,
                 cancellable,
                 (text) => this._updateAgentModeAssistantView(conversation, assistantView, text),
             );
+
+            if (isCancellableCancelled(cancellable))
+                return responseText;
+
             const toolCall = this._parseAgentToolCallForRuntime(responseText, conversation, runtimeMessages);
 
             if (!toolCall)
@@ -734,7 +907,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (!request)
                 continue;
 
-            const ranTool = await this._runAgentToolRequest(request, responseText, conversation, runtimeMessages);
+            setAssistantStatus(`Agent Mode requested ${request.label}...`);
+            const ranTool = await this._runAgentToolRequest(
+                request,
+                responseText,
+                conversation,
+                runtimeMessages,
+                cancellable,
+            );
 
             if (!ranTool)
                 continue;
@@ -751,21 +931,28 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _updateAgentModeAssistantView(conversation, assistantView, text) {
+        let displayText;
+
         if (isPartialAgentToolCall(text)) {
-            assistantView.set_label('Agent Mode is preparing a tool call...');
+            displayText = 'Agent Mode is preparing a tool call...';
         } else {
             try {
                 const toolCall = parseAgentToolCall(text);
                 const tool = toolCall ? this._tools.getTool(toolCall.name) : null;
-                assistantView.set_label(toolCall
+                displayText = toolCall
                     ? (tool ? `Agent Mode requested ${tool.label}...` : 'Agent Mode requested a tool...')
-                    : text);
+                    : text;
             } catch (_error) {
-                assistantView.set_label(text);
+                displayText = text;
             }
         }
 
-        this._updateUsageDisplay(conversation, text);
+        if (typeof assistantView.set_stream_text === 'function')
+            assistantView.set_stream_text(text, displayText);
+        else
+            assistantView.set_label(displayText);
+
+        this._updateUsageDisplay(conversation);
         this._scrollToBottom();
     }
 
@@ -801,8 +988,15 @@ class CuscoWindow extends Adw.ApplicationWindow {
         }
     }
 
-    async _runAgentToolRequest(request, responseText, conversation, runtimeMessages) {
-        const permissionDecision = createToolPermissionDecision(request);
+    async _runAgentToolRequest(request, responseText, conversation, runtimeMessages, cancellable = null) {
+        if (isCancellableCancelled(cancellable)) {
+            this._appendAgentToolCancellation(request, responseText, conversation, runtimeMessages);
+            return false;
+        }
+
+        const permissionDecision = createToolPermissionDecision(request, {
+            autoModeEnabled: this._appSettings.autoModeEnabled,
+        });
 
         if (permissionDecision.status === 'deny') {
             const reason = `${request.label} is blocked by policy.`;
@@ -810,7 +1004,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return false;
         }
 
-        if (permissionDecision.requiresUserApproval && !await this._confirmToolPermission(request)) {
+        if (permissionDecision.requiresUserApproval && !await this._confirmToolPermission(request, cancellable)) {
+            if (isCancellableCancelled(cancellable)) {
+                this._appendAgentToolCancellation(request, responseText, conversation, runtimeMessages);
+                return false;
+            }
+
             const reason = `${request.label} was not run because permission was denied.`;
             this._appendAgentToolFailure(request, responseText, conversation, runtimeMessages, reason);
             return false;
@@ -819,6 +1018,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         try {
             const result = await this._tools.runRequest(request, {
                 timeoutSeconds: this._appSettings.responseTimeoutSeconds,
+                cancellable,
             });
             const transcriptText = formatToolResultForTranscript(result);
             const message = createMessage('system', transcriptText, {
@@ -828,19 +1028,29 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     input: result.input,
                     output: result.output ?? '',
                     results: result.results ?? [],
-                    status: 'completed',
+                    status: result.cancelled ? 'cancelled' : 'completed',
                     agentMode: true,
                     createdAt: new Date().toISOString(),
                 },
             });
             this._conversations.appendMessage(conversation.id, message);
             this._addMessage(message.content, message.role, message);
+            this._updateUsageDisplay(conversation);
+
+            if (result.cancelled)
+                return false;
+
             runtimeMessages.push(
                 { role: 'assistant', content: responseText },
                 { role: 'user', content: createAgentToolResultPrompt(request, transcriptText) },
             );
             return true;
         } catch (error) {
+            if (wasOperationCancelled(error, cancellable)) {
+                this._appendAgentToolCancellation(request, responseText, conversation, runtimeMessages);
+                return false;
+            }
+
             const reason = error.userMessage ?? `Tool failed: ${error.message}`;
             this._appendAgentToolFailure(request, responseText, conversation, runtimeMessages, reason);
             logError(error, 'Failed to run Agent Mode tool request');
@@ -848,7 +1058,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
         }
     }
 
-    _appendAgentToolFailure(request, responseText, conversation, runtimeMessages, reason) {
+    _appendAgentToolCancellation(request, responseText, conversation, runtimeMessages) {
+        const reason = `${request.label} was stopped before it finished.`;
+        this._appendAgentToolFailure(request, responseText, conversation, runtimeMessages, reason, 'cancelled');
+    }
+
+    _appendAgentToolFailure(request, responseText, conversation, runtimeMessages, reason, status = 'failed') {
         const message = createMessage('system', reason, {
             toolCall: {
                 name: request.name,
@@ -856,17 +1071,119 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 input: request.input,
                 output: reason,
                 results: [],
-                status: 'failed',
+                status,
                 agentMode: true,
                 createdAt: new Date().toISOString(),
             },
         });
         this._conversations.appendMessage(conversation.id, message);
         this._addMessage(message.content, message.role, message);
+        this._updateUsageDisplay(conversation);
         runtimeMessages.push(
             { role: 'assistant', content: responseText },
             { role: 'user', content: createAgentToolFailurePrompt(request, reason) },
         );
+    }
+
+    _beginActiveTurn(cancellable = new Gio.Cancellable()) {
+        if (this._activeChatCancellable)
+            return null;
+
+        this._activeChatCancellable = cancellable;
+        this._setComposerBusy(true);
+        return cancellable;
+    }
+
+    _finishActiveTurn(cancellable) {
+        if (this._activeChatCancellable === cancellable)
+            this._activeChatCancellable = null;
+
+        this._setComposerBusy(false);
+    }
+
+    _stopActiveConversation() {
+        const cancellable = this._activeChatCancellable;
+
+        if (!cancellable)
+            return false;
+
+        if (!isCancellableCancelled(cancellable))
+            cancellable.cancel();
+
+        this._sendButton?.set_sensitive(false);
+        this._sendButton?.set_tooltip_text('Stopping current response');
+        return true;
+    }
+
+    _appendStoppedMessage(conversationId, text) {
+        const conversation = this._conversations.getConversation(conversationId);
+
+        if (!conversation)
+            return null;
+
+        const message = createMessage('system', text);
+        this._conversations.appendMessage(conversation.id, message);
+        this._addMessage(message.content, message.role, message);
+        this._updateUsageDisplay(conversation);
+        this._refreshConversationList();
+        return message;
+    }
+
+    _appendToolCancellation(conversationId, request) {
+        const reason = `${request.label} was stopped before it finished.`;
+        const message = createMessage('system', reason, {
+            toolCall: {
+                name: request.name,
+                label: request.label,
+                input: request.input,
+                output: reason,
+                results: [],
+                status: 'cancelled',
+                createdAt: new Date().toISOString(),
+            },
+        });
+
+        this._conversations.appendMessage(conversationId, message);
+        this._addMessage(message.content, message.role, message);
+        this._updateUsageDisplay(this._conversations.getConversation(conversationId));
+        return message;
+    }
+
+    _createStreamingAssistantView(conversation) {
+        let view = null;
+        let assistantMessage = null;
+        let currentText = '';
+
+        const ensureView = () => {
+            if (!view)
+                view = this._addMessage('', 'assistant');
+
+            return view;
+        };
+
+        const ensureMessage = (text) => {
+            if (assistantMessage)
+                return assistantMessage;
+
+            assistantMessage = createMessage('assistant', text);
+            this._conversations.appendMessage(conversation.id, assistantMessage);
+            return assistantMessage;
+        };
+
+        const updatePersistentText = (text, displayText = text) => {
+            currentText = String(text ?? '');
+            const message = ensureMessage(currentText);
+
+            this._conversations.updateMessageContent(conversation.id, message.id, currentText);
+            ensureView().set_label(displayText);
+        };
+
+        return {
+            set_label: (text) => updatePersistentText(text, text),
+            set_stream_text: updatePersistentText,
+            set_status: (text) => ensureView().set_label(text),
+            hasContent: () => currentText.length > 0,
+        };
     }
 
     _startLongResponseNotification() {
@@ -1040,10 +1357,29 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _populateProviderPicker() {
-        this._providerPicker.remove_all();
+        const providerStore = new Gtk.ListStore();
 
-        for (const provider of this._providerConfigs.listProviders({ enabledOnly: true }))
-            this._providerPicker.append(provider.id, provider.name);
+        providerStore.set_column_types([
+            GObject.TYPE_STRING,
+            GObject.TYPE_STRING,
+            Gio.Icon.$gtype,
+        ]);
+
+        for (const provider of this._providerConfigs.listProviders({ enabledOnly: true })) {
+            const iter = providerStore.append();
+            providerStore.set(iter, [
+                PROVIDER_PICKER_ID_COLUMN,
+                PROVIDER_PICKER_NAME_COLUMN,
+                PROVIDER_PICKER_ICON_COLUMN,
+            ], [
+                provider.id,
+                provider.name,
+                getProviderGIcon(provider),
+            ]);
+        }
+
+        this._providerPicker.set_model(providerStore);
+        this._providerPicker.set_id_column(PROVIDER_PICKER_ID_COLUMN);
     }
 
     _populateModelPicker(providerId, selectedModelId = null) {
@@ -1057,6 +1393,25 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._modelPicker.set_active_id(selectedModelId ?? fallbackModel?.id ?? null);
     }
 
+    _createProviderPicker() {
+        const picker = new Gtk.ComboBox({
+            id_column: PROVIDER_PICKER_ID_COLUMN,
+        });
+        const iconRenderer = new Gtk.CellRendererPixbuf({
+            xpad: 2,
+        });
+        const textRenderer = new Gtk.CellRendererText({
+            ellipsize: Pango.EllipsizeMode.END,
+        });
+
+        picker.pack_start(iconRenderer, false);
+        picker.add_attribute(iconRenderer, 'gicon', PROVIDER_PICKER_ICON_COLUMN);
+        picker.pack_start(textRenderer, true);
+        picker.add_attribute(textRenderer, 'text', PROVIDER_PICKER_NAME_COLUMN);
+
+        return picker;
+    }
+
     _createSkillMenuButton() {
         const menuButton = new Gtk.MenuButton({
             icon_name: 'emblem-system-symbolic',
@@ -1068,6 +1423,108 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._skillMenuPopover = popover;
         this._refreshSkillMenu();
         return menuButton;
+    }
+
+    _createPromptMenuButton() {
+        const menuButton = new Gtk.MenuButton({
+            icon_name: 'insert-text-symbolic',
+            tooltip_text: 'Insert prompt',
+        });
+        const popover = new Gtk.Popover();
+
+        menuButton.set_popover(popover);
+        this._promptMenuButton = menuButton;
+        this._promptMenuPopover = popover;
+        this._refreshPromptMenu();
+        return menuButton;
+    }
+
+    _refreshPromptMenu() {
+        if (!this._promptMenuPopover || !this._promptMenuButton)
+            return;
+
+        const prompts = this._workspace.prompts;
+        const box = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 4,
+            margin_top: 8,
+            margin_bottom: 8,
+            margin_start: 8,
+            margin_end: 8,
+        });
+
+        if (prompts.length === 0) {
+            const emptyLabel = new Gtk.Label({
+                label: 'No saved prompts',
+                xalign: 0,
+            });
+            emptyLabel.add_css_class('dim-label');
+            box.append(emptyLabel);
+        }
+
+        for (const prompt of prompts) {
+            const button = new Gtk.Button({
+                halign: Gtk.Align.FILL,
+                tooltip_text: prompt.content,
+            });
+            button.add_css_class('flat');
+
+            const labels = new Gtk.Box({
+                orientation: Gtk.Orientation.VERTICAL,
+                spacing: 2,
+                margin_top: 4,
+                margin_bottom: 4,
+                margin_start: 6,
+                margin_end: 6,
+            });
+            const titleLabel = new Gtk.Label({
+                label: prompt.title,
+                xalign: 0,
+                ellipsize: Pango.EllipsizeMode.END,
+            });
+            const contentLabel = new Gtk.Label({
+                label: prompt.content,
+                xalign: 0,
+                ellipsize: Pango.EllipsizeMode.END,
+            });
+            contentLabel.add_css_class('caption');
+            contentLabel.add_css_class('dim-label');
+
+            labels.append(titleLabel);
+            labels.append(contentLabel);
+            button.set_child(labels);
+            button.connect('clicked', () => {
+                this._promptMenuPopover.popdown();
+                this._insertPrompt(prompt);
+            });
+            box.append(button);
+        }
+
+        this._promptMenuPopover.set_child(new Gtk.ScrolledWindow({
+            child: box,
+            max_content_height: 360,
+            min_content_width: 320,
+            propagate_natural_height: true,
+        }));
+    }
+
+    _insertPrompt(prompt) {
+        const content = String(prompt?.content ?? '').trim();
+
+        if (!content || !this._composer)
+            return;
+
+        const existingText = this._composer.get_text();
+        const cursorPosition = Math.max(this._composer.get_position(), 0);
+        const before = existingText.slice(0, cursorPosition);
+        const after = existingText.slice(cursorPosition);
+        const beforeSeparator = before && !/\s$/.test(before) ? ' ' : '';
+        const afterSeparator = after && !/^\s/.test(after) ? ' ' : '';
+        const nextText = `${before}${beforeSeparator}${content}${afterSeparator}${after}`;
+
+        this._composer.set_text(nextText);
+        this._composer.set_position(before.length + beforeSeparator.length + content.length);
+        this.focusComposer();
     }
 
     _refreshSkillMenu(conversation = this._conversations?.activeConversation) {
@@ -1547,9 +2004,22 @@ class CuscoWindow extends Adw.ApplicationWindow {
     _setComposerBusy(isBusy) {
         this._composer.set_sensitive(!isBusy);
         this._attachButton.set_sensitive(!isBusy);
-        this._sendButton.set_sensitive(!isBusy);
+        this._sendButton.set_sensitive(true);
+        this._sendButton.set_tooltip_text(isBusy ? 'Stop response' : 'Send');
+
+        if (isBusy) {
+            const stopIcon = new Gtk.Image({ icon_name: STOP_ICON_NAME });
+            stopIcon.set_pixel_size(16);
+            this._sendButton.set_child(stopIcon);
+            this._sendButton.add_css_class('destructive-action');
+        } else {
+            this._sendButton.set_child(createBundledIcon(PAPER_PLANE_ICON_FILE, 'document-send-symbolic'));
+            this._sendButton.remove_css_class('destructive-action');
+        }
+
         this._newChatButton.set_sensitive(!isBusy);
         this._chatSearch.set_sensitive(!isBusy);
+        this._promptMenuButton.set_sensitive(!isBusy);
         this._conversationList.set_sensitive(!isBusy);
         this._providerPicker.set_sensitive(!isBusy);
         this._modelPicker.set_sensitive(!isBusy);
@@ -1598,7 +2068,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
             hexpand: true,
             halign: Gtk.Align.START,
         });
-        const statusLabel = message.toolCall.status === 'failed' ? 'failed' : 'result';
+        const statusLabel = message.toolCall.status === 'failed'
+            ? 'failed'
+            : message.toolCall.status === 'cancelled'
+                ? 'cancelled'
+                : 'result';
         const expander = new Gtk.Expander({
             label: `${message.toolCall.label} ${statusLabel}`,
             expanded: true,
@@ -1647,12 +2121,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         actions.append(this._createMessageActionButton('tab-new-symbolic', 'Branch from message', () => {
             this._branchFromMessage(message);
-        }));
+        }, { iconFile: GIT_BRANCH_ICON_FILE }));
 
         return actions;
     }
 
-    _createMessageActionButton(iconName, tooltipText, onClicked) {
+    _createMessageActionButton(iconName, tooltipText, onClicked, options = {}) {
         const button = new Gtk.Button({
             icon_name: iconName,
             tooltip_text: tooltipText,
@@ -1660,6 +2134,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         button.add_css_class('flat');
         button.add_css_class('circular');
+        if (options.iconFile)
+            button.set_child(createBundledIcon(options.iconFile, iconName));
+
         button.connect('clicked', onClicked);
         return button;
     }
@@ -1670,6 +2147,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _editMessage(message) {
+        if (this._activeChatCancellable)
+            return;
+
         const conversation = this._conversations.activeConversation;
 
         if (!conversation)
@@ -1703,6 +2183,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (dialog.choose_finish(result) !== 'save')
                 return;
 
+            if (this._activeChatCancellable)
+                return;
+
             const [start, end] = buffer.get_bounds();
             const content = buffer.get_text(start, end, true).trim();
 
@@ -1728,6 +2211,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _retryFromMessage(message) {
+        if (this._activeChatCancellable)
+            return;
+
         const conversation = this._conversations.activeConversation;
 
         if (!conversation)
@@ -1743,6 +2229,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _regenerateFromMessage(message) {
+        if (this._activeChatCancellable)
+            return;
+
         const conversation = this._conversations.activeConversation;
 
         if (!conversation)

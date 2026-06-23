@@ -15,6 +15,7 @@ chat_sources = files(
 
 provider_sources = files(
   'providers/config.js',
+  'providers/icons.js',
   'providers/provider.js',
   'providers/mockProvider.js',
   'providers/remoteProvider.js',
@@ -24,9 +25,16 @@ memory_sources = files(
   'memory/memory.js',
 )
 
+mcp_sources = files(
+  'mcp/client.js',
+  'mcp/config.js',
+  'mcp/manager.js',
+)
+
 settings_sources = files(
   'settings/appSettings.js',
   'settings/memorySettings.js',
+  'settings/mcpSettings.js',
   'settings/providerSettings.js',
   'settings/workspaceSettings.js',
 )
@@ -73,6 +81,11 @@ install_data(
 install_data(
   memory_sources,
   install_dir: pkgdatadir / 'memory',
+)
+
+install_data(
+  mcp_sources,
+  install_dir: pkgdatadir / 'mcp',
 )
 
 install_data(

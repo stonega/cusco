@@ -27,12 +27,7 @@ install_data(
 install_data(
   '../assets/icon.png',
   rename: application_id + '.png',
-  install_dir: datadir / 'icons' / 'hicolor' / '1024x1024' / 'apps',
-)
-
-install_data(
-  'icons/hicolor/scalable/apps/' + application_id + '.svg',
-  install_dir: datadir / 'icons' / 'hicolor' / 'scalable' / 'apps',
+  install_dir: datadir / 'icons' / 'hicolor' / '512x512' / 'apps',
 )
 
 install_subdir(

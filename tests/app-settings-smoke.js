@@ -28,6 +28,7 @@ class MemorySettings {
 const settings = new MemorySettings({
     booleans: {
         'send-with-enter': false,
+        'auto-mode-enabled': true,
         'provider-fallback-enabled': true,
         'high-contrast-enabled': true,
         'reduced-motion-enabled': false,
@@ -41,6 +42,9 @@ const appSettings = new AppSettingsStore({ settings });
 if (appSettings.sendWithEnter !== false)
     throw new Error('Send-with-enter preference was not loaded');
 
+if (appSettings.autoModeEnabled !== true)
+    throw new Error('Auto Mode preference was not loaded');
+
 if (appSettings.responseTimeoutSeconds !== 90)
     throw new Error(`Timeout preference was not loaded: ${appSettings.responseTimeoutSeconds}`);
 
@@ -51,6 +55,7 @@ if (appSettings.highContrastEnabled !== true || appSettings.reducedMotionEnabled
     throw new Error('Accessibility preferences were not loaded');
 
 appSettings.setSendWithEnter(true);
+appSettings.setAutoModeEnabled(false);
 appSettings.setResponseTimeoutSeconds(2);
 appSettings.setProviderFallbackEnabled(false);
 appSettings.setHighContrastEnabled(false);
@@ -58,6 +63,9 @@ appSettings.setReducedMotionEnabled(true);
 
 if (settings.get_boolean('send-with-enter') !== true)
     throw new Error('Send-with-enter preference was not persisted');
+
+if (settings.get_boolean('auto-mode-enabled') !== false)
+    throw new Error('Auto Mode preference was not persisted');
 
 if (settings.get_uint('response-timeout-seconds') !== 5)
     throw new Error(`Timeout preference was not clamped and persisted: ${settings.get_uint('response-timeout-seconds')}`);

@@ -6,6 +6,7 @@ import {
     discoverInstalledSkills,
     loadSkillFromPath,
 } from '../skills/skills.js';
+import { normalizeMcpServerConfig } from '../mcp/config.js';
 
 function now() {
     return new Date().toISOString();
@@ -111,12 +112,15 @@ export class WorkspaceManager {
             command: '',
             enabled: false,
         }));
-        this._mcpServers = stored.mcpServers.map((server) => normalizeRecord(server, {
-            name: 'MCP Server',
-            command: '',
-            args: [],
-            enabled: false,
-        }));
+        this._mcpServers = stored.mcpServers.map((server) => normalizeRecord(
+            normalizeMcpServerConfig(server, { source: 'workspace' }),
+            {
+                name: 'MCP Server',
+                command: '',
+                args: [],
+                enabled: false,
+            },
+        ));
         this._cacheEntries = stored.cacheEntries.map((entry) => normalizeRecord(entry, {
             key: '',
             value: null,
@@ -152,7 +156,13 @@ export class WorkspaceManager {
     }
 
     get mcpServers() {
-        return [...this._mcpServers];
+        return this._mcpServers.map((server) => ({
+            ...server,
+            args: [...server.args],
+            env: { ...server.env },
+            headers: { ...server.headers },
+            roots: [...server.roots],
+        }));
     }
 
     createPrompt({ title, content, tags = [] }) {
@@ -360,15 +370,39 @@ export class WorkspaceManager {
     }
 
     addMcpServer(server) {
-        const normalized = normalizeRecord({
-            name: String(server.name ?? '').trim() || 'MCP Server',
-            command: String(server.command ?? ''),
-            args: normalizeList(server.args),
+        const normalized = normalizeRecord(normalizeMcpServerConfig({
+            id: server.id ?? GLib.uuid_string_random(),
+            ...server,
             enabled: Boolean(server.enabled),
-        });
+        }, { source: 'workspace' }));
         this._mcpServers.unshift(normalized);
         this._persist();
         return normalized;
+    }
+
+    updateMcpServer(serverId, updates = {}) {
+        const index = this._mcpServers.findIndex((server) => server.id === serverId);
+
+        if (index < 0)
+            throw new Error(`MCP server does not exist: ${serverId}`);
+
+        const existing = this._mcpServers[index];
+        const normalized = normalizeRecord(normalizeMcpServerConfig({
+            ...existing,
+            ...updates,
+            id: existing.id,
+            source: 'workspace',
+            createdAt: existing.createdAt,
+            updatedAt: now(),
+        }, { source: 'workspace' }));
+
+        this._mcpServers[index] = normalized;
+        this._persist();
+        return { ...normalized };
+    }
+
+    setMcpServerEnabled(serverId, enabled) {
+        return this.updateMcpServer(serverId, { enabled: Boolean(enabled) });
     }
 
     deleteRecord(collectionName, recordId) {
