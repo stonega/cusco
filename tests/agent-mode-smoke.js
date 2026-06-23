@@ -61,6 +61,13 @@ const denyDecision = createToolPermissionDecision(tools.createRequest('blocked',
 if (denyDecision.status !== 'deny')
     throw new Error('Denied tool policy was not preserved');
 
+const autoModeDecision = createToolPermissionDecision(tools.createRequest('blocked', 'test'), {
+    autoModeEnabled: true,
+});
+
+if (autoModeDecision.status !== 'allow' || autoModeDecision.requiresUserApproval)
+    throw new Error('Auto Mode did not allow a blocked tool without approval');
+
 if (!createAgentToolResultPrompt(calcRequest, 'Calculator result').includes('Tool result for calc'))
     throw new Error('Agent tool result prompt was not formatted');
 

@@ -18,6 +18,10 @@ function isGioError(error, code) {
     return typeof error?.matches === 'function' && error.matches(Gio.IOErrorEnum, code);
 }
 
+function isCancelled(cancellable) {
+    return Boolean(cancellable?.is_cancelled?.());
+}
+
 function getApiKey(config) {
     if (config.apiKey)
         return config.apiKey;
@@ -208,9 +212,16 @@ async function getJson(url, headers, options = {}) {
     return responseJson;
 }
 
-async function* displayStream(text) {
+async function* displayStream(text, cancellable = null) {
     for (const chunk of streamChunks(text)) {
+        if (isCancelled(cancellable))
+            return;
+
         await delay(DISPLAY_STREAM_DELAY_MS);
+
+        if (isCancelled(cancellable))
+            return;
+
         yield chunk;
     }
 }
@@ -436,7 +447,7 @@ class RemoteProvider extends ChatProvider {
         if (!responseText)
             throw new Error(`${this.name} returned an empty response`);
 
-        yield* displayStream(responseText);
+        yield* displayStream(responseText, options.cancellable ?? null);
     }
 }
 

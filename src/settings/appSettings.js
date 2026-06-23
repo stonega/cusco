@@ -5,6 +5,7 @@ import Gtk from 'gi://Gtk?version=4.0';
 const SETTINGS_SCHEMA_ID = 'io.github.stonega.Cusco';
 const REQUIRED_SETTINGS_KEYS = [
     'send-with-enter',
+    'auto-mode-enabled',
     'response-timeout-seconds',
     'provider-fallback-enabled',
     'high-contrast-enabled',
@@ -12,6 +13,7 @@ const REQUIRED_SETTINGS_KEYS = [
 ];
 
 const DEFAULT_SEND_WITH_ENTER = true;
+const DEFAULT_AUTO_MODE_ENABLED = true;
 const DEFAULT_RESPONSE_TIMEOUT_SECONDS = 45;
 const DEFAULT_PROVIDER_FALLBACK_ENABLED = false;
 const DEFAULT_HIGH_CONTRAST_ENABLED = false;
@@ -38,6 +40,7 @@ export class AppSettingsStore {
     constructor(options = {}) {
         this._settings = options.settings === undefined ? createDefaultSettings() : options.settings;
         this._sendWithEnter = DEFAULT_SEND_WITH_ENTER;
+        this._autoModeEnabled = DEFAULT_AUTO_MODE_ENABLED;
         this._responseTimeoutSeconds = DEFAULT_RESPONSE_TIMEOUT_SECONDS;
         this._providerFallbackEnabled = DEFAULT_PROVIDER_FALLBACK_ENABLED;
         this._highContrastEnabled = DEFAULT_HIGH_CONTRAST_ENABLED;
@@ -49,10 +52,20 @@ export class AppSettingsStore {
         return this._sendWithEnter;
     }
 
+    get autoModeEnabled() {
+        return this._autoModeEnabled;
+    }
+
     setSendWithEnter(value) {
         this._sendWithEnter = Boolean(value);
         this._settings?.set_boolean('send-with-enter', this._sendWithEnter);
         return this._sendWithEnter;
+    }
+
+    setAutoModeEnabled(value) {
+        this._autoModeEnabled = Boolean(value);
+        this._settings?.set_boolean('auto-mode-enabled', this._autoModeEnabled);
+        return this._autoModeEnabled;
     }
 
     get responseTimeoutSeconds() {
@@ -100,6 +113,7 @@ export class AppSettingsStore {
             return;
 
         this._sendWithEnter = this._settings.get_boolean('send-with-enter');
+        this._autoModeEnabled = this._settings.get_boolean('auto-mode-enabled');
         this._responseTimeoutSeconds = clampTimeoutSeconds(this._settings.get_uint('response-timeout-seconds'));
         this._providerFallbackEnabled = this._settings.get_boolean('provider-fallback-enabled');
         this._highContrastEnabled = this._settings.get_boolean('high-contrast-enabled');
@@ -127,6 +141,20 @@ export function createApplicationSettingsPage(appSettings, onChanged) {
         onChanged?.();
     });
     composerGroup.add(sendWithEnterRow);
+
+    const automationGroup = new Adw.PreferencesGroup({
+        title: 'Automation',
+    });
+    const autoModeRow = new Adw.SwitchRow({
+        title: 'Auto Mode',
+        subtitle: 'Run tool actions without asking for confirmation.',
+        active: appSettings.autoModeEnabled,
+    });
+    autoModeRow.connect('notify::active', () => {
+        appSettings.setAutoModeEnabled(autoModeRow.get_active());
+        onChanged?.();
+    });
+    automationGroup.add(autoModeRow);
 
     const providerGroup = new Adw.PreferencesGroup({
         title: 'Providers',
@@ -188,6 +216,7 @@ export function createApplicationSettingsPage(appSettings, onChanged) {
     accessibilityGroup.add(reducedMotionRow);
 
     page.add(composerGroup);
+    page.add(automationGroup);
     page.add(providerGroup);
     page.add(accessibilityGroup);
     return page;

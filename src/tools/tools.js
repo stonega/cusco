@@ -509,11 +509,26 @@ export function runBashCommand(command, options = {}) {
         Math.max(1, Math.round(options.timeoutSeconds ?? DEFAULT_BASH_TIMEOUT_SECONDS)),
     );
     const cancellable = new Gio.Cancellable();
+    const externalCancellable = options.cancellable ?? null;
+    let externalCancelHandlerId = 0;
     let timedOut = false;
+    let cancelled = Boolean(externalCancellable?.is_cancelled?.());
     const subprocess = Gio.Subprocess.new(
         [bashProgram(), '-lc', normalizedCommand],
         Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
     );
+
+    const cancelSubprocess = () => {
+        cancelled = true;
+        subprocess.force_exit();
+    };
+
+    if (externalCancellable) {
+        if (cancelled)
+            cancelSubprocess();
+        else
+            externalCancelHandlerId = externalCancellable.connect(cancelSubprocess);
+    }
 
     let timeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, timeoutSeconds, () => {
         timedOut = true;
@@ -528,6 +543,9 @@ export function runBashCommand(command, options = {}) {
             if (timeoutId)
                 GLib.source_remove(timeoutId);
 
+            if (externalCancelHandlerId)
+                externalCancellable.disconnect(externalCancelHandlerId);
+
             try {
                 const [, stdout, stderr] = subprocess.communicate_utf8_finish(result);
                 const truncatedStdout = truncateText(stdout, MAX_BASH_OUTPUT_CHARS);
@@ -536,17 +554,19 @@ export function runBashCommand(command, options = {}) {
 
                 resolve({
                     command: normalizedCommand,
-                    exitStatus: timedOut ? 124 : exitStatus,
+                    exitStatus: cancelled ? 130 : timedOut ? 124 : exitStatus,
                     stdout: truncatedStdout.text,
                     stderr: truncatedStderr.text,
                     stdoutTruncated: truncatedStdout.truncated,
                     stderrTruncated: truncatedStderr.truncated,
                     timedOut,
+                    cancelled,
                     output: [
-                        `exit status: ${timedOut ? 124 : exitStatus}`,
+                        `exit status: ${cancelled ? 130 : timedOut ? 124 : exitStatus}`,
+                        cancelled ? 'cancelled: true' : '',
                         truncatedStdout.text ? `stdout:\n${truncatedStdout.text}` : 'stdout: <empty>',
                         truncatedStderr.text ? `stderr:\n${truncatedStderr.text}` : 'stderr: <empty>',
-                    ].join('\n\n'),
+                    ].filter(Boolean).join('\n\n'),
                 });
             } catch (error) {
                 if (timedOut) {
@@ -558,7 +578,23 @@ export function runBashCommand(command, options = {}) {
                         stdoutTruncated: false,
                         stderrTruncated: false,
                         timedOut: true,
+                        cancelled: false,
                         output: `exit status: 124\n\nstderr:\nCommand timed out after ${timeoutSeconds} seconds.`,
+                    });
+                    return;
+                }
+
+                if (cancelled) {
+                    resolve({
+                        command: normalizedCommand,
+                        exitStatus: 130,
+                        stdout: '',
+                        stderr: 'Command cancelled by user.',
+                        stdoutTruncated: false,
+                        stderrTruncated: false,
+                        timedOut: false,
+                        cancelled: true,
+                        output: 'exit status: 130\n\ncancelled: true\n\nstderr:\nCommand cancelled by user.',
                     });
                     return;
                 }
@@ -622,7 +658,7 @@ export function formatToolResultForTranscript(result) {
             '```sh',
             result.command,
             '```',
-            `Exit status: ${result.exitStatus}${result.timedOut ? ' (timed out)' : ''}`,
+            `Exit status: ${result.exitStatus}${result.timedOut ? ' (timed out)' : ''}${result.cancelled ? ' (cancelled)' : ''}`,
             result.stdout ? `\nstdout\n\`\`\`text\n${result.stdout}\n\`\`\`` : '\nstdout: <empty>',
             result.stderr ? `\nstderr\n\`\`\`text\n${result.stderr}\n\`\`\`` : '\nstderr: <empty>',
         ].join('\n');

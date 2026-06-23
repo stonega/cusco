@@ -31,6 +31,11 @@
       <summary>Send messages with Enter</summary>
       <description>Whether pressing Enter in the composer sends the message.</description>
     </key>
+    <key name="auto-mode-enabled" type="b">
+      <default>true</default>
+      <summary>Auto Mode enabled</summary>
+      <description>Whether tool actions should run without asking for confirmation.</description>
+    </key>
     <key name="response-timeout-seconds" type="u">
       <default>45</default>
       <summary>Provider response timeout</summary>
