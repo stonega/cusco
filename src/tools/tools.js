@@ -695,6 +695,19 @@ export class ToolManager {
         });
     }
 
+    unregisterTool(name) {
+        this._registeredTools.delete(String(name ?? '').trim());
+    }
+
+    clearRegisteredTools(predicate = null) {
+        for (const name of [...this._registeredTools.keys()]) {
+            const tool = this.getTool(name);
+
+            if (!predicate || predicate(tool))
+                this._registeredTools.delete(name);
+        }
+    }
+
     listTools() {
         return [
             ...Object.values(BUILT_IN_TOOLS).map((tool) => ({ ...tool })),
@@ -754,7 +767,7 @@ export class ToolManager {
             return this.createRequest(builtInRequest.name, builtInRequest.input);
 
         const trimmed = String(text ?? '').trim();
-        const match = trimmed.match(/^\/([\w-]+)\s+([\s\S]+)$/);
+        const match = trimmed.match(/^\/([A-Za-z0-9_.:-]+)\s*([\s\S]*)$/);
 
         if (!match || !this._registeredTools.has(match[1]))
             return null;
@@ -765,9 +778,10 @@ export class ToolManager {
     async runRequest(request, options = {}) {
         if (this._registeredTools.has(request.name)) {
             const tool = this._registeredTools.get(request.name);
+            const output = await tool.run(request.input, options);
             return {
                 ...request,
-                output: String(await tool.run(request.input, options)),
+                output: typeof output === 'string' ? output : JSON.stringify(output ?? null, null, 2),
             };
         }
 

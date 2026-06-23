@@ -3,6 +3,7 @@ import Gtk from 'gi://Gtk?version=4.0';
 
 import { createApplicationSettingsPage } from './appSettings.js';
 import { createMemorySettingsPage } from './memorySettings.js';
+import { createMcpSettingsPage } from './mcpSettings.js';
 import { createSkillsSettingsPage, createWorkspaceSettingsPage } from './workspaceSettings.js';
 
 function createStringList(values) {
@@ -327,6 +328,7 @@ export function presentProviderSettingsDialog(
     appSettingsOrOnChanged,
     memoryManagerOrOnChanged = null,
     workspaceManagerOrOnChanged = null,
+    mcpManagerOrOnChanged = null,
     maybeOnChanged = null,
 ) {
     const appSettings = typeof appSettingsOrOnChanged === 'function'
@@ -338,13 +340,16 @@ export function presentProviderSettingsDialog(
     const workspaceManager = typeof workspaceManagerOrOnChanged === 'function'
         ? null
         : workspaceManagerOrOnChanged;
-    const onChanged = (typeof appSettingsOrOnChanged === 'function'
-        ? appSettingsOrOnChanged
-        : typeof memoryManagerOrOnChanged === 'function'
-            ? memoryManagerOrOnChanged
-            : typeof workspaceManagerOrOnChanged === 'function'
-                ? workspaceManagerOrOnChanged
-                : maybeOnChanged) ?? (() => {});
+    const mcpManager = typeof mcpManagerOrOnChanged === 'function'
+        ? null
+        : mcpManagerOrOnChanged;
+    const onChanged = [
+        appSettingsOrOnChanged,
+        memoryManagerOrOnChanged,
+        workspaceManagerOrOnChanged,
+        mcpManagerOrOnChanged,
+        maybeOnChanged,
+    ].find((value) => typeof value === 'function') ?? (() => {});
     const dialog = new Adw.PreferencesWindow({
         title: 'Settings',
         search_enabled: false,
@@ -364,5 +369,9 @@ export function presentProviderSettingsDialog(
 
     const page = createProviderSettingsPage(providerConfigs, onChanged);
     dialog.add(page);
+
+    if (mcpManager)
+        dialog.add(createMcpSettingsPage(dialog, mcpManager, onChanged));
+
     dialog.present(parent);
 }

@@ -237,40 +237,10 @@ export function createWorkspaceSettingsPage(parent, workspaceManager, onChanged 
     refreshers.push(renderPlugins);
     renderPlugins();
 
-    const mcpGroup = new Adw.PreferencesGroup({
-        title: 'MCP Servers',
-    });
-    const addMcpRow = new Adw.ActionRow({
-        title: 'Add MCP server',
-        subtitle: 'Store an optional MCP client command configuration.',
-    });
-    addMcpRow.add_suffix(createActionButton('list-add-symbolic', 'Add MCP server', () => {
-        promptForText(parent, 'Add MCP Server', 'Command', (command) => {
-            workspaceManager.addMcpServer({
-                name: command.split(/\s+/)[0] || 'MCP Server',
-                command,
-                args: command.split(/\s+/).slice(1),
-                enabled: false,
-            });
-            refresh();
-        });
-    }));
-    mcpGroup.add(addMcpRow);
-    let mcpRows = [];
-    const renderMcp = () => {
-        for (const row of mcpRows)
-            mcpGroup.remove(row);
-
-        mcpRows = addRecordRows(mcpGroup, workspaceManager.mcpServers, 'mcpServers', workspaceManager, refresh);
-    };
-    refreshers.push(renderMcp);
-    renderMcp();
-
     page.add(promptsGroup);
     page.add(profilesGroup);
     page.add(foldersGroup);
     page.add(pluginGroup);
-    page.add(mcpGroup);
     return page;
 }
 

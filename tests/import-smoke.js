@@ -5,6 +5,9 @@ import { markdownToPangoMarkup, parseMarkdownBlocks } from '../src/chat/markdown
 import { createMessageContent } from '../src/chat/messageView.js';
 import { estimateConversationUsage } from '../src/chat/usage.js';
 import { MemoryManager } from '../src/memory/memory.js';
+import { defaultMcpConfigFilePath, parseMcpConfigFile } from '../src/mcp/config.js';
+import { McpClient } from '../src/mcp/client.js';
+import { McpManager } from '../src/mcp/manager.js';
 import { ProviderConfigStore } from '../src/providers/config.js';
 import { MockProvider } from '../src/providers/mockProvider.js';
 import {
@@ -17,6 +20,7 @@ import { MemoryApiKeyStore, SecretServiceApiKeyStore } from '../src/secrets/apiK
 import { ConversationSearchIndex, installSearchProvider } from '../src/searchProvider.js';
 import { AppSettingsStore, createApplicationSettingsPage } from '../src/settings/appSettings.js';
 import { createMemorySettingsPage } from '../src/settings/memorySettings.js';
+import { createMcpSettingsPage } from '../src/settings/mcpSettings.js';
 import { createProviderSettingsPage, presentProviderSettingsDialog } from '../src/settings/providerSettings.js';
 import { createSkillsSettingsPage, createWorkspaceSettingsPage } from '../src/settings/workspaceSettings.js';
 import { buildSkillContext, discoverInstalledSkills, loadSkillFromPath } from '../src/skills/skills.js';
@@ -66,6 +70,12 @@ if (typeof AppSettingsStore !== 'function')
 if (typeof MemoryManager !== 'function')
     throw new Error('MemoryManager did not import as a class');
 
+if (typeof McpClient !== 'function'
+    || typeof McpManager !== 'function'
+    || typeof parseMcpConfigFile !== 'function'
+    || typeof defaultMcpConfigFilePath !== 'function')
+    throw new Error('MCP helpers did not import');
+
 if (typeof MemoryFileStore !== 'function')
     throw new Error('MemoryFileStore did not import as a class');
 
@@ -86,6 +96,9 @@ if (typeof createApplicationSettingsPage !== 'function')
 
 if (typeof createMemorySettingsPage !== 'function')
     throw new Error('createMemorySettingsPage did not import as a function');
+
+if (typeof createMcpSettingsPage !== 'function')
+    throw new Error('createMcpSettingsPage did not import as a function');
 
 if (typeof createWorkspaceSettingsPage !== 'function')
     throw new Error('createWorkspaceSettingsPage did not import as a function');

@@ -10,8 +10,8 @@ Cusco starts as a standalone native GNOME application.
 - Provider layer: one interface for OpenAI, Anthropic, Gemini, DeepSeek, and custom OpenAI-compatible APIs.
 - Memory layer: user-approved memory extraction, memory lookup, and memory management.
 - Skill layer: local SKILL.md discovery, metadata persistence, and provider-context assembly.
-- Tool layer: web search, file context, calculations, and later optional MCP integration.
-- Workspace layer: prompt library, agent profiles, folders, tags, export, local cache, plugin tools, and optional MCP server configs.
+- Tool layer: web search, file context, calculations, and namespaced MCP tools.
+- Workspace layer: prompt library, agent profiles, folders, tags, export, local cache, plugin tools, and user-managed MCP server configs.
 - Storage layer: local conversations, memory, workspace database, and Secret Service for credentials.
 
 ## Initial Structure
@@ -25,6 +25,9 @@ Cusco starts as a standalone native GNOME application.
 - `src/chat/messageView.js`: transcript message renderer with markdown labels, GtkSourceView code blocks, and code copy actions.
 - `src/chat/usage.js`: approximate transcript usage estimator for composer context display.
 - `src/memory/memory.js`: user-approved memory proposal, lookup, management, import/export, and audit logic.
+- `src/mcp/config.js`: MCP server config normalization and `mcp.json` loading.
+- `src/mcp/client.js`: dependency-free MCP JSON-RPC client for stdio and Streamable HTTP transports.
+- `src/mcp/manager.js`: MCP server discovery, tool/resource/prompt registration, status tracking, and ToolManager integration.
 - `src/providers/config.js`: provider and model configuration registry.
 - `src/providers/provider.js`: common provider contract and message helper.
 - `src/providers/mockProvider.js`: local streaming provider used while the real API layer is designed.
@@ -66,6 +69,7 @@ Cusco starts as a standalone native GNOME application.
 - GNOME integration uses app actions for shortcuts and desktop actions, native preferences windows, notifications for long responses, and a Shell SearchProvider2 conversation index.
 - High contrast, reduced motion, and compact-layout hooks are applied with CSS classes controlled by settings and window size.
 - Advanced workspace data is local-first and persisted separately from conversation transcripts, with explicit export and extension registries.
+- MCP servers can be managed in the MCP preferences page or loaded from `~/.config/io.github.stonega.Cusco/mcp.json`. Enabled MCP tools are exposed to Agent Mode with `mcp__server__tool` names and use the same permission/audit path as built-in tools.
 - Remote providers stream display chunks after receiving a complete provider response; true network streaming is still pending.
 - Memory must remain visible, editable, disableable, importable, and exportable.
 - Secrets must not be stored in GSettings or local JSON.

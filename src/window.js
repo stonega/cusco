@@ -18,6 +18,7 @@ import { ConversationManager } from './chat/conversation.js';
 import { createMessageContent } from './chat/messageView.js';
 import { estimateConversationUsage } from './chat/usage.js';
 import { MemoryManager } from './memory/memory.js';
+import { McpManager } from './mcp/manager.js';
 import { ProviderConfigStore } from './providers/config.js';
 import { createMessage } from './providers/provider.js';
 import { AppSettingsStore } from './settings/appSettings.js';
@@ -72,6 +73,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._memories = new MemoryManager({ store: new MemoryFileStore() });
         this._workspace = new WorkspaceManager({ store: new WorkspaceFileStore() });
         this._tools = new ToolManager();
+        this._mcp = new McpManager({ workspaceManager: this._workspace });
         this._pendingAttachments = [];
         this._providerConfigs = new ProviderConfigStore();
         const { provider: defaultProvider, model: defaultModel } = this._providerConfigs.getActiveSelection();
@@ -98,6 +100,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._activeChatCancellable = null;
         this.connect('close-request', () => {
             this._stopActiveConversation();
+            this._mcp.shutdown();
             return false;
         });
         this._buildUi();
@@ -456,11 +459,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._appSettings,
             this._memories,
             this._workspace,
+            this._mcp,
             () => this._handleProviderSettingsChanged(),
         );
     }
 
     _handleProviderSettingsChanged() {
+        this._mcp.reloadConfig();
         const conversation = this._conversations.activeConversation;
 
         if (conversation && !this._providerConfigs.isProviderAvailable(conversation.providerId)) {
@@ -725,6 +730,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
         try {
             this._injectMemoryContext(conversation);
             const activeSkills = this._injectSkillContext(conversation);
+            if (conversation.agentModeEnabled)
+                await this._mcp.refreshTools(this._tools, {
+                    timeoutSeconds: this._appSettings.responseTimeoutSeconds,
+                    cancellable,
+                });
+
             const providerMessages = this._buildProviderMessages(conversation, activeSkills, {
                 agentMode: Boolean(conversation.agentModeEnabled),
             });
