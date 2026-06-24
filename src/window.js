@@ -17,6 +17,7 @@ import {
 import { ConversationManager } from './chat/conversation.js';
 import { createMessageContent } from './chat/messageView.js';
 import { estimateConversationUsage } from './chat/usage.js';
+import { createCronCreateTool, CronJobManager } from './cron/manager.js';
 import { MemoryManager } from './memory/memory.js';
 import { McpManager } from './mcp/manager.js';
 import { ProviderConfigStore } from './providers/config.js';
@@ -31,6 +32,7 @@ import { buildSkillContext } from './skills/skills.js';
 import { createToolPermissionDecision } from './tools/permissions.js';
 import { formatToolResultForTranscript, ToolManager } from './tools/tools.js';
 import { exportConversation } from './workspace/exports.js';
+import { extractPromptVariables, formatPromptVariables, renderPromptTemplate } from './workspace/promptVariables.js';
 import { WorkspaceManager } from './workspace/workspace.js';
 
 const PAPER_PLANE_ICON_FILE = 'paper-plane-symbolic.svg';
@@ -104,8 +106,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._memories = new MemoryManager({ store: new MemoryFileStore() });
         this._workspace = new WorkspaceManager({ store: new WorkspaceFileStore() });
         this._tools = new ToolManager();
+        this._cron = new CronJobManager();
         this._mcp = new McpManager({ workspaceManager: this._workspace });
         this._pendingAttachments = [];
+        this._sidebarMode = 'chats';
+        this._cronJobIndex = new Map();
+        this._cronLogSyncTimeoutId = 0;
         this._providerConfigs = new ProviderConfigStore();
         const { provider: defaultProvider, model: defaultModel } = this._providerConfigs.getActiveSelection();
 
@@ -114,6 +120,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
             modelId: defaultModel?.id ?? '',
             store: new ConversationFileStore(),
         });
+        this._tools.registerTool(createCronCreateTool(this._cron, {
+            onJobCreated: async (job) => this._handleCronJobChanged(job),
+        }));
 
         if (this._conversations.allConversations.length === 0) {
             this._conversations.createConversation({
@@ -131,12 +140,17 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._activeChatCancellable = null;
         this.connect('close-request', () => {
             this._stopActiveConversation();
+            this._stopCronLogSync();
             this._mcp.shutdown();
             return false;
         });
         this._buildUi();
         this._refreshConversationList();
         this._renderActiveConversation();
+        this._syncCronJobsWithConversations({ refreshUi: true }).catch((error) => {
+            logError(error, 'Failed to sync cron job chats');
+        });
+        this._startCronLogSync();
     }
 
     _buildUi() {
@@ -213,12 +227,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         this._newChatButton.connect('clicked', () => this._createNewConversation());
 
-        const sidebarTitle = new Gtk.Label({
+        this._sidebarTitle = new Gtk.Label({
             label: 'Chats',
             hexpand: true,
             xalign: 0.5,
         });
-        sidebarTitle.add_css_class('heading');
+        this._sidebarTitle.add_css_class('heading');
 
         this._settingsButton = new Gtk.Button({
             icon_name: 'emblem-system-symbolic',
@@ -227,7 +241,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._settingsButton.connect('clicked', () => this._showSettingsDialog());
 
         sidebarHeader.append(this._newChatButton);
-        sidebarHeader.append(sidebarTitle);
+        sidebarHeader.append(this._sidebarTitle);
         sidebarHeader.append(this._settingsButton);
         sidebarHandle.set_child(sidebarHeader);
         sidebar.append(sidebarHandle);
@@ -267,6 +281,31 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         sidebarContent.append(this._conversationList);
         sidebar.append(sidebarContent);
+
+        const sidebarFooter = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 6,
+            margin_top: 0,
+            margin_bottom: 6,
+            margin_start: 6,
+            margin_end: 6,
+        });
+        this._chatListModeButton = new Gtk.ToggleButton({
+            icon_name: 'mail-message-new-symbolic',
+            tooltip_text: 'Chat list',
+            active: true,
+            hexpand: true,
+        });
+        this._cronJobsButton = new Gtk.ToggleButton({
+            icon_name: 'x-office-calendar-symbolic',
+            tooltip_text: 'Cron job chats',
+            hexpand: true,
+        });
+        this._chatListModeButton.connect('clicked', () => this._setSidebarMode('chats'));
+        this._cronJobsButton.connect('clicked', () => this._setSidebarMode('cron'));
+        sidebarFooter.append(this._chatListModeButton);
+        sidebarFooter.append(this._cronJobsButton);
+        sidebar.append(sidebarFooter);
         return sidebar;
     }
 
@@ -422,6 +461,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const skillIds = activeConversation?.skillIds ?? [];
 
         this._conversations.createConversation({ providerId, modelId, memoryEnabled, agentModeEnabled, skillIds });
+        this._setSidebarMode('chats', { syncCron: false, preserveSelection: true });
         this._refreshConversationList();
         this._renderActiveConversation();
     }
@@ -444,9 +484,15 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     selectConversation(conversationId) {
-        if (!this._conversations.getConversation(conversationId))
+        const conversation = this._conversations.getConversation(conversationId);
+
+        if (!conversation)
             return;
 
+        this._setSidebarMode(this._isCronConversation(conversation) ? 'cron' : 'chats', {
+            syncCron: false,
+            preserveSelection: true,
+        });
         this._conversations.selectConversation(conversationId);
         this._refreshConversationList();
         this._renderActiveConversation();
@@ -490,6 +536,183 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._mcp,
             () => this._handleProviderSettingsChanged(),
         );
+    }
+
+    async _handleCronJobChanged(job) {
+        await this._syncCronJobsWithConversations({ refreshUi: true });
+
+        const conversation = this._findCronConversation(job.id);
+
+        if (conversation && this._sidebarMode === 'cron')
+            this.selectConversation(conversation.id);
+    }
+
+    _startCronLogSync() {
+        if (this._cronLogSyncTimeoutId)
+            return;
+
+        this._cronLogSyncTimeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 30, () => {
+            this._syncCronJobsWithConversations({ refreshUi: true }).catch((error) => {
+                logError(error, 'Failed to sync cron job logs');
+            });
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    _stopCronLogSync() {
+        if (!this._cronLogSyncTimeoutId)
+            return;
+
+        GLib.source_remove(this._cronLogSyncTimeoutId);
+        this._cronLogSyncTimeoutId = 0;
+    }
+
+    async _syncCronJobsWithConversations({ refreshUi = false } = {}) {
+        const activeConversationId = this._conversations.activeConversation?.id ?? null;
+        const status = await this._cron.getStatus();
+
+        if (!status.available)
+            return status;
+
+        this._cronJobIndex = new Map(status.jobs.map((job) => [job.id, job]));
+
+        for (const job of status.jobs) {
+            const conversation = this._ensureCronConversation(job);
+
+            if (conversation && job.conversationId !== conversation.id) {
+                const updatedJob = await this._cron.updateJob(job.id, { conversationId: conversation.id });
+                this._cronJobIndex.set(updatedJob.id, updatedJob);
+            }
+
+            if (conversation)
+                this._appendCronRunLogs(job, conversation);
+        }
+
+        if (activeConversationId && this._conversations.getConversation(activeConversationId))
+            this._conversations.selectConversation(activeConversationId);
+
+        if (refreshUi) {
+            this._refreshConversationList();
+
+            if (this._isCronConversation(this._conversations.activeConversation))
+                this._renderActiveConversation();
+        }
+
+        return status;
+    }
+
+    _ensureCronConversation(job) {
+        let conversation = job.conversationId
+            ? this._conversations.getConversation(job.conversationId)
+            : null;
+
+        if (!conversation)
+            conversation = this._findCronConversation(job.id);
+
+        if (!conversation) {
+            conversation = this._conversations.createConversation({
+                title: job.title,
+                conversationType: 'cron',
+                cronJobId: job.id,
+                memoryEnabled: false,
+                agentModeEnabled: false,
+                messages: [
+                    createMessage('system', this._formatCronJobCreatedMessage(job)),
+                ],
+            });
+        } else if (conversation.conversationType !== 'cron' || conversation.cronJobId !== job.id) {
+            this._conversations.setCronMetadata(conversation.id, {
+                conversationType: 'cron',
+                cronJobId: job.id,
+            });
+        }
+
+        return conversation;
+    }
+
+    _findCronConversation(jobId) {
+        return this._conversations.allConversations.find((conversation) => (
+            conversation.conversationType === 'cron' && conversation.cronJobId === jobId
+        )) ?? null;
+    }
+
+    _deleteCronConversation(jobId) {
+        const conversation = this._findCronConversation(jobId);
+
+        if (!conversation)
+            return;
+
+        this._conversations.deleteConversation(conversation.id);
+
+        if (this._conversations.allConversations.length === 0)
+            this._conversations.createConversation();
+
+        this._refreshConversationList();
+        this._renderActiveConversation();
+    }
+
+    _appendCronRunLogs(job, conversation) {
+        const existingRunIds = new Set(conversation.messages
+            .map((message) => message.cronRun?.runId)
+            .filter(Boolean));
+        const logs = this._cron.readRunLogs(job);
+        let appended = false;
+
+        for (const run of logs) {
+            if (existingRunIds.has(run.runId))
+                continue;
+
+            this._conversations.appendMessage(conversation.id, createMessage(
+                'system',
+                this._formatCronRunMessage(job, run),
+                {
+                    cronRun: {
+                        jobId: job.id,
+                        runId: run.runId,
+                        exitStatus: run.exitStatus,
+                        startedAt: run.startedAt,
+                        finishedAt: run.finishedAt,
+                    },
+                },
+            ));
+            existingRunIds.add(run.runId);
+            appended = true;
+        }
+
+        return appended;
+    }
+
+    _formatCronJobCreatedMessage(job) {
+        return [
+            `Cron job: ${job.title}`,
+            `Schedule: ${job.schedule}`,
+            `Status: ${job.enabled ? 'Enabled' : 'Disabled'}`,
+            '',
+            'Command:',
+            '```sh',
+            job.command,
+            '```',
+        ].join('\n');
+    }
+
+    _formatCronRunMessage(job, run) {
+        return [
+            `Cron job run: ${job.title}`,
+            `Schedule: ${job.schedule}`,
+            `Started: ${run.startedAt || 'unknown'}`,
+            `Finished: ${run.finishedAt || 'unknown'}`,
+            `Exit status: ${Number.isFinite(run.exitStatus) ? run.exitStatus : 'unknown'}`,
+            '',
+            'stdout',
+            '```text',
+            run.stdout || '<empty>',
+            '```',
+            '',
+            'stderr',
+            '```text',
+            run.stderr || '<empty>',
+            '```',
+        ].join('\n');
     }
 
     _handleProviderSettingsChanged() {
@@ -1359,7 +1582,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             Gio.Icon.$gtype,
         ]);
 
-        for (const provider of this._providerConfigs.listProviders({ enabledOnly: true })) {
+        for (const provider of this._providerConfigs.listProviders({ enabledOnly: true, usableOnly: false })) {
             const iter = providerStore.append();
             providerStore.set(iter, [
                 PROVIDER_PICKER_ID_COLUMN,
@@ -1457,9 +1680,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
         }
 
         for (const prompt of prompts) {
+            const variableText = formatPromptVariables(prompt.content);
             const button = new Gtk.Button({
                 halign: Gtk.Align.FILL,
-                tooltip_text: prompt.content,
+                tooltip_text: [prompt.content, variableText].filter(Boolean).join('\n'),
             });
             button.add_css_class('flat');
 
@@ -1486,6 +1710,18 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             labels.append(titleLabel);
             labels.append(contentLabel);
+
+            if (variableText) {
+                const variableLabel = new Gtk.Label({
+                    label: variableText,
+                    xalign: 0,
+                    ellipsize: Pango.EllipsizeMode.END,
+                });
+                variableLabel.add_css_class('caption');
+                variableLabel.add_css_class('dim-label');
+                labels.append(variableLabel);
+            }
+
             button.set_child(labels);
             button.connect('clicked', () => {
                 this._promptMenuPopover.popdown();
@@ -1508,6 +1744,80 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (!content || !this._composer)
             return;
 
+        const variables = extractPromptVariables(content);
+
+        if (variables.length > 0) {
+            this._promptForPromptVariables(prompt, variables);
+            return;
+        }
+
+        this._insertPromptContent(content);
+    }
+
+    _promptForPromptVariables(prompt, variables) {
+        const entries = new Map();
+        const box = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 8,
+            margin_top: 6,
+            margin_bottom: 6,
+            margin_start: 6,
+            margin_end: 6,
+        });
+        const dialog = new Adw.AlertDialog({
+            heading: 'Fill Prompt Variables',
+            body: String(prompt?.title ?? ''),
+        });
+
+        const syncInsertEnabled = () => {
+            dialog.set_response_enabled('insert', variables.every((name) => (
+                entries.get(name)?.get_text().trim()
+            )));
+        };
+
+        for (const name of variables) {
+            const row = new Gtk.Box({
+                orientation: Gtk.Orientation.VERTICAL,
+                spacing: 3,
+            });
+            const label = new Gtk.Label({
+                label: name,
+                xalign: 0,
+            });
+            const entry = new Gtk.Entry({
+                placeholder_text: name,
+                hexpand: true,
+                activates_default: true,
+            });
+
+            entry.connect('changed', syncInsertEnabled);
+            entries.set(name, entry);
+            row.append(label);
+            row.append(entry);
+            box.append(row);
+        }
+
+        dialog.set_extra_child(box);
+        dialog.add_response('cancel', 'Cancel');
+        dialog.add_response('insert', 'Insert');
+        dialog.set_default_response('insert');
+        dialog.set_close_response('cancel');
+        dialog.set_response_appearance('insert', Adw.ResponseAppearance.SUGGESTED);
+        syncInsertEnabled();
+        dialog.choose(this, null, (_dialog, result) => {
+            if (dialog.choose_finish(result) !== 'insert')
+                return;
+
+            const values = {};
+
+            for (const name of variables)
+                values[name] = entries.get(name).get_text().trim();
+
+            this._insertPromptContent(renderPromptTemplate(prompt.content, values).trim());
+        });
+    }
+
+    _insertPromptContent(content) {
         const existingText = this._composer.get_text();
         const cursorPosition = Math.max(this._composer.get_position(), 0);
         const before = existingText.slice(0, cursorPosition);
@@ -1695,6 +2005,49 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._refreshConversationList();
     }
 
+    _setSidebarMode(mode, options = {}) {
+        const nextMode = mode === 'cron' ? 'cron' : 'chats';
+        this._sidebarMode = nextMode;
+
+        this._sidebarTitle?.set_label(nextMode === 'cron' ? 'Cron Jobs' : 'Chats');
+        this._chatSearch?.set_placeholder_text(nextMode === 'cron' ? 'Search cron jobs' : 'Search chats');
+
+        if (this._chatListModeButton && this._chatListModeButton.get_active() !== (nextMode === 'chats'))
+            this._chatListModeButton.set_active(nextMode === 'chats');
+
+        if (this._cronJobsButton && this._cronJobsButton.get_active() !== (nextMode === 'cron'))
+            this._cronJobsButton.set_active(nextMode === 'cron');
+
+        const finish = () => {
+            if (!options.preserveSelection)
+                this._selectFirstVisibleConversationIfNeeded();
+
+            this._refreshConversationList();
+        };
+
+        if (nextMode === 'cron' && options.syncCron !== false) {
+            this._syncCronJobsWithConversations().catch((error) => {
+                logError(error, 'Failed to sync cron job chats');
+            }).finally(finish);
+            return;
+        }
+
+        finish();
+    }
+
+    _selectFirstVisibleConversationIfNeeded() {
+        const activeConversation = this._conversations.activeConversation;
+        const visible = this._getVisibleConversations();
+
+        if (visible.some((conversation) => conversation.id === activeConversation?.id))
+            return;
+
+        if (visible[0]) {
+            this._conversations.selectConversation(visible[0].id);
+            this._renderActiveConversation();
+        }
+    }
+
     _refreshConversationList() {
         this._isRefreshingConversations = true;
         this._clearBox(this._conversationList);
@@ -1715,11 +2068,22 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _getVisibleConversations() {
-        return this._conversations.searchConversations(this._chatSearch?.get_text() ?? '');
+        const wantsCron = this._sidebarMode === 'cron';
+
+        return this._conversations
+            .searchConversations(this._chatSearch?.get_text() ?? '')
+            .filter((conversation) => this._isCronConversation(conversation) === wantsCron);
+    }
+
+    _isCronConversation(conversation) {
+        return conversation?.conversationType === 'cron' && Boolean(conversation.cronJobId);
     }
 
     _createConversationRow(conversation, hoverTarget = null) {
         const providerConfig = this._providerConfigs.resolve(conversation.providerId, conversation.modelId);
+        const cronJob = this._isCronConversation(conversation)
+            ? this._cronJobIndex.get(conversation.cronJobId)
+            : null;
         const rowBox = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 6,
@@ -1747,12 +2111,18 @@ class CuscoWindow extends Adw.ApplicationWindow {
             ...(conversation.tags ?? []).map((tag) => `#${tag}`),
         ].filter(Boolean).join(' ');
         const subtitle = new Gtk.Label({
-            label: [
-                conversation.archived ? 'Archived' : '',
-                conversation.agentModeEnabled ? 'Agent Mode' : '',
-                `${providerConfig.provider.name} / ${providerConfig.model?.name ?? 'No model'}`,
-                organizationLabel,
-            ].filter(Boolean).join(' / '),
+            label: this._isCronConversation(conversation)
+                ? [
+                    cronJob ? (cronJob.enabled ? 'Enabled' : 'Disabled') : 'Missing crontab entry',
+                    cronJob?.schedule ?? '',
+                    organizationLabel,
+                ].filter(Boolean).join(' / ')
+                : [
+                    conversation.archived ? 'Archived' : '',
+                    conversation.agentModeEnabled ? 'Agent Mode' : '',
+                    `${providerConfig.provider.name} / ${providerConfig.model?.name ?? 'No model'}`,
+                    organizationLabel,
+                ].filter(Boolean).join(' / '),
             xalign: 0,
             ellipsize: Pango.EllipsizeMode.END,
         });
@@ -1799,12 +2169,19 @@ class CuscoWindow extends Adw.ApplicationWindow {
         addMenuItem('document-edit-symbolic', 'Rename chat', () => {
             this._renameConversation(conversation.id);
         });
-        addMenuItem('document-save-symbolic', 'Export chat', () => {
-            this._exportConversation(conversation.id);
-        });
-        addMenuItem('user-trash-symbolic', 'Delete chat', () => {
-            this._confirmDeleteConversation(conversation.id);
-        }, { destructive: true });
+
+        if (this._isCronConversation(conversation)) {
+            addMenuItem('user-trash-symbolic', 'Delete cron job', () => {
+                this._confirmDeleteCronJobConversation(conversation.id);
+            }, { destructive: true });
+        } else {
+            addMenuItem('document-save-symbolic', 'Export chat', () => {
+                this._exportConversation(conversation.id);
+            });
+            addMenuItem('user-trash-symbolic', 'Delete chat', () => {
+                this._confirmDeleteConversation(conversation.id);
+            }, { destructive: true });
+        }
 
         popover.set_child(menu);
         menuButton.set_popover(popover);
@@ -1970,6 +2347,34 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
     }
 
+    _confirmDeleteCronJobConversation(conversationId) {
+        const conversation = this._conversations.getConversation(conversationId);
+
+        if (!conversation || !this._isCronConversation(conversation))
+            return;
+
+        const dialog = new Adw.AlertDialog({
+            heading: 'Delete Cron Job?',
+            body: conversation.title,
+        });
+        dialog.add_response('cancel', 'Cancel');
+        dialog.add_response('delete', 'Delete');
+        dialog.set_default_response('cancel');
+        dialog.set_close_response('cancel');
+        dialog.set_response_appearance('delete', Adw.ResponseAppearance.DESTRUCTIVE);
+        dialog.choose(this, null, (_dialog, result) => {
+            if (dialog.choose_finish(result) !== 'delete')
+                return;
+
+            this._cron.deleteJob(conversation.cronJobId).then(() => {
+                this._deleteCronConversation(conversation.cronJobId);
+            }).catch((error) => {
+                logError(error, 'Failed to delete cron job from chat');
+                this._appendSystemError(error.userMessage ?? error.message);
+            });
+        });
+    }
+
     _renderActiveConversation() {
         const conversation = this._conversations.activeConversation;
         this._clearBox(this._messages);
@@ -2021,6 +2426,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._agentModeToggleButton.set_sensitive(!isBusy);
         this._skillMenuButton.set_sensitive(!isBusy);
         this._settingsButton.set_sensitive(!isBusy);
+        this._chatListModeButton.set_sensitive(!isBusy);
+        this._cronJobsButton.set_sensitive(!isBusy);
     }
 
     _addMessage(body, kind, message = null) {

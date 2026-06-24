@@ -1,6 +1,8 @@
 import Adw from 'gi://Adw?version=1';
 import Gtk from 'gi://Gtk?version=4.0';
 
+import { formatPromptVariables } from '../workspace/promptVariables.js';
+
 function createActionButton(iconName, tooltipText, onClicked) {
     const button = new Gtk.Button({
         icon_name: iconName,
@@ -49,9 +51,13 @@ function addRecordRows(group, records, collectionName, workspaceManager, refresh
     const rows = [];
 
     for (const record of records) {
+        const subtitle = [
+            record.content ?? record.systemPrompt ?? record.command ?? record.color ?? '',
+            collectionName === 'prompts' ? formatPromptVariables(record.content) : '',
+        ].filter(Boolean).join('\n');
         const row = new Adw.ActionRow({
             title: record.title ?? record.name ?? record.key ?? 'Record',
-            subtitle: record.content ?? record.systemPrompt ?? record.command ?? record.color ?? '',
+            subtitle,
         });
         row.add_suffix(createActionButton('user-trash-symbolic', 'Delete', () => {
             try {

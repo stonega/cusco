@@ -55,7 +55,7 @@ export class MockProvider extends ChatProvider {
         return [
             `I received: "${prompt}".`,
             `This response is coming from ${modelName}, streamed one chunk at a time.`,
-            'Next we can replace this provider with OpenAI, Anthropic, Gemini, DeepSeek, or a custom API without rewriting the chat surface.',
+            'Next we can replace this provider with OpenAI, Anthropic, Gemini, DeepSeek, MiniMax, or a custom API without rewriting the chat surface.',
         ].join(' ');
     }
 }

@@ -31,6 +31,10 @@ mcp_sources = files(
   'mcp/manager.js',
 )
 
+cron_sources = files(
+  'cron/manager.js',
+)
+
 settings_sources = files(
   'settings/appSettings.js',
   'settings/memorySettings.js',
@@ -60,6 +64,7 @@ tool_sources = files(
 
 workspace_sources = files(
   'workspace/exports.js',
+  'workspace/promptVariables.js',
   'workspace/workspace.js',
 )
 
@@ -86,6 +91,11 @@ install_data(
 install_data(
   mcp_sources,
   install_dir: pkgdatadir / 'mcp',
+)
+
+install_data(
+  cron_sources,
+  install_dir: pkgdatadir / 'cron',
 )
 
 install_data(

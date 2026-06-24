@@ -81,7 +81,7 @@ if (providers.getDefaultModel(defaultProvider.id).id !== 'mock-fast')
     throw new Error('Provider default model was not updated');
 
 const providerIds = providers.listProviders().map((provider) => provider.id);
-const expectedProviderIds = ['openai', 'anthropic', 'gemini', 'kimi', 'deepseek', 'zai'];
+const expectedProviderIds = ['openai', 'anthropic', 'gemini', 'kimi', 'deepseek', 'minimax', 'zai'];
 
 for (const providerId of expectedProviderIds) {
     if (!providerIds.includes(providerId))
@@ -92,5 +92,12 @@ const zaiProvider = providers.getProvider('zai');
 
 if (zaiProvider.defaultModelId !== 'glm-5.2' || !zaiProvider.models.some((model) => model.id === 'glm-4.5-flash'))
     throw new Error('Z.ai GLM models were not configured');
+
+const minimaxProvider = providers.getProvider('minimax');
+
+if (minimaxProvider.baseUrl !== 'https://api.minimax.io/v1'
+    || minimaxProvider.defaultModelId !== 'MiniMax-M3'
+    || !minimaxProvider.models.some((model) => model.id === 'MiniMax-M2.7-highspeed'))
+    throw new Error('MiniMax M-series models were not configured');
 
 print('Cusco chat management smoke passed');

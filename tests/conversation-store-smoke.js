@@ -66,6 +66,39 @@ reloaded.archiveConversation(reloadedChat.id, false);
 if (reloaded.searchConversations('persist').length !== 1)
     throw new Error('Conversation search did not find message content');
 
+const cronChat = reloaded.createConversation({
+    title: 'Daily sync',
+    conversationType: 'cron',
+    cronJobId: 'job-123',
+    messages: [
+        createMessage('system', 'Cron run complete', {
+            cronRun: {
+                jobId: 'job-123',
+                runId: 'run-1',
+                exitStatus: 0,
+            },
+        }),
+    ],
+});
+
+reloaded.setCronMetadata(cronChat.id, {
+    conversationType: 'cron',
+    cronJobId: 'job-456',
+});
+
+const reloadedCron = new ConversationManager({
+    providerId: 'mock',
+    modelId: 'mock-balanced',
+    store,
+}).getConversation(cronChat.id);
+
+if (reloadedCron.conversationType !== 'cron'
+    || reloadedCron.cronJobId !== 'job-456'
+    || reloadedCron.messages[0].cronRun?.runId !== 'run-1') {
+    throw new Error('Cron conversation metadata was not persisted');
+}
+
+reloaded.deleteConversation(cronChat.id);
 reloaded.deleteConversation(reloadedChat.id);
 
 if (reloaded.allConversations.length !== 0)

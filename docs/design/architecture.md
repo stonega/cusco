@@ -7,7 +7,7 @@ Cusco starts as a standalone native GNOME application.
 - Shell: GJS application lifecycle, actions, shortcuts, preferences, and windows.
 - UI: GTK 4 and libadwaita widgets for sidebar navigation, transcript, composer, settings, and tool results.
 - Chat engine: conversation state, streaming response coordination, retry/branch behavior, and transcript persistence.
-- Provider layer: one interface for OpenAI, Anthropic, Gemini, DeepSeek, and custom OpenAI-compatible APIs.
+- Provider layer: one interface for OpenAI, Anthropic, Gemini, DeepSeek, MiniMax, and custom OpenAI-compatible APIs.
 - Memory layer: user-approved memory extraction, memory lookup, and memory management.
 - Skill layer: local SKILL.md discovery, metadata persistence, and provider-context assembly.
 - Tool layer: web search, file context, calculations, and namespaced MCP tools.

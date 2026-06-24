@@ -140,7 +140,7 @@ try {
         GLib.unlink(fallbackSettingsPath);
 }
 
-const credentialStore = new ProviderConfigStore([
+const credentialConfigs = [
     configs[0],
     {
         id: 'secure-remote',
@@ -158,7 +158,8 @@ const credentialStore = new ProviderConfigStore([
             { id: 'secure-small', name: 'Secure Small' },
         ],
     },
-], {
+];
+const credentialStore = new ProviderConfigStore(credentialConfigs, {
     settings: null,
     apiKeyStore: new MemoryApiKeyStore(),
     envLookup: () => '',
@@ -187,6 +188,37 @@ credentialStore.clearApiKey('secure-remote');
 
 if (credentialStore.isProviderAvailable('secure-remote'))
     throw new Error('Provider stayed available after clearing credentials');
+
+try {
+    credentialStore.createProvider('secure-remote');
+    throw new Error('Provider without credentials should not be created');
+} catch (error) {
+    if (!error.message.includes('SECURE_REMOTE_API_KEY') || !error.userMessage?.includes('Configure Secure Remote'))
+        throw error;
+}
+
+const staleEnabledSettings = new MemorySettings({
+    strv: {
+        'enabled-providers': ['mock', 'secure-remote'],
+    },
+});
+const staleEnabledStore = new ProviderConfigStore(credentialConfigs, {
+    settings: staleEnabledSettings,
+    apiKeyStore: new MemoryApiKeyStore(),
+    envLookup: () => '',
+});
+const enabledProviderIds = staleEnabledStore
+    .listProviders({ enabledOnly: true, usableOnly: false })
+    .map((provider) => provider.id);
+const availableProviderIds = staleEnabledStore
+    .listProviders({ enabledOnly: true })
+    .map((provider) => provider.id);
+
+if (!enabledProviderIds.includes('secure-remote'))
+    throw new Error('Enabled provider with missing credentials was hidden from enabled provider list');
+
+if (availableProviderIds.includes('secure-remote'))
+    throw new Error('Unavailable provider was included in available provider list');
 
 const customSettings = new MemorySettings();
 const customStore = new ProviderConfigStore(undefined, {

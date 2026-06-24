@@ -17,6 +17,11 @@ function setJsonResponse(message, body) {
     message.set_response('application/json', Soup.MemoryUse.COPY, JSON.stringify(body));
 }
 
+function setJsonErrorResponse(message, status, body) {
+    message.set_status(status, null);
+    message.set_response('application/json', Soup.MemoryUse.COPY, JSON.stringify(body));
+}
+
 const server = new Soup.Server();
 
 GLib.setenv('NO_PROXY', '127.0.0.1,localhost', true);
@@ -43,6 +48,14 @@ server.add_handler('/v1/chat/completions', (_server, message) => {
                 },
             },
         ],
+    });
+});
+
+server.add_handler('/v1/rate-limited', (_server, message) => {
+    setJsonErrorResponse(message, 429, {
+        error: {
+            message: 'Rate limit exceeded',
+        },
     });
 });
 
@@ -77,6 +90,30 @@ if (listening) {
             text += chunk;
 
         assertEqual(text, 'Local provider response', 'Streamed provider text');
+
+        const rateLimitedProvider = new OpenAiCompatibleChatProvider({
+            ...config,
+            name: 'Rate Limited Provider',
+            chatPath: '/rate-limited',
+        });
+        let sawRateLimitError = false;
+
+        try {
+            for await (const _chunk of rateLimitedProvider.streamChat([createMessage('user', 'Hello')], { timeoutSeconds: 5 })) {
+                // The provider should fail before yielding chunks.
+            }
+        } catch (error) {
+            sawRateLimitError = true;
+
+            if (!error.message.includes('(429)') || error.message.includes('enumeration Status'))
+                throw new Error(`429 response was not surfaced cleanly: ${error.message}`);
+
+            if (!error.userMessage?.includes('(429)') || !error.userMessage?.includes('Rate limit exceeded'))
+                throw new Error(`429 response did not include user-visible provider details: ${error.userMessage}`);
+        }
+
+        if (!sawRateLimitError)
+            throw new Error('429 response did not fail the provider request');
     } finally {
         server.disconnect();
     }

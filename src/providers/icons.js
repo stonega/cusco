@@ -9,6 +9,7 @@ const PROVIDER_ICON_FILES = {
     gemini: 'provider-gemini.svg',
     kimi: 'provider-kimi.svg',
     deepseek: 'provider-deepseek.svg',
+    minimax: 'provider-minimax.svg',
     zai: 'provider-zai.svg',
     'openai-compatible': 'provider-custom.svg',
 };

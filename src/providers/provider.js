@@ -18,6 +18,7 @@ export function createMessage(role, content, options = {}) {
         content,
         attachments: Array.isArray(options.attachments) ? options.attachments : [],
         toolCall: options.toolCall ?? null,
+        cronRun: options.cronRun ?? null,
         createdAt: new Date().toISOString(),
     };
 }

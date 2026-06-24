@@ -114,6 +114,24 @@ function sendAndRead(session, message, cancellable) {
     });
 }
 
+function responseStatusCode(message) {
+    const statusCode = Number(message.status_code);
+
+    if (Number.isFinite(statusCode))
+        return statusCode;
+
+    try {
+        return Number(message.get_status());
+    } catch (error) {
+        const match = String(error?.message ?? '').match(/^(\d+) is not a valid value for enumeration Status$/);
+
+        if (match)
+            return Number.parseInt(match[1], 10);
+
+        throw error;
+    }
+}
+
 async function postJson(url, headers, body, options = {}) {
     const {
         cancellable = null,
@@ -152,14 +170,11 @@ async function postJson(url, headers, body, options = {}) {
         responseJson = null;
     }
 
-    const status = message.get_status();
+    const status = responseStatusCode(message);
 
     if (status < 200 || status >= 300) {
         const messageText = responseJson?.error?.message ?? responseJson?.message ?? responseText;
-        throw createUserVisibleError(
-            `${providerName} request failed (${status}): ${messageText}`,
-            `${providerName} request failed with HTTP ${status}. Check the provider settings and API key.`,
-        );
+        throw createUserVisibleError(`${providerName} request failed (${status}): ${messageText}`);
     }
 
     return responseJson;
@@ -199,14 +214,11 @@ async function getJson(url, headers, options = {}) {
         responseJson = null;
     }
 
-    const status = message.get_status();
+    const status = responseStatusCode(message);
 
     if (status < 200 || status >= 300) {
         const messageText = responseJson?.error?.message ?? responseJson?.message ?? responseText;
-        throw createUserVisibleError(
-            `${providerName} model discovery failed (${status}): ${messageText}`,
-            `${providerName} model discovery failed with HTTP ${status}. Check the provider settings and API key.`,
-        );
+        throw createUserVisibleError(`${providerName} model discovery failed (${status}): ${messageText}`);
     }
 
     return responseJson;

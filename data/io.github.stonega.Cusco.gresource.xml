@@ -8,6 +8,7 @@
     <file>resources/providers/provider-deepseek.svg</file>
     <file>resources/providers/provider-gemini.svg</file>
     <file>resources/providers/provider-kimi.svg</file>
+    <file>resources/providers/provider-minimax.svg</file>
     <file>resources/providers/provider-mock.svg</file>
     <file>resources/providers/provider-openai.svg</file>
     <file>resources/providers/provider-zai.svg</file>

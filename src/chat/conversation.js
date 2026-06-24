@@ -32,8 +32,13 @@ function normalizeMessage(message) {
         content: String(message.content ?? ''),
         attachments: Array.isArray(message.attachments) ? message.attachments.map((attachment) => ({ ...attachment })) : [],
         toolCall: message.toolCall ? { ...message.toolCall } : null,
+        cronRun: message.cronRun ? { ...message.cronRun } : null,
         createdAt: message.createdAt ?? now(),
     };
+}
+
+function normalizeConversationType(value) {
+    return value === 'cron' ? 'cron' : 'chat';
 }
 
 export class ConversationManager {
@@ -85,6 +90,8 @@ export class ConversationManager {
             tags: normalizeList(options.tags),
             profileId: options.profileId ?? '',
             skillIds: normalizeList(options.skillIds),
+            conversationType: normalizeConversationType(options.conversationType),
+            cronJobId: String(options.cronJobId ?? ''),
             createdAt: timestamp,
             updatedAt: timestamp,
         };
@@ -278,6 +285,23 @@ export class ConversationManager {
             throw new Error(`Conversation does not exist: ${conversationId}`);
 
         conversation.skillIds = normalizeList(skillIds);
+        conversation.updatedAt = now();
+        this._persist();
+        return conversation;
+    }
+
+    setCronMetadata(conversationId, { cronJobId = null, conversationType = null } = {}) {
+        const conversation = this.getConversation(conversationId);
+
+        if (!conversation)
+            throw new Error(`Conversation does not exist: ${conversationId}`);
+
+        if (conversationType !== null)
+            conversation.conversationType = normalizeConversationType(conversationType);
+
+        if (cronJobId !== null)
+            conversation.cronJobId = String(cronJobId ?? '');
+
         conversation.updatedAt = now();
         this._persist();
         return conversation;

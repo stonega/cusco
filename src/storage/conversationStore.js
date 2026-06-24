@@ -33,8 +33,15 @@ function normalizeMessage(message) {
         toolCall: message?.toolCall && typeof message.toolCall === 'object'
             ? { ...message.toolCall }
             : null,
+        cronRun: message?.cronRun && typeof message.cronRun === 'object'
+            ? { ...message.cronRun }
+            : null,
         createdAt: normalizeString(message?.createdAt, new Date().toISOString()),
     };
+}
+
+function normalizeConversationType(value) {
+    return value === 'cron' ? 'cron' : 'chat';
 }
 
 function normalizeConversation(conversation) {
@@ -55,6 +62,8 @@ function normalizeConversation(conversation) {
         tags: normalizeStringList(conversation?.tags),
         profileId: normalizeString(conversation?.profileId),
         skillIds: normalizeStringList(conversation?.skillIds),
+        conversationType: normalizeConversationType(conversation?.conversationType),
+        cronJobId: normalizeString(conversation?.cronJobId),
         createdAt: normalizeString(conversation?.createdAt, timestamp),
         updatedAt: normalizeString(conversation?.updatedAt, timestamp),
     };

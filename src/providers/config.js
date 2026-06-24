@@ -168,6 +168,9 @@ function flushSettings() {
 }
 
 function createDefaultSettings(fallbackPath = null) {
+    if (fallbackPath)
+        return new JsonSettingsStore(fallbackPath);
+
     const settingsSource = Gio.SettingsSchemaSource.get_default();
     const schema = settingsSource?.lookup(SETTINGS_SCHEMA_ID, true);
 
@@ -424,6 +427,63 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         ],
     },
     {
+        id: 'minimax',
+        name: 'MiniMax',
+        description: 'MiniMax OpenAI-compatible API.',
+        themeColor: '#FF6A00',
+        implemented: true,
+        enabled: false,
+        apiFormat: 'openai-chat-completions',
+        apiKeyRequired: true,
+        apiKeyConfigured: false,
+        apiKeyEnvVar: 'MINIMAX_API_KEY',
+        baseUrl: 'https://api.minimax.io/v1',
+        chatPath: '/chat/completions',
+        defaultModelId: 'MiniMax-M3',
+        models: [
+            {
+                id: 'MiniMax-M3',
+                name: 'MiniMax M3',
+                description: 'Frontier multimodal coding and agentic model with 1M context.',
+            },
+            {
+                id: 'MiniMax-M2.7',
+                name: 'MiniMax M2.7',
+                description: 'MiniMax M-series model for engineering, office, and character-rich tasks.',
+            },
+            {
+                id: 'MiniMax-M2.7-highspeed',
+                name: 'MiniMax M2.7 Highspeed',
+                description: 'Lower-latency M2.7 variant.',
+            },
+            {
+                id: 'MiniMax-M2.5',
+                name: 'MiniMax M2.5',
+                description: 'MiniMax M-series model for complex text and coding tasks.',
+            },
+            {
+                id: 'MiniMax-M2.5-highspeed',
+                name: 'MiniMax M2.5 Highspeed',
+                description: 'Lower-latency M2.5 variant.',
+            },
+            {
+                id: 'MiniMax-M2.1',
+                name: 'MiniMax M2.1',
+                description: 'MiniMax model for multilingual programming and reasoning tasks.',
+            },
+            {
+                id: 'MiniMax-M2.1-highspeed',
+                name: 'MiniMax M2.1 Highspeed',
+                description: 'Lower-latency M2.1 variant.',
+            },
+            {
+                id: 'MiniMax-M2',
+                name: 'MiniMax M2',
+                description: 'MiniMax model with agentic capabilities and advanced reasoning.',
+            },
+        ],
+    },
+    {
         id: 'zai',
         name: 'Z.ai',
         description: 'Z.ai GLM OpenAI-compatible API.',
@@ -556,10 +616,11 @@ export class ProviderConfigStore {
         return this.listProviders();
     }
 
-    listProviders({ enabledOnly = false } = {}) {
-        const providers = enabledOnly
-            ? this._configs.filter((provider) => provider.enabled && this._isProviderUsable(provider))
-            : this._configs;
+    listProviders({ enabledOnly = false, usableOnly = enabledOnly } = {}) {
+        const providers = this._configs.filter((provider) => (
+            (!enabledOnly || provider.enabled)
+            && (!usableOnly || this._isProviderUsable(provider))
+        ));
 
         return providers.map((provider) => ({
             ...provider,
@@ -803,12 +864,13 @@ export class ProviderConfigStore {
         if (providerId === 'mock')
             return new MockProvider();
 
-        if (!this._isProviderUsable(provider))
+        if (!provider.implemented || !this._isProviderConfigured(provider))
             throw new Error(`Provider is not available: ${provider.name}`);
 
+        const apiKey = provider.apiKeyRequired ? this._getApiKey(provider) : '';
         const providerConfig = {
             ...provider,
-            apiKey: provider.apiKeyRequired ? this._getApiKey(provider) : '',
+            apiKey,
         };
 
         switch (provider.apiFormat) {
@@ -897,7 +959,9 @@ export class ProviderConfigStore {
         if (secretError)
             throw secretError;
 
-        throw new Error(`${provider.name} requires ${provider.apiKeyEnvVar}`);
+        const error = new Error(`${provider.name} requires ${provider.apiKeyEnvVar}`);
+        error.userMessage = `Configure ${provider.name} credentials in Settings before sending.`;
+        throw error;
     }
 
     async _discoverModelsForProvider(providerConfig, options) {

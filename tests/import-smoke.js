@@ -4,6 +4,7 @@ import { ConversationManager } from '../src/chat/conversation.js';
 import { markdownToPangoMarkup, parseMarkdownBlocks } from '../src/chat/markdown.js';
 import { createMessageContent } from '../src/chat/messageView.js';
 import { estimateConversationUsage } from '../src/chat/usage.js';
+import { createCronCreateTool, CronJobManager } from '../src/cron/manager.js';
 import { MemoryManager } from '../src/memory/memory.js';
 import { defaultMcpConfigFilePath, parseMcpConfigFile } from '../src/mcp/config.js';
 import { McpClient } from '../src/mcp/client.js';
@@ -31,6 +32,7 @@ import { WorkspaceFileStore } from '../src/storage/workspaceStore.js';
 import { createToolPermissionDecision } from '../src/tools/permissions.js';
 import { ToolManager, calculateExpression, parseToolRequest } from '../src/tools/tools.js';
 import { exportConversation } from '../src/workspace/exports.js';
+import { extractPromptVariables, renderPromptTemplate } from '../src/workspace/promptVariables.js';
 import { WorkspaceManager } from '../src/workspace/workspace.js';
 
 if (APP_ID !== 'io.github.stonega.Cusco')
@@ -55,6 +57,9 @@ if (typeof ConversationManager !== 'function')
 
 if (typeof buildAgentModeSystemPrompt !== 'function' || typeof parseAgentToolCall !== 'function')
     throw new Error('Agent Mode helpers did not import');
+
+if (typeof CronJobManager !== 'function' || typeof createCronCreateTool !== 'function')
+    throw new Error('Cron manager helpers did not import');
 
 if (typeof parseMarkdownBlocks !== 'function' || typeof markdownToPangoMarkup !== 'function')
     throw new Error('Markdown helpers did not import as functions');
@@ -112,6 +117,9 @@ if (typeof createSkillsSettingsPage !== 'function')
 
 if (typeof WorkspaceManager !== 'function' || typeof WorkspaceFileStore !== 'function' || typeof exportConversation !== 'function')
     throw new Error('Workspace helpers did not import');
+
+if (typeof extractPromptVariables !== 'function' || typeof renderPromptTemplate !== 'function')
+    throw new Error('Prompt variable helpers did not import');
 
 if (typeof SecretServiceApiKeyStore !== 'function' || typeof MemoryApiKeyStore !== 'function')
     throw new Error('API key stores did not import as classes');
