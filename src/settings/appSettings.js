@@ -2,12 +2,20 @@ import Adw from 'gi://Adw?version=1';
 import Gio from 'gi://Gio?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
 
+import {
+    DEFAULT_THINKING_LEVEL,
+    getThinkingLevelLabel,
+    normalizeThinkingLevel,
+    THINKING_LEVELS,
+} from '../providers/thinking.js';
+
 const SETTINGS_SCHEMA_ID = 'io.github.stonega.Cusco';
 const REQUIRED_SETTINGS_KEYS = [
     'send-with-enter',
     'auto-mode-enabled',
     'response-timeout-seconds',
     'provider-fallback-enabled',
+    'thinking-level',
     'high-contrast-enabled',
     'reduced-motion-enabled',
 ];
@@ -43,6 +51,7 @@ export class AppSettingsStore {
         this._autoModeEnabled = DEFAULT_AUTO_MODE_ENABLED;
         this._responseTimeoutSeconds = DEFAULT_RESPONSE_TIMEOUT_SECONDS;
         this._providerFallbackEnabled = DEFAULT_PROVIDER_FALLBACK_ENABLED;
+        this._thinkingLevel = DEFAULT_THINKING_LEVEL;
         this._highContrastEnabled = DEFAULT_HIGH_CONTRAST_ENABLED;
         this._reducedMotionEnabled = DEFAULT_REDUCED_MOTION_ENABLED;
         this._loadPersistentState();
@@ -88,6 +97,16 @@ export class AppSettingsStore {
         return this._providerFallbackEnabled;
     }
 
+    get thinkingLevel() {
+        return this._thinkingLevel;
+    }
+
+    setThinkingLevel(value) {
+        this._thinkingLevel = normalizeThinkingLevel(value);
+        this._settings?.set_string?.('thinking-level', this._thinkingLevel);
+        return this._thinkingLevel;
+    }
+
     get highContrastEnabled() {
         return this._highContrastEnabled;
     }
@@ -116,9 +135,19 @@ export class AppSettingsStore {
         this._autoModeEnabled = this._settings.get_boolean('auto-mode-enabled');
         this._responseTimeoutSeconds = clampTimeoutSeconds(this._settings.get_uint('response-timeout-seconds'));
         this._providerFallbackEnabled = this._settings.get_boolean('provider-fallback-enabled');
+        this._thinkingLevel = normalizeThinkingLevel(this._settings.get_string?.('thinking-level'));
         this._highContrastEnabled = this._settings.get_boolean('high-contrast-enabled');
         this._reducedMotionEnabled = this._settings.get_boolean('reduced-motion-enabled');
     }
+}
+
+function createThinkingLevelList() {
+    const list = new Gtk.StringList();
+
+    for (const level of THINKING_LEVELS)
+        list.append(getThinkingLevelLabel(level));
+
+    return list;
 }
 
 export function createApplicationSettingsPage(appSettings, onChanged) {
@@ -188,6 +217,23 @@ export function createApplicationSettingsPage(appSettings, onChanged) {
         onChanged?.();
     });
     providerGroup.add(fallbackRow);
+
+    const thinkingLevelRow = new Adw.ComboRow({
+        title: 'Default thinking level',
+        subtitle: 'Used for new chats when the selected model supports reasoning.',
+        model: createThinkingLevelList(),
+        selected: THINKING_LEVELS.indexOf(appSettings.thinkingLevel),
+    });
+    thinkingLevelRow.connect('notify::selected', () => {
+        const level = THINKING_LEVELS[thinkingLevelRow.get_selected()];
+
+        if (!level)
+            return;
+
+        appSettings.setThinkingLevel(level);
+        onChanged?.();
+    });
+    providerGroup.add(thinkingLevelRow);
 
     const accessibilityGroup = new Adw.PreferencesGroup({
         title: 'Accessibility',

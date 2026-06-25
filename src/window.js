@@ -23,6 +23,12 @@ import { McpManager } from './mcp/manager.js';
 import { ProviderConfigStore } from './providers/config.js';
 import { getProviderGIcon } from './providers/icons.js';
 import { createMessage } from './providers/provider.js';
+import {
+    DEFAULT_THINKING_LEVEL,
+    getThinkingLevelLabel,
+    normalizeThinkingLevel,
+} from './providers/thinking.js';
+import { normalizeTokenUsage } from './providers/usage.js';
 import { AppSettingsStore } from './settings/appSettings.js';
 import { presentProviderSettingsDialog } from './settings/providerSettings.js';
 import { ConversationFileStore } from './storage/conversationStore.js';
@@ -37,6 +43,7 @@ import { WorkspaceManager } from './workspace/workspace.js';
 
 const PAPER_PLANE_ICON_FILE = 'paper-plane-symbolic.svg';
 const GIT_BRANCH_ICON_FILE = 'git-branch-symbolic.svg';
+const ATTACHMENT_ICON_FILE = 'attachment-symbolic.svg';
 const STOP_ICON_NAME = 'process-stop-symbolic';
 const PROVIDER_PICKER_ID_COLUMN = 0;
 const PROVIDER_PICKER_NAME_COLUMN = 1;
@@ -92,6 +99,34 @@ function getProviderErrorMessage(error) {
     return 'The active provider failed while streaming.';
 }
 
+function normalizeProviderChunk(chunk) {
+    if (typeof chunk === 'string')
+        return { type: 'text', text: chunk };
+
+    if (!chunk || typeof chunk !== 'object')
+        return { type: 'text', text: '' };
+
+    if (chunk.type === 'usage')
+        return {
+            type: 'usage',
+            text: '',
+            usage: normalizeTokenUsage(chunk.usage),
+        };
+
+    return {
+        type: chunk.type === 'reasoning' ? 'reasoning' : 'text',
+        text: String(chunk.text ?? chunk.content ?? ''),
+        usage: null,
+    };
+}
+
+function getMessageReasoningContent(message) {
+    if (typeof message?.reasoning === 'string')
+        return message.reasoning.trim();
+
+    return String(message?.reasoning?.content ?? '').trim();
+}
+
 export const CuscoWindow = GObject.registerClass(
 class CuscoWindow extends Adw.ApplicationWindow {
     _init(application) {
@@ -109,7 +144,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._cron = new CronJobManager();
         this._mcp = new McpManager({ workspaceManager: this._workspace });
         this._pendingAttachments = [];
-        this._sidebarMode = 'chats';
         this._cronJobIndex = new Map();
         this._cronLogSyncTimeoutId = 0;
         this._providerConfigs = new ProviderConfigStore();
@@ -118,6 +152,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._conversations = new ConversationManager({
             providerId: defaultProvider.id,
             modelId: defaultModel?.id ?? '',
+            thinkingLevel: this._appSettings.thinkingLevel,
             store: new ConversationFileStore(),
         });
         this._tools.registerTool(createCronCreateTool(this._cron, {
@@ -127,6 +162,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (this._conversations.allConversations.length === 0) {
             this._conversations.createConversation({
                 title: 'Welcome to Cusco',
+                thinkingLevel: this._appSettings.thinkingLevel,
                 messages: [
                     createMessage('assistant', 'Ask a question, compare providers, or start building a reusable AI workflow.'),
                     createMessage('system', 'Next steps: markdown rendering, memory controls, web search, and desktop integration.'),
@@ -282,30 +318,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
         sidebarContent.append(this._conversationList);
         sidebar.append(sidebarContent);
 
-        const sidebarFooter = new Gtk.Box({
-            orientation: Gtk.Orientation.HORIZONTAL,
-            spacing: 6,
-            margin_top: 0,
-            margin_bottom: 6,
-            margin_start: 6,
-            margin_end: 6,
-        });
-        this._chatListModeButton = new Gtk.ToggleButton({
-            icon_name: 'mail-message-new-symbolic',
-            tooltip_text: 'Chat list',
-            active: true,
-            hexpand: true,
-        });
-        this._cronJobsButton = new Gtk.ToggleButton({
-            icon_name: 'x-office-calendar-symbolic',
-            tooltip_text: 'Cron job chats',
-            hexpand: true,
-        });
-        this._chatListModeButton.connect('clicked', () => this._setSidebarMode('chats'));
-        this._cronJobsButton.connect('clicked', () => this._setSidebarMode('cron'));
-        sidebarFooter.append(this._chatListModeButton);
-        sidebarFooter.append(this._cronJobsButton);
-        sidebar.append(sidebarFooter);
         return sidebar;
     }
 
@@ -334,9 +346,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         this._providerPicker = this._createProviderPicker();
         this._modelPicker = new Gtk.ComboBoxText();
+        this._thinkingLevelPicker = new Gtk.ComboBoxText({
+            tooltip_text: 'Thinking level',
+        });
         this._populateProviderPicker();
         this._providerPicker.connect('changed', () => this._handleProviderChanged());
         this._modelPicker.connect('changed', () => this._handleModelChanged());
+        this._thinkingLevelPicker.connect('changed', () => this._handleThinkingLevelChanged());
 
         this._memoryToggleButton = new Gtk.ToggleButton({
             icon_name: 'user-bookmarks-symbolic',
@@ -362,6 +378,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         composerMetaRow.append(this._providerPicker);
         composerMetaRow.append(this._modelPicker);
+        composerMetaRow.append(this._thinkingLevelPicker);
         composerMetaRow.append(this._memoryToggleButton);
         composerMetaRow.append(this._agentModeToggleButton);
         composerMetaRow.append(this._skillMenuButton);
@@ -396,9 +413,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._attachmentLabel.add_css_class('dim-label');
 
         this._attachButton = new Gtk.Button({
-            icon_name: 'mail-attachment-symbolic',
             tooltip_text: 'Attach file or image',
         });
+        this._attachButton.set_child(createBundledIcon(ATTACHMENT_ICON_FILE, 'mail-attachment-symbolic'));
         this._attachButton.connect('clicked', () => this._attachFileContext());
 
         this._promptMenuButton = this._createPromptMenuButton();
@@ -459,9 +476,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const memoryEnabled = activeConversation?.memoryEnabled !== false;
         const agentModeEnabled = Boolean(activeConversation?.agentModeEnabled);
         const skillIds = activeConversation?.skillIds ?? [];
+        const thinkingLevel = activeConversation?.thinkingLevel ?? this._appSettings.thinkingLevel;
 
-        this._conversations.createConversation({ providerId, modelId, memoryEnabled, agentModeEnabled, skillIds });
-        this._setSidebarMode('chats', { syncCron: false, preserveSelection: true });
+        this._conversations.createConversation({
+            providerId,
+            modelId,
+            memoryEnabled,
+            agentModeEnabled,
+            skillIds,
+            thinkingLevel,
+        });
         this._refreshConversationList();
         this._renderActiveConversation();
     }
@@ -489,10 +513,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (!conversation)
             return;
 
-        this._setSidebarMode(this._isCronConversation(conversation) ? 'cron' : 'chats', {
-            syncCron: false,
-            preserveSelection: true,
-        });
         this._conversations.selectConversation(conversationId);
         this._refreshConversationList();
         this._renderActiveConversation();
@@ -540,11 +560,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     async _handleCronJobChanged(job) {
         await this._syncCronJobsWithConversations({ refreshUi: true });
-
-        const conversation = this._findCronConversation(job.id);
-
-        if (conversation && this._sidebarMode === 'cron')
-            this.selectConversation(conversation.id);
     }
 
     _startCronLogSync() {
@@ -998,8 +1013,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     conversation,
                     providerMessages,
                     cancellable,
-                    (text) => {
-                        assistantView.set_label(text);
+                    (text, _chunk, state) => {
+                        if (state?.type === 'usage')
+                            assistantView.set_usage(state.usage);
+
+                        if (state?.type === 'reasoning')
+                            assistantView.set_reasoning(state.reasoning);
+
+                        if (state?.type !== 'usage')
+                            assistantView.set_label(text);
+
                         this._updateUsageDisplay(conversation);
                         this._scrollToBottom();
                     },
@@ -1042,14 +1065,30 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const activeProvider = this._providerConfigs.createProvider(providerId);
         const providerConfig = this._providerConfigs.resolve(providerId, modelId);
         let responseText = '';
+        let reasoningText = '';
+        let usage = null;
 
         for await (const chunk of activeProvider.streamChat(providerMessages, {
             ...providerConfig,
             cancellable,
             timeoutSeconds: this._appSettings.responseTimeoutSeconds,
+            thinkingLevel: this._conversations.activeConversation?.thinkingLevel ?? this._appSettings.thinkingLevel,
         })) {
-            responseText += chunk;
-            onChunk?.(responseText, chunk);
+            const normalizedChunk = normalizeProviderChunk(chunk);
+
+            if (normalizedChunk.type === 'usage')
+                usage = normalizedChunk.usage;
+            else if (normalizedChunk.type === 'reasoning')
+                reasoningText += normalizedChunk.text;
+            else
+                responseText += normalizedChunk.text;
+
+            onChunk?.(responseText, normalizedChunk.text, {
+                type: normalizedChunk.type,
+                text: responseText,
+                reasoning: reasoningText,
+                usage,
+            });
         }
 
         return responseText;
@@ -1105,7 +1144,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 conversation,
                 runtimeMessages,
                 cancellable,
-                (text) => this._updateAgentModeAssistantView(conversation, assistantView, text),
+                (text, _chunk, state) => {
+                    if (state?.type === 'usage')
+                        assistantView.set_usage(state.usage);
+
+                    if (state?.type === 'reasoning')
+                        assistantView.set_reasoning(state.reasoning);
+
+                    if (state?.type !== 'usage')
+                        this._updateAgentModeAssistantView(conversation, assistantView, text);
+                },
             );
 
             if (isCancellableCancelled(cancellable))
@@ -1370,6 +1418,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
         let view = null;
         let assistantMessage = null;
         let currentText = '';
+        let currentReasoning = '';
+        let currentUsage = null;
 
         const ensureView = () => {
             if (!view)
@@ -1395,11 +1445,42 @@ class CuscoWindow extends Adw.ApplicationWindow {
             ensureView().set_label(displayText);
         };
 
+        const updatePersistentReasoning = (reasoning) => {
+            currentReasoning = String(reasoning ?? '');
+            const message = ensureMessage(currentText);
+
+            this._conversations.updateMessageReasoning(conversation.id, message.id, {
+                content: currentReasoning,
+                providerId: conversation.providerId,
+                modelId: conversation.modelId,
+                thinkingLevel: conversation.thinkingLevel,
+                createdAt: new Date().toISOString(),
+            });
+            ensureView().set_reasoning(currentReasoning);
+        };
+
+        const updatePersistentUsage = (usage) => {
+            currentUsage = normalizeTokenUsage(usage, {
+                providerId: conversation.providerId,
+                modelId: conversation.modelId,
+                thinkingLevel: conversation.thinkingLevel,
+                createdAt: new Date().toISOString(),
+            });
+
+            if (!currentUsage)
+                return;
+
+            const message = ensureMessage(currentText);
+            this._conversations.updateMessageUsage(conversation.id, message.id, currentUsage);
+        };
+
         return {
             set_label: (text) => updatePersistentText(text, text),
             set_stream_text: updatePersistentText,
+            set_reasoning: updatePersistentReasoning,
+            set_usage: updatePersistentUsage,
             set_status: (text) => ensureView().set_label(text),
-            hasContent: () => currentText.length > 0,
+            hasContent: () => currentText.length > 0 || currentReasoning.length > 0 || Boolean(currentUsage),
         };
     }
 
@@ -1608,6 +1689,44 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         const fallbackModel = this._providerConfigs.getDefaultModel(providerId);
         this._modelPicker.set_active_id(selectedModelId ?? fallbackModel?.id ?? null);
+    }
+
+    _populateThinkingLevelPicker(conversation) {
+        if (!this._thinkingLevelPicker)
+            return;
+
+        this._thinkingLevelPicker.remove_all();
+
+        if (!conversation) {
+            this._thinkingLevelPicker.append(DEFAULT_THINKING_LEVEL, getThinkingLevelLabel(DEFAULT_THINKING_LEVEL));
+            this._thinkingLevelPicker.set_active_id(DEFAULT_THINKING_LEVEL);
+            this._thinkingLevelPicker.set_sensitive(false);
+            return;
+        }
+
+        const levels = this._providerConfigs.getThinkingLevels(conversation.providerId, conversation.modelId);
+
+        if (levels.length === 0) {
+            this._thinkingLevelPicker.append('off', getThinkingLevelLabel('off'));
+            this._thinkingLevelPicker.set_active_id('off');
+            this._thinkingLevelPicker.set_tooltip_text('Thinking is not supported by this provider and model.');
+            this._thinkingLevelPicker.set_sensitive(false);
+            return;
+        }
+
+        for (const level of levels)
+            this._thinkingLevelPicker.append(level, getThinkingLevelLabel(level));
+
+        const currentLevel = normalizeThinkingLevel(conversation.thinkingLevel ?? this._appSettings.thinkingLevel);
+        const selectedLevel = levels.includes(currentLevel)
+            ? currentLevel
+            : levels.includes(DEFAULT_THINKING_LEVEL)
+                ? DEFAULT_THINKING_LEVEL
+                : levels[0];
+
+        this._thinkingLevelPicker.set_active_id(selectedLevel);
+        this._thinkingLevelPicker.set_tooltip_text('Thinking level for this chat');
+        this._thinkingLevelPicker.set_sensitive(true);
     }
 
     _createProviderPicker() {
@@ -1918,6 +2037,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._isUpdatingProviderControls = true;
         this._providerPicker.set_active_id(conversation.providerId);
         this._populateModelPicker(conversation.providerId, conversation.modelId);
+        this._populateThinkingLevelPicker(conversation);
         this._memoryToggleButton.set_active(conversation.memoryEnabled !== false);
         this._agentModeToggleButton.set_active(Boolean(conversation.agentModeEnabled));
         this._refreshSkillMenu(conversation);
@@ -1967,6 +2087,34 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._refreshConversationList();
     }
 
+    _resolveThinkingLevelForSelection(providerId, modelId, currentLevel) {
+        const levels = this._providerConfigs.getThinkingLevels(providerId, modelId);
+
+        if (levels.length === 0)
+            return normalizeThinkingLevel(currentLevel ?? this._appSettings.thinkingLevel);
+
+        const normalizedLevel = normalizeThinkingLevel(currentLevel ?? this._appSettings.thinkingLevel);
+
+        if (levels.includes(normalizedLevel))
+            return normalizedLevel;
+
+        return levels.includes(DEFAULT_THINKING_LEVEL) ? DEFAULT_THINKING_LEVEL : levels[0];
+    }
+
+    _handleThinkingLevelChanged() {
+        if (this._isUpdatingProviderControls)
+            return;
+
+        const conversation = this._conversations.activeConversation;
+        const thinkingLevel = this._thinkingLevelPicker.get_active_id();
+
+        if (!conversation || !thinkingLevel)
+            return;
+
+        this._conversations.setThinkingLevel(conversation.id, thinkingLevel);
+        this._refreshConversationList();
+    }
+
     _handleProviderChanged() {
         if (this._isUpdatingProviderControls)
             return;
@@ -1982,6 +2130,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
             providerId,
             modelId: model?.id ?? '',
         });
+        this._conversations.setThinkingLevel(
+            conversation.id,
+            this._resolveThinkingLevelForSelection(providerId, model?.id ?? '', conversation.thinkingLevel),
+        );
         this._providerConfigs.setActiveSelection(providerId, model?.id ?? '');
         this._syncProviderControls(conversation);
         this._refreshConversationList();
@@ -2001,51 +2153,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
             providerId: conversation.providerId,
             modelId,
         });
+        this._conversations.setThinkingLevel(
+            conversation.id,
+            this._resolveThinkingLevelForSelection(conversation.providerId, modelId, conversation.thinkingLevel),
+        );
         this._providerConfigs.setActiveSelection(conversation.providerId, modelId);
+        this._syncProviderControls(conversation);
         this._refreshConversationList();
-    }
-
-    _setSidebarMode(mode, options = {}) {
-        const nextMode = mode === 'cron' ? 'cron' : 'chats';
-        this._sidebarMode = nextMode;
-
-        this._sidebarTitle?.set_label(nextMode === 'cron' ? 'Cron Jobs' : 'Chats');
-        this._chatSearch?.set_placeholder_text(nextMode === 'cron' ? 'Search cron jobs' : 'Search chats');
-
-        if (this._chatListModeButton && this._chatListModeButton.get_active() !== (nextMode === 'chats'))
-            this._chatListModeButton.set_active(nextMode === 'chats');
-
-        if (this._cronJobsButton && this._cronJobsButton.get_active() !== (nextMode === 'cron'))
-            this._cronJobsButton.set_active(nextMode === 'cron');
-
-        const finish = () => {
-            if (!options.preserveSelection)
-                this._selectFirstVisibleConversationIfNeeded();
-
-            this._refreshConversationList();
-        };
-
-        if (nextMode === 'cron' && options.syncCron !== false) {
-            this._syncCronJobsWithConversations().catch((error) => {
-                logError(error, 'Failed to sync cron job chats');
-            }).finally(finish);
-            return;
-        }
-
-        finish();
-    }
-
-    _selectFirstVisibleConversationIfNeeded() {
-        const activeConversation = this._conversations.activeConversation;
-        const visible = this._getVisibleConversations();
-
-        if (visible.some((conversation) => conversation.id === activeConversation?.id))
-            return;
-
-        if (visible[0]) {
-            this._conversations.selectConversation(visible[0].id);
-            this._renderActiveConversation();
-        }
     }
 
     _refreshConversationList() {
@@ -2068,11 +2182,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _getVisibleConversations() {
-        const wantsCron = this._sidebarMode === 'cron';
-
-        return this._conversations
-            .searchConversations(this._chatSearch?.get_text() ?? '')
-            .filter((conversation) => this._isCronConversation(conversation) === wantsCron);
+        return this._conversations.searchConversations(this._chatSearch?.get_text() ?? '');
     }
 
     _isCronConversation(conversation) {
@@ -2103,8 +2213,27 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const title = new Gtk.Label({
             label: conversation.title,
             xalign: 0,
+            hexpand: true,
             ellipsize: Pango.EllipsizeMode.END,
         });
+
+        const titleRow = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 4,
+            hexpand: true,
+        });
+
+        if (this._isCronConversation(conversation)) {
+            const cronIcon = new Gtk.Image({
+                icon_name: 'alarm-symbolic',
+                tooltip_text: 'Cron job chat',
+                valign: Gtk.Align.CENTER,
+            });
+            cronIcon.set_pixel_size(14);
+            cronIcon.add_css_class('cusco-cron-chat-icon');
+            titleRow.append(cronIcon);
+        }
+        titleRow.append(title);
 
         const organizationLabel = [
             conversation.folderId ? `Folder ${conversation.folderId}` : '',
@@ -2129,7 +2258,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         subtitle.add_css_class('caption');
         subtitle.add_css_class('dim-label');
 
-        box.append(title);
+        box.append(titleRow);
         box.append(subtitle);
 
         const actions = this._createConversationMenuButton(conversation, hoverTarget ?? rowBox);
@@ -2422,12 +2551,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._conversationList.set_sensitive(!isBusy);
         this._providerPicker.set_sensitive(!isBusy);
         this._modelPicker.set_sensitive(!isBusy);
+        this._thinkingLevelPicker.set_sensitive(!isBusy && this._providerConfigs.supportsThinking(
+            this._conversations.activeConversation?.providerId,
+            this._conversations.activeConversation?.modelId,
+        ));
         this._memoryToggleButton.set_sensitive(!isBusy);
         this._agentModeToggleButton.set_sensitive(!isBusy);
         this._skillMenuButton.set_sensitive(!isBusy);
         this._settingsButton.set_sensitive(!isBusy);
-        this._chatListModeButton.set_sensitive(!isBusy);
-        this._cronJobsButton.set_sensitive(!isBusy);
     }
 
     _addMessage(body, kind, message = null) {
@@ -2441,6 +2572,30 @@ class CuscoWindow extends Adw.ApplicationWindow {
             margin_bottom: 4,
             halign: kind === 'user' ? Gtk.Align.END : Gtk.Align.START,
         });
+        const reasoningText = kind === 'assistant'
+            ? getMessageReasoningContent(message)
+            : '';
+        let reasoningContent = null;
+        let reasoningExpander = null;
+
+        if (kind === 'assistant') {
+            reasoningExpander = new Gtk.Expander({
+                label: 'Reasoning',
+                expanded: false,
+                visible: Boolean(reasoningText),
+                hexpand: true,
+            });
+            reasoningExpander.add_css_class('cusco-reasoning');
+            reasoningContent = createMessageContent(reasoningText || ' ', {
+                role: 'assistant',
+                hexpand: true,
+                codeMinWidth: 380,
+            });
+            reasoningContent.add_css_class('cusco-message-bubble');
+            reasoningContent.add_css_class('cusco-message-assistant');
+            reasoningExpander.set_child(reasoningContent);
+            wrapper.append(reasoningExpander);
+        }
 
         const bodyContent = createMessageContent(body, {
             role: kind,
@@ -2458,6 +2613,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         return {
             set_label: (text) => bodyContent.updateContent(text),
+            set_reasoning: (text) => {
+                if (!reasoningContent || !reasoningExpander)
+                    return;
+
+                const nextText = String(text ?? '').trim();
+                reasoningContent.updateContent(nextText || ' ');
+                reasoningExpander.set_visible(Boolean(nextText));
+            },
         };
     }
 

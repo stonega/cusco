@@ -4,7 +4,6 @@ import Gtk from 'gi://Gtk?version=4.0';
 import { createProviderIcon } from '../providers/icons.js';
 import { createApplicationSettingsPage } from './appSettings.js';
 import { createMemorySettingsPage } from './memorySettings.js';
-import { createMcpSettingsPage } from './mcpSettings.js';
 import { createSkillsSettingsPage, createWorkspaceSettingsPage } from './workspaceSettings.js';
 
 function createStringList(values) {
@@ -365,15 +364,12 @@ export function presentProviderSettingsDialog(
         dialog.add(createMemorySettingsPage(dialog, memoryManager, onChanged));
 
     if (workspaceManager) {
-        dialog.add(createWorkspaceSettingsPage(dialog, workspaceManager, onChanged));
+        dialog.add(createWorkspaceSettingsPage(dialog, workspaceManager, mcpManager, onChanged));
         dialog.add(createSkillsSettingsPage(dialog, workspaceManager, onChanged));
     }
 
     const page = createProviderSettingsPage(providerConfigs, onChanged);
     dialog.add(page);
-
-    if (mcpManager)
-        dialog.add(createMcpSettingsPage(dialog, mcpManager, onChanged));
 
     dialog.present(parent);
 }

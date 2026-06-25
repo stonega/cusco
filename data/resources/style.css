@@ -37,6 +37,10 @@
     color: alpha(@window_fg_color, 0.55);
 }
 
+.cusco-cron-chat-icon {
+    color: alpha(@accent_color, 0.86);
+}
+
 .cusco-conversation-menu-button {
     min-width: 32px;
     min-height: 32px;
@@ -49,6 +53,15 @@
 .cusco-composer-meta {
     margin-left: 2px;
     margin-right: 2px;
+}
+
+.cusco-prompt-editor {
+    padding: 8px;
+}
+
+.cusco-prompt-help-text {
+    color: alpha(@window_fg_color, 0.58);
+    font-size: 0.9em;
 }
 
 .cusco-message-bubble {
@@ -87,6 +100,11 @@
 .cusco-tool-result {
     margin-top: 2px;
     margin-bottom: 2px;
+}
+
+.cusco-reasoning {
+    margin-bottom: 2px;
+    color: alpha(@window_fg_color, 0.74);
 }
 
 .cusco-message-markdown {

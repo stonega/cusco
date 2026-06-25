@@ -3,10 +3,24 @@ import GLib from 'gi://GLib?version=2.0';
 import Soup from 'gi://Soup?version=3.0';
 
 import { ChatProvider } from './provider.js';
+import { getThinkingCapability, normalizeThinkingLevel } from './thinking.js';
+import { normalizeTokenUsage } from './usage.js';
 
 const DISPLAY_STREAM_DELAY_MS = 10;
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_REQUEST_TIMEOUT_SECONDS = 45;
+const OPENAI_REASONING_EFFORTS = {
+    off: 'none',
+    low: 'low',
+    medium: 'medium',
+    high: 'high',
+};
+const ANTHROPIC_DEFAULT_THINKING_BUDGETS = {
+    auto: 2048,
+    low: 1024,
+    medium: 2048,
+    high: 3072,
+};
 
 function createUserVisibleError(message, userMessage = message) {
     const error = new Error(message);
@@ -238,6 +252,27 @@ async function* displayStream(text, cancellable = null) {
     }
 }
 
+function normalizeProviderResponse(response) {
+    if (typeof response === 'string')
+        return { text: response, reasoning: '' };
+
+    if (!response || typeof response !== 'object')
+        return { text: '', reasoning: '' };
+
+    return {
+        text: String(response.text ?? ''),
+        reasoning: String(response.reasoning ?? ''),
+        usage: normalizeTokenUsage(response.usage),
+    };
+}
+
+function joinTextParts(parts) {
+    return parts
+        .map((part) => String(part ?? '').trim())
+        .filter(Boolean)
+        .join('\n\n');
+}
+
 export function openAiMessages(messages) {
     return providerMessages(messages).map((message) => ({
         role: message.role === 'system' ? 'developer' : message.role,
@@ -289,11 +324,91 @@ export function geminiPayload(messages) {
     return payload;
 }
 
-export function buildOpenAiResponsesBody(messages, modelId) {
+function getRequestedThinkingConfig(config, model, level) {
+    const capability = getThinkingCapability(config, model);
+
+    if (!capability)
+        return null;
+
+    const thinkingLevel = normalizeThinkingLevel(level);
+
+    if (!capability.levels.includes(thinkingLevel))
+        return null;
+
     return {
+        ...capability,
+        level: thinkingLevel,
+    };
+}
+
+function buildOpenAiReasoningConfig(config, model, level) {
+    const thinking = getRequestedThinkingConfig(config, model, level);
+
+    if (!thinking || thinking.api !== 'openai-responses')
+        return null;
+
+    if (thinking.level === 'off')
+        return { effort: OPENAI_REASONING_EFFORTS.off };
+
+    const reasoning = {};
+    const effort = OPENAI_REASONING_EFFORTS[thinking.level];
+
+    if (effort)
+        reasoning.effort = effort;
+
+    if (thinking.summary)
+        reasoning.summary = thinking.summary;
+
+    return Object.keys(reasoning).length > 0 ? reasoning : null;
+}
+
+function buildAnthropicThinkingConfig(config, model, level) {
+    const thinking = getRequestedThinkingConfig(config, model, level);
+
+    if (!thinking)
+        return null;
+
+    if (thinking.level === 'off')
+        return { type: 'disabled' };
+
+    if (thinking.api === 'anthropic-adaptive') {
+        const request = {
+            type: 'adaptive',
+            display: thinking.display ?? 'summarized',
+        };
+
+        if (thinking.level !== 'auto')
+            request.effort = thinking.level;
+
+        return request;
+    }
+
+    if (thinking.api === 'anthropic-budget') {
+        const budgets = thinking.budgets ?? ANTHROPIC_DEFAULT_THINKING_BUDGETS;
+        const budget = budgets[thinking.level] ?? budgets.medium ?? ANTHROPIC_DEFAULT_THINKING_BUDGETS.medium;
+
+        return {
+            type: 'enabled',
+            budget_tokens: budget,
+            display: thinking.display ?? 'summarized',
+        };
+    }
+
+    return null;
+}
+
+export function buildOpenAiResponsesBody(messages, modelId, options = {}) {
+    const body = {
         model: modelId,
         input: openAiMessages(messages),
     };
+
+    const reasoning = buildOpenAiReasoningConfig(options.provider ?? options.config, options.model, options.thinkingLevel);
+
+    if (reasoning)
+        body.reasoning = reasoning;
+
+    return body;
 }
 
 export function buildOpenAiCompatibleChatBody(messages, modelId) {
@@ -304,8 +419,9 @@ export function buildOpenAiCompatibleChatBody(messages, modelId) {
     };
 }
 
-export function buildAnthropicMessagesBody(messages, modelId) {
+export function buildAnthropicMessagesBody(messages, modelId, options = {}) {
     const { system, messages: conversationMessages } = anthropicPayloadMessages(messages);
+    const thinking = buildAnthropicThinkingConfig(options.provider ?? options.config, options.model, options.thinkingLevel);
     const body = {
         model: modelId,
         max_tokens: DEFAULT_MAX_TOKENS,
@@ -314,6 +430,13 @@ export function buildAnthropicMessagesBody(messages, modelId) {
 
     if (system)
         body.system = system;
+
+    if (thinking) {
+        body.thinking = thinking;
+
+        if (Number.isFinite(thinking.budget_tokens) && thinking.budget_tokens >= body.max_tokens)
+            body.max_tokens = thinking.budget_tokens + 1024;
+    }
 
     return body;
 }
@@ -338,8 +461,48 @@ export function extractOpenAiText(response) {
     return response.choices?.[0]?.message?.content ?? '';
 }
 
+export function extractOpenAiReasoning(response) {
+    return joinTextParts((response.output ?? [])
+        .filter((item) => item.type === 'reasoning')
+        .flatMap((item) => item.summary ?? [])
+        .map((summary) => summary.text ?? summary.content ?? ''));
+}
+
+export function extractOpenAiUsage(response) {
+    return normalizeTokenUsage(response.usage);
+}
+
+export function extractOpenAiResponse(response) {
+    return {
+        text: extractOpenAiText(response),
+        reasoning: extractOpenAiReasoning(response),
+        usage: extractOpenAiUsage(response),
+    };
+}
+
 export function extractChatCompletionText(response) {
     return response.choices?.[0]?.message?.content ?? '';
+}
+
+export function extractChatCompletionReasoning(response) {
+    const message = response.choices?.[0]?.message ?? {};
+    return joinTextParts([
+        message.reasoning_content,
+        message.reasoning,
+        message.reasoning_summary,
+    ]);
+}
+
+export function extractChatCompletionUsage(response) {
+    return normalizeTokenUsage(response.usage);
+}
+
+export function extractChatCompletionResponse(response) {
+    return {
+        text: extractChatCompletionText(response),
+        reasoning: extractChatCompletionReasoning(response),
+        usage: extractChatCompletionUsage(response),
+    };
 }
 
 export function extractAnthropicText(response) {
@@ -349,10 +512,47 @@ export function extractAnthropicText(response) {
         .join('\n');
 }
 
+export function extractAnthropicReasoning(response) {
+    return joinTextParts((response.content ?? [])
+        .filter((content) => content.type === 'thinking')
+        .map((content) => content.thinking ?? content.summary ?? ''));
+}
+
+export function extractAnthropicUsage(response) {
+    return normalizeTokenUsage(response.usage);
+}
+
+export function extractAnthropicResponse(response) {
+    return {
+        text: extractAnthropicText(response),
+        reasoning: extractAnthropicReasoning(response),
+        usage: extractAnthropicUsage(response),
+    };
+}
+
 export function extractGeminiText(response) {
     return (response.candidates?.[0]?.content?.parts ?? [])
+        .filter((part) => !part.thought)
         .map((part) => part.text ?? '')
         .join('');
+}
+
+export function extractGeminiReasoning(response) {
+    return joinTextParts((response.candidates?.[0]?.content?.parts ?? [])
+        .filter((part) => part.thought)
+        .map((part) => part.text ?? ''));
+}
+
+export function extractGeminiUsage(response) {
+    return normalizeTokenUsage(response.usageMetadata ?? response.usage);
+}
+
+export function extractGeminiResponse(response) {
+    return {
+        text: extractGeminiText(response),
+        reasoning: extractGeminiReasoning(response),
+        usage: extractGeminiUsage(response),
+    };
 }
 
 function normalizeDiscoveredModel(item) {
@@ -450,16 +650,31 @@ class RemoteProvider extends ChatProvider {
     }
 
     async *streamChat(messages, options = {}) {
-        const responseText = await this._complete(
+        const response = normalizeProviderResponse(await this._complete(
             messages,
             options.model?.id ?? this._config.defaultModelId,
             options,
-        );
+        ));
 
-        if (!responseText)
+        if (!response.text && !response.reasoning && !response.usage)
             throw new Error(`${this.name} returned an empty response`);
 
-        yield* displayStream(responseText, options.cancellable ?? null);
+        if (response.usage) {
+            yield {
+                type: 'usage',
+                usage: response.usage,
+            };
+        }
+
+        if (response.reasoning) {
+            yield {
+                type: 'reasoning',
+                text: response.reasoning,
+            };
+        }
+
+        if (response.text)
+            yield* displayStream(response.text, options.cancellable ?? null);
     }
 }
 
@@ -468,7 +683,11 @@ export class OpenAiResponsesProvider extends RemoteProvider {
         const response = await postJson(
             normalizeUrl(this._config.baseUrl, '/responses'),
             { Authorization: `Bearer ${getApiKey(this._config)}` },
-            buildOpenAiResponsesBody(messages, modelId),
+            buildOpenAiResponsesBody(messages, modelId, {
+                provider: this._config,
+                model: options.model,
+                thinkingLevel: options.thinkingLevel,
+            }),
             {
                 cancellable: options.cancellable ?? null,
                 providerName: this.name,
@@ -476,7 +695,7 @@ export class OpenAiResponsesProvider extends RemoteProvider {
             },
         );
 
-        return extractOpenAiText(response);
+        return extractOpenAiResponse(response);
     }
 }
 
@@ -493,7 +712,7 @@ export class OpenAiCompatibleChatProvider extends RemoteProvider {
             },
         );
 
-        return extractChatCompletionText(response);
+        return extractChatCompletionResponse(response);
     }
 }
 
@@ -505,7 +724,11 @@ export class AnthropicMessagesProvider extends RemoteProvider {
                 'x-api-key': getApiKey(this._config),
                 'anthropic-version': '2023-06-01',
             },
-            buildAnthropicMessagesBody(messages, modelId),
+            buildAnthropicMessagesBody(messages, modelId, {
+                provider: this._config,
+                model: options.model,
+                thinkingLevel: options.thinkingLevel,
+            }),
             {
                 cancellable: options.cancellable ?? null,
                 providerName: this.name,
@@ -513,7 +736,7 @@ export class AnthropicMessagesProvider extends RemoteProvider {
             },
         );
 
-        return extractAnthropicText(response);
+        return extractAnthropicResponse(response);
     }
 }
 
@@ -526,6 +749,6 @@ export class GeminiGenerateContentProvider extends RemoteProvider {
             timeoutSeconds: options.timeoutSeconds,
         });
 
-        return extractGeminiText(response);
+        return extractGeminiResponse(response);
     }
 }

@@ -13,11 +13,30 @@ const store = new ConversationFileStore({ path });
 const conversations = new ConversationManager({
     providerId: 'mock',
     modelId: 'mock-balanced',
+    thinkingLevel: 'auto',
     store,
 });
 const chat = conversations.createConversation();
 
 conversations.appendMessage(chat.id, createMessage('user', 'Persist this chat'));
+const assistantMessage = createMessage('assistant', 'Stored answer', {
+    reasoning: {
+        content: 'Stored reasoning summary',
+        providerId: 'mock',
+        modelId: 'mock-balanced',
+        thinkingLevel: 'high',
+    },
+    usage: {
+        inputTokens: 10,
+        outputTokens: 8,
+        reasoningTokens: 4,
+        totalTokens: 18,
+        providerId: 'mock',
+        modelId: 'mock-balanced',
+        thinkingLevel: 'high',
+    },
+});
+conversations.appendMessage(chat.id, assistantMessage);
 conversations.appendMessage(chat.id, createMessage('system', 'Calculator result', {
     toolCall: {
         name: 'calc',
@@ -29,6 +48,7 @@ conversations.appendMessage(chat.id, createMessage('system', 'Calculator result'
 conversations.renameConversation(chat.id, 'Persistent chat');
 conversations.setMemoryEnabled(chat.id, false);
 conversations.setAgentModeEnabled(chat.id, true);
+conversations.setThinkingLevel(chat.id, 'high');
 conversations.setSkillIds(chat.id, ['review']);
 
 const reloaded = new ConversationManager({
@@ -44,8 +64,17 @@ if (reloadedChat.title !== 'Persistent chat')
 if (reloadedChat.messages[0].content !== 'Persist this chat')
     throw new Error('Persisted message was not loaded');
 
-if (reloadedChat.messages[1].toolCall?.name !== 'calc')
+if (reloadedChat.messages[2].toolCall?.name !== 'calc')
     throw new Error('Persisted tool call metadata was not loaded');
+
+if (reloadedChat.messages[1].reasoning?.content !== 'Stored reasoning summary')
+    throw new Error('Persisted reasoning metadata was not loaded');
+
+if (reloadedChat.messages[1].usage?.reasoningTokens !== 4)
+    throw new Error('Persisted usage metadata was not loaded');
+
+if (reloadedChat.thinkingLevel !== 'high')
+    throw new Error(`Persisted thinking level was not loaded: ${reloadedChat.thinkingLevel}`);
 
 if (reloadedChat.memoryEnabled !== false)
     throw new Error('Persisted memory-enabled flag was not loaded');

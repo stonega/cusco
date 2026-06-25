@@ -1,5 +1,8 @@
 import GLib from 'gi://GLib?version=2.0';
 
+import { DEFAULT_THINKING_LEVEL, normalizeThinkingLevel } from '../providers/thinking.js';
+import { normalizeTokenUsage } from '../providers/usage.js';
+
 const NEW_CHAT_TITLE = 'New chat';
 const TITLE_MAX_LENGTH = 42;
 
@@ -31,10 +34,41 @@ function normalizeMessage(message) {
         role: message.role,
         content: String(message.content ?? ''),
         attachments: Array.isArray(message.attachments) ? message.attachments.map((attachment) => ({ ...attachment })) : [],
+        reasoning: normalizeReasoning(message.reasoning),
+        usage: normalizeUsage(message.usage),
         toolCall: message.toolCall ? { ...message.toolCall } : null,
         cronRun: message.cronRun ? { ...message.cronRun } : null,
         createdAt: message.createdAt ?? now(),
     };
+}
+
+function normalizeReasoning(reasoning) {
+    if (typeof reasoning === 'string') {
+        const content = reasoning.trim();
+        return content ? { content } : null;
+    }
+
+    if (!reasoning || typeof reasoning !== 'object' || Array.isArray(reasoning))
+        return null;
+
+    const content = String(reasoning.content ?? reasoning.text ?? '').trim();
+
+    if (!content)
+        return null;
+
+    return {
+        content,
+        providerId: String(reasoning.providerId ?? ''),
+        modelId: String(reasoning.modelId ?? ''),
+        thinkingLevel: reasoning.thinkingLevel
+            ? normalizeThinkingLevel(reasoning.thinkingLevel)
+            : '',
+        createdAt: reasoning.createdAt ?? now(),
+    };
+}
+
+function normalizeUsage(usage) {
+    return normalizeTokenUsage(usage);
 }
 
 function normalizeConversationType(value) {
@@ -42,7 +76,7 @@ function normalizeConversationType(value) {
 }
 
 export class ConversationManager {
-    constructor({ providerId, modelId, store = null }) {
+    constructor({ providerId, modelId, thinkingLevel = DEFAULT_THINKING_LEVEL, store = null }) {
         this._store = store;
         const stored = this._loadStoredConversations();
 
@@ -50,6 +84,7 @@ export class ConversationManager {
         this._activeConversationId = null;
         this._defaultProviderId = providerId;
         this._defaultModelId = modelId;
+        this._defaultThinkingLevel = normalizeThinkingLevel(thinkingLevel);
 
         if (stored.activeConversationId && this.getConversation(stored.activeConversationId))
             this._activeConversationId = stored.activeConversationId;
@@ -82,6 +117,7 @@ export class ConversationManager {
             title: options.title ?? NEW_CHAT_TITLE,
             providerId: options.providerId ?? this._defaultProviderId,
             modelId: options.modelId ?? this._defaultModelId,
+            thinkingLevel: normalizeThinkingLevel(options.thinkingLevel ?? this._defaultThinkingLevel),
             messages: options.messages ? options.messages.map(normalizeMessage) : [],
             archived: false,
             memoryEnabled: options.memoryEnabled !== false,
@@ -170,6 +206,7 @@ export class ConversationManager {
             modelId: conversation.modelId,
             memoryEnabled: conversation.memoryEnabled !== false,
             agentModeEnabled: Boolean(conversation.agentModeEnabled),
+            thinkingLevel: normalizeThinkingLevel(conversation.thinkingLevel),
             folderId: conversation.folderId,
             tags: conversation.tags,
             profileId: conversation.profileId,
@@ -278,6 +315,18 @@ export class ConversationManager {
         return conversation;
     }
 
+    setThinkingLevel(conversationId, level) {
+        const conversation = this.getConversation(conversationId);
+
+        if (!conversation)
+            throw new Error(`Conversation does not exist: ${conversationId}`);
+
+        conversation.thinkingLevel = normalizeThinkingLevel(level);
+        conversation.updatedAt = now();
+        this._persist();
+        return conversation;
+    }
+
     setSkillIds(conversationId, skillIds) {
         const conversation = this.getConversation(conversationId);
 
@@ -328,6 +377,24 @@ export class ConversationManager {
         conversation.updatedAt = now();
         this._persist();
         return conversation;
+    }
+
+    updateMessageReasoning(conversationId, messageId, reasoning) {
+        const { conversation, message } = this._getMessageRecord(conversationId, messageId);
+
+        message.reasoning = normalizeReasoning(reasoning);
+        conversation.updatedAt = now();
+        this._persist();
+        return message;
+    }
+
+    updateMessageUsage(conversationId, messageId, usage) {
+        const { conversation, message } = this._getMessageRecord(conversationId, messageId);
+
+        message.usage = normalizeUsage(usage);
+        conversation.updatedAt = now();
+        this._persist();
+        return message;
     }
 
     _moveToTop(conversationId) {

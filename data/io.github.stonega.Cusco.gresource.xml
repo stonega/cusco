@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <gresources>
   <gresource prefix="/io/github/stonega/Cusco">
+    <file>resources/attachment-symbolic.svg</file>
     <file>resources/git-branch-symbolic.svg</file>
     <file>resources/paper-plane-symbolic.svg</file>
     <file>resources/providers/provider-anthropic.svg</file>

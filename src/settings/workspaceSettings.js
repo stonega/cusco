@@ -1,7 +1,16 @@
 import Adw from 'gi://Adw?version=1';
 import Gtk from 'gi://Gtk?version=4.0';
+import Pango from 'gi://Pango?version=1.0';
 
-import { formatPromptVariables } from '../workspace/promptVariables.js';
+import { findPromptVariables, formatPromptVariables } from '../workspace/promptVariables.js';
+import { createMcpConfigGroup } from './mcpSettings.js';
+
+const ADD_PROMPT_HELPER_TEXT = [
+    'Write the reusable prompt here.',
+    'Add variables by wrapping a name in double braces, for example {{topic}}, {{tone}}, or {{team-name}}.',
+    'Variable names must start with a letter and can use letters, numbers, underscores, and hyphens.',
+    'Cusco highlights variables here and asks for their values when you insert the prompt.',
+].join(' ');
 
 function createActionButton(iconName, tooltipText, onClicked) {
     const button = new Gtk.Button({
@@ -25,15 +34,105 @@ function createSwitch(active, tooltipText, onChanged) {
     return control;
 }
 
-function promptForText(parent, heading, placeholder, onSave) {
-    const entry = new Gtk.Entry({
-        placeholder_text: placeholder,
+function textFromBuffer(buffer) {
+    const [start, end] = buffer.get_bounds();
+    return buffer.get_text(start, end, true);
+}
+
+function textBufferOffsetForStringIndex(text, index) {
+    return [...text.slice(0, index)].length;
+}
+
+function highlightPromptVariables(buffer, tag) {
+    const [start, end] = buffer.get_bounds();
+    const text = textFromBuffer(buffer);
+    buffer.remove_tag(tag, start, end);
+
+    for (const variable of findPromptVariables(text)) {
+        buffer.apply_tag(
+            tag,
+            buffer.get_iter_at_offset(textBufferOffsetForStringIndex(text, variable.start)),
+            buffer.get_iter_at_offset(textBufferOffsetForStringIndex(text, variable.end)),
+        );
+    }
+}
+
+function createTextInput(placeholder, options = {}) {
+    if (!options.multiline) {
+        const entry = new Gtk.Entry({
+            placeholder_text: placeholder,
+            hexpand: true,
+        });
+
+        return {
+            widget: entry,
+            getText: () => entry.get_text(),
+        };
+    }
+
+    const buffer = new Gtk.TextBuffer();
+
+    if (options.highlightVariables) {
+        const variableTag = new Gtk.TextTag({
+            name: 'prompt-variable',
+            background: '#d8ecff',
+            foreground: '#1c71d8',
+            weight: Pango.Weight.BOLD,
+        });
+        buffer.get_tag_table().add(variableTag);
+        buffer.connect('changed', () => highlightPromptVariables(buffer, variableTag));
+    }
+
+    const textView = new Gtk.TextView({
+        buffer,
+        accepts_tab: false,
+        hexpand: true,
+        vexpand: true,
+        wrap_mode: Gtk.WrapMode.WORD_CHAR,
+    });
+    textView.add_css_class('cusco-prompt-editor');
+
+    const scroller = new Gtk.ScrolledWindow({
+        child: textView,
+        min_content_width: 560,
+        min_content_height: 160,
+        max_content_height: 280,
+        propagate_natural_height: true,
+    });
+
+    return {
+        widget: scroller,
+        getText: () => textFromBuffer(buffer),
+    };
+}
+
+function createTextInputContent(input, placeholder, options = {}) {
+    if (!options.multiline)
+        return input.widget;
+
+    const content = new Gtk.Box({
+        orientation: Gtk.Orientation.VERTICAL,
+        spacing: 8,
         hexpand: true,
     });
+    const helperText = new Gtk.Label({
+        label: placeholder,
+        wrap: true,
+        xalign: 0,
+    });
+    helperText.add_css_class('cusco-prompt-help-text');
+    content.append(helperText);
+    content.append(input.widget);
+    return content;
+}
+
+function promptForText(parent, heading, placeholder, onSave, options = {}) {
+    const input = createTextInput(placeholder, options);
+    const content = createTextInputContent(input, placeholder, options);
     const dialog = new Adw.AlertDialog({
         heading,
     });
-    dialog.set_extra_child(entry);
+    dialog.set_extra_child(content);
     dialog.add_response('cancel', 'Cancel');
     dialog.add_response('save', 'Save');
     dialog.set_default_response('save');
@@ -43,7 +142,7 @@ function promptForText(parent, heading, placeholder, onSave) {
         if (dialog.choose_finish(result) !== 'save')
             return;
 
-        onSave(entry.get_text());
+        onSave(input.getText());
     });
 }
 
@@ -124,7 +223,13 @@ function addSkillRows(group, workspaceManager, refresh) {
     return rows;
 }
 
-export function createWorkspaceSettingsPage(parent, workspaceManager, onChanged = () => {}) {
+export function createWorkspaceSettingsPage(parent, workspaceManager, mcpManagerOrOnChanged = null, maybeOnChanged = null) {
+    const mcpManager = typeof mcpManagerOrOnChanged === 'function'
+        ? null
+        : mcpManagerOrOnChanged;
+    const onChanged = typeof mcpManagerOrOnChanged === 'function'
+        ? mcpManagerOrOnChanged
+        : maybeOnChanged ?? (() => {});
     const page = new Adw.PreferencesPage({
         title: 'Workspace',
         icon_name: 'folder-documents-symbolic',
@@ -145,13 +250,19 @@ export function createWorkspaceSettingsPage(parent, workspaceManager, onChanged 
         subtitle: 'Create a reusable prompt snippet.',
     });
     addPromptRow.add_suffix(createActionButton('list-add-symbolic', 'Add prompt', () => {
-        promptForText(parent, 'Add Prompt', 'Prompt text', (content) => {
-            workspaceManager.createPrompt({
-                title: content.slice(0, 48) || 'Untitled Prompt',
-                content,
-            });
-            refresh();
-        });
+        promptForText(
+            parent,
+            'Add Prompt',
+            ADD_PROMPT_HELPER_TEXT,
+            (content) => {
+                workspaceManager.createPrompt({
+                    title: content.slice(0, 48) || 'Untitled Prompt',
+                    content,
+                });
+                refresh();
+            },
+            { multiline: true, highlightVariables: true },
+        );
     }));
     promptsGroup.add(addPromptRow);
     let promptRows = [];
@@ -193,6 +304,10 @@ export function createWorkspaceSettingsPage(parent, workspaceManager, onChanged 
 
     page.add(promptsGroup);
     page.add(profilesGroup);
+
+    if (mcpManager)
+        page.add(createMcpConfigGroup(parent, mcpManager, onChanged));
+
     return page;
 }
 

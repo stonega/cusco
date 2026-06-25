@@ -11,6 +11,7 @@ import {
     OpenAiCompatibleChatProvider,
     OpenAiResponsesProvider,
 } from './remoteProvider.js';
+import { getSupportedThinkingLevels } from './thinking.js';
 import { createDefaultApiKeyStore } from '../secrets/apiKeyStore.js';
 
 const SETTINGS_SCHEMA_ID = 'io.github.stonega.Cusco';
@@ -256,6 +257,10 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         apiKeyRequired: false,
         apiKeyConfigured: false,
         defaultModelId: 'mock-balanced',
+        thinking: {
+            api: 'mock',
+            levels: ['off', 'auto', 'low', 'medium', 'high'],
+        },
         models: [
             {
                 id: 'mock-balanced',
@@ -282,6 +287,11 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         apiKeyEnvVar: 'OPENAI_API_KEY',
         baseUrl: 'https://api.openai.com/v1',
         defaultModelId: 'gpt-5.5',
+        thinking: {
+            api: 'openai-responses',
+            levels: ['off', 'auto', 'low', 'medium', 'high'],
+            summary: 'auto',
+        },
         models: [
             {
                 id: 'gpt-5.5',
@@ -297,6 +307,7 @@ export const DEFAULT_PROVIDER_CONFIGS = [
                 id: 'gpt-4.1',
                 name: 'GPT-4.1',
                 description: 'Smart non-reasoning model.',
+                thinking: false,
             },
         ],
     },
@@ -313,6 +324,11 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         apiKeyEnvVar: 'ANTHROPIC_API_KEY',
         baseUrl: 'https://api.anthropic.com/v1',
         defaultModelId: 'claude-sonnet-4-6',
+        thinking: {
+            api: 'anthropic-adaptive',
+            levels: ['off', 'auto', 'low', 'medium', 'high'],
+            display: 'summarized',
+        },
         models: [
             {
                 id: 'claude-opus-4-8',
@@ -328,6 +344,17 @@ export const DEFAULT_PROVIDER_CONFIGS = [
                 id: 'claude-haiku-4-5-20251001',
                 name: 'Claude Haiku 4.5',
                 description: 'Fastest Claude model with near-frontier intelligence.',
+                thinking: {
+                    api: 'anthropic-budget',
+                    levels: ['off', 'auto', 'low', 'medium', 'high'],
+                    display: 'summarized',
+                    budgets: {
+                        auto: 2048,
+                        low: 1024,
+                        medium: 2048,
+                        high: 3072,
+                    },
+                },
             },
         ],
     },
@@ -807,6 +834,15 @@ export class ProviderConfigStore {
         const model = provider.models.find((item) => item.id === modelId) ?? this.getDefaultModel(provider.id);
 
         return { provider, model };
+    }
+
+    getThinkingLevels(providerId, modelId = '') {
+        const { provider, model } = this.resolve(providerId, modelId);
+        return getSupportedThinkingLevels(provider, model);
+    }
+
+    supportsThinking(providerId, modelId = '') {
+        return this.getThinkingLevels(providerId, modelId).length > 0;
     }
 
     setProviderEnabled(providerId, enabled) {

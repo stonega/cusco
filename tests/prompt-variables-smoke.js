@@ -1,5 +1,6 @@
 import {
     extractPromptVariables,
+    findPromptVariables,
     formatPromptVariables,
     renderPromptTemplate,
 } from '../src/workspace/promptVariables.js';
@@ -23,6 +24,15 @@ assertDeepEqual(
     extractPromptVariables(template),
     ['tone', 'person', 'topic_1', 'team-name'],
     'Prompt variables were not extracted in first-use order',
+);
+
+assertDeepEqual(
+    findPromptVariables('Use {{tone}} and {{ person }}.'),
+    [
+        { name: 'tone', start: 4, end: 12 },
+        { name: 'person', start: 17, end: 29 },
+    ],
+    'Prompt variable ranges were not found',
 );
 
 assertEqual(

@@ -17,6 +17,8 @@ export function createMessage(role, content, options = {}) {
         role,
         content,
         attachments: Array.isArray(options.attachments) ? options.attachments : [],
+        reasoning: options.reasoning ?? null,
+        usage: options.usage ?? null,
         toolCall: options.toolCall ?? null,
         cronRun: options.cronRun ?? null,
         createdAt: new Date().toISOString(),

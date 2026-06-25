@@ -1,6 +1,8 @@
 import GLib from 'gi://GLib?version=2.0';
 
 import { ChatProvider } from './provider.js';
+import { normalizeThinkingLevel } from './thinking.js';
+import { normalizeTokenUsage } from './usage.js';
 
 const STREAM_DELAY_MS = 35;
 
@@ -21,6 +23,15 @@ function streamChunks(text) {
     return text.match(/\S+\s*/g) ?? [text];
 }
 
+function estimateTokens(text) {
+    const normalized = String(text ?? '').trim();
+
+    if (!normalized)
+        return 0;
+
+    return Math.max(1, Math.ceil(normalized.length / 4));
+}
+
 export class MockProvider extends ChatProvider {
     constructor() {
         super({
@@ -32,6 +43,26 @@ export class MockProvider extends ChatProvider {
     async *streamChat(messages, options = {}) {
         const latestUserMessage = messages.findLast((message) => message.role === 'user');
         const response = this._buildResponse(latestUserMessage?.content ?? '', options);
+        const thinkingLevel = options.thinkingLevel === undefined
+            ? 'off'
+            : normalizeThinkingLevel(options.thinkingLevel);
+
+        if (thinkingLevel !== 'off') {
+            const reasoningText = `Mock reasoning summary (${thinkingLevel}): identified the latest user prompt and selected a local canned response.`;
+            yield {
+                type: 'usage',
+                usage: normalizeTokenUsage({
+                    inputTokens: estimateTokens(latestUserMessage?.content ?? ''),
+                    outputTokens: estimateTokens(response),
+                    reasoningTokens: estimateTokens(reasoningText),
+                    estimated: true,
+                }),
+            };
+            yield {
+                type: 'reasoning',
+                text: reasoningText,
+            };
+        }
 
         for (const chunk of streamChunks(response)) {
             if (isCancelled(options.cancellable))

@@ -1,9 +1,10 @@
 import { AppSettingsStore } from '../src/settings/appSettings.js';
 
 class MemorySettings {
-    constructor({ booleans = {}, uints = {} } = {}) {
+    constructor({ booleans = {}, uints = {}, strings = {} } = {}) {
         this._booleans = { ...booleans };
         this._uints = { ...uints };
+        this._strings = { ...strings };
     }
 
     get_boolean(key) {
@@ -23,6 +24,15 @@ class MemorySettings {
         this._uints[key] = value;
         return true;
     }
+
+    get_string(key) {
+        return this._strings[key] ?? '';
+    }
+
+    set_string(key, value) {
+        this._strings[key] = String(value ?? '');
+        return true;
+    }
 }
 
 const settings = new MemorySettings({
@@ -35,6 +45,9 @@ const settings = new MemorySettings({
     },
     uints: {
         'response-timeout-seconds': 90,
+    },
+    strings: {
+        'thinking-level': 'high',
     },
 });
 const appSettings = new AppSettingsStore({ settings });
@@ -51,6 +64,9 @@ if (appSettings.responseTimeoutSeconds !== 90)
 if (appSettings.providerFallbackEnabled !== true)
     throw new Error('Provider fallback preference was not loaded');
 
+if (appSettings.thinkingLevel !== 'high')
+    throw new Error(`Thinking level preference was not loaded: ${appSettings.thinkingLevel}`);
+
 if (appSettings.highContrastEnabled !== true || appSettings.reducedMotionEnabled !== false)
     throw new Error('Accessibility preferences were not loaded');
 
@@ -58,6 +74,7 @@ appSettings.setSendWithEnter(true);
 appSettings.setAutoModeEnabled(false);
 appSettings.setResponseTimeoutSeconds(2);
 appSettings.setProviderFallbackEnabled(false);
+appSettings.setThinkingLevel('low');
 appSettings.setHighContrastEnabled(false);
 appSettings.setReducedMotionEnabled(true);
 
@@ -72,6 +89,9 @@ if (settings.get_uint('response-timeout-seconds') !== 5)
 
 if (settings.get_boolean('provider-fallback-enabled') !== false)
     throw new Error('Provider fallback preference was not persisted');
+
+if (settings.get_string('thinking-level') !== 'low')
+    throw new Error('Thinking level preference was not persisted');
 
 if (settings.get_boolean('high-contrast-enabled') !== false || settings.get_boolean('reduced-motion-enabled') !== true)
     throw new Error('Accessibility preferences were not persisted');

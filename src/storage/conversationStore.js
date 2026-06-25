@@ -1,6 +1,9 @@
 import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 
+import { DEFAULT_THINKING_LEVEL, normalizeThinkingLevel } from '../providers/thinking.js';
+import { normalizeTokenUsage } from '../providers/usage.js';
+
 const APP_ID = 'io.github.stonega.Cusco';
 const DATABASE_VERSION = 1;
 
@@ -30,6 +33,8 @@ function normalizeMessage(message) {
         attachments: Array.isArray(message?.attachments)
             ? message.attachments.map((attachment) => ({ ...attachment }))
             : [],
+        reasoning: normalizeReasoning(message?.reasoning),
+        usage: normalizeTokenUsage(message?.usage),
         toolCall: message?.toolCall && typeof message.toolCall === 'object'
             ? { ...message.toolCall }
             : null,
@@ -37,6 +42,31 @@ function normalizeMessage(message) {
             ? { ...message.cronRun }
             : null,
         createdAt: normalizeString(message?.createdAt, new Date().toISOString()),
+    };
+}
+
+function normalizeReasoning(reasoning) {
+    if (typeof reasoning === 'string') {
+        const content = reasoning.trim();
+        return content ? { content } : null;
+    }
+
+    if (!reasoning || typeof reasoning !== 'object' || Array.isArray(reasoning))
+        return null;
+
+    const content = normalizeString(reasoning.content ?? reasoning.text).trim();
+
+    if (!content)
+        return null;
+
+    return {
+        content,
+        providerId: normalizeString(reasoning.providerId),
+        modelId: normalizeString(reasoning.modelId),
+        thinkingLevel: reasoning.thinkingLevel
+            ? normalizeThinkingLevel(reasoning.thinkingLevel)
+            : '',
+        createdAt: normalizeString(reasoning.createdAt, new Date().toISOString()),
     };
 }
 
@@ -52,6 +82,7 @@ function normalizeConversation(conversation) {
         title: normalizeString(conversation?.title, 'New chat'),
         providerId: normalizeString(conversation?.providerId, 'mock'),
         modelId: normalizeString(conversation?.modelId),
+        thinkingLevel: normalizeThinkingLevel(conversation?.thinkingLevel, DEFAULT_THINKING_LEVEL),
         messages: Array.isArray(conversation?.messages)
             ? conversation.messages.map(normalizeMessage)
             : [],
