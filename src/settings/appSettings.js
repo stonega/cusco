@@ -162,7 +162,7 @@ export function createApplicationSettingsPage(appSettings, onChanged) {
 
     const sendWithEnterRow = new Adw.SwitchRow({
         title: 'Send with Enter',
-        subtitle: 'When off, use the send button.',
+        subtitle: 'When off, use Ctrl+Enter to send.',
         active: appSettings.sendWithEnter,
     });
     sendWithEnterRow.connect('notify::active', () => {

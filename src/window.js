@@ -41,10 +41,9 @@ import { exportConversation } from './workspace/exports.js';
 import { extractPromptVariables, formatPromptVariables, renderPromptTemplate } from './workspace/promptVariables.js';
 import { WorkspaceManager } from './workspace/workspace.js';
 
-const PAPER_PLANE_ICON_FILE = 'paper-plane-symbolic.svg';
 const GIT_BRANCH_ICON_FILE = 'git-branch-symbolic.svg';
 const ATTACHMENT_ICON_FILE = 'attachment-symbolic.svg';
-const STOP_ICON_NAME = 'process-stop-symbolic';
+const PROMPT_ICON_FILE = 'prompt-symbolic.svg';
 const PROVIDER_PICKER_ID_COLUMN = 0;
 const PROVIDER_PICKER_NAME_COLUMN = 1;
 const PROVIDER_PICKER_ICON_COLUMN = 2;
@@ -84,6 +83,27 @@ function createBundledIcon(filename, fallbackIconName) {
 
     image.set_pixel_size(16);
     return image;
+}
+
+function createLabeledControlRow(label, control) {
+    const row = new Gtk.Box({
+        orientation: Gtk.Orientation.HORIZONTAL,
+        spacing: 12,
+        margin_top: 3,
+        margin_bottom: 3,
+        margin_start: 3,
+        margin_end: 3,
+    });
+    const labelWidget = new Gtk.Label({
+        label,
+        xalign: 0,
+        hexpand: true,
+        valign: Gtk.Align.CENTER,
+    });
+
+    row.append(labelWidget);
+    row.append(control);
+    return row;
 }
 
 function getProviderErrorMessage(error) {
@@ -172,7 +192,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         this._isRefreshingConversations = false;
         this._isUpdatingProviderControls = false;
-        this._isUpdatingSkillControls = false;
         this._activeChatCancellable = null;
         this.connect('close-request', () => {
             this._stopActiveConversation();
@@ -193,9 +212,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const headerBar = new Adw.HeaderBar();
         const title = new Adw.WindowTitle({
             title: 'Cusco',
-            subtitle: 'GNOME AI chat',
+            subtitle: '0 est. tokens · 0 messages',
         });
 
+        this._windowTitle = title;
         headerBar.set_title_widget(title);
 
         const split = new Gtk.Paned({
@@ -346,43 +366,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         this._providerPicker = this._createProviderPicker();
         this._modelPicker = new Gtk.ComboBoxText();
-        this._thinkingLevelPicker = new Gtk.ComboBoxText({
-            tooltip_text: 'Thinking level',
-        });
         this._populateProviderPicker();
         this._providerPicker.connect('changed', () => this._handleProviderChanged());
         this._modelPicker.connect('changed', () => this._handleModelChanged());
-        this._thinkingLevelPicker.connect('changed', () => this._handleThinkingLevelChanged());
-
-        this._memoryToggleButton = new Gtk.ToggleButton({
-            icon_name: 'user-bookmarks-symbolic',
-            tooltip_text: 'Use memories for this chat',
-        });
-        this._memoryToggleButton.connect('toggled', () => this._handleMemoryToggleChanged());
-
-        this._agentModeToggleButton = new Gtk.ToggleButton({
-            icon_name: 'applications-engineering-symbolic',
-            tooltip_text: 'Agent mode',
-        });
-        this._agentModeToggleButton.connect('toggled', () => this._handleAgentModeToggleChanged());
-
-        this._skillMenuButton = this._createSkillMenuButton();
-
-        this._usageLabel = new Gtk.Label({
-            label: '0 est. tokens · 0 messages',
-            xalign: 1,
-            hexpand: true,
-        });
-        this._usageLabel.add_css_class('caption');
-        this._usageLabel.add_css_class('dim-label');
-
-        composerMetaRow.append(this._providerPicker);
-        composerMetaRow.append(this._modelPicker);
-        composerMetaRow.append(this._thinkingLevelPicker);
-        composerMetaRow.append(this._memoryToggleButton);
-        composerMetaRow.append(this._agentModeToggleButton);
-        composerMetaRow.append(this._skillMenuButton);
-        composerMetaRow.append(this._usageLabel);
+        this._chatOptionsMenuButton = this._createChatOptionsMenuButton();
 
         this._messages = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
@@ -404,31 +391,101 @@ class CuscoWindow extends Adw.ApplicationWindow {
             spacing: 8,
         });
 
+        this._attachmentRow = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 6,
+            visible: false,
+        });
+        this._attachmentRow.add_css_class('cusco-attachment-row');
         this._attachmentLabel = new Gtk.Label({
             label: '',
             xalign: 0,
-            visible: false,
+            hexpand: true,
+            ellipsize: Pango.EllipsizeMode.END,
         });
         this._attachmentLabel.add_css_class('caption');
         this._attachmentLabel.add_css_class('dim-label');
+        this._removeAttachmentButton = new Gtk.Button({
+            icon_name: 'window-close-symbolic',
+            tooltip_text: 'Remove attachment',
+            valign: Gtk.Align.CENTER,
+        });
+        this._removeAttachmentButton.add_css_class('flat');
+        this._removeAttachmentButton.add_css_class('circular');
+        this._removeAttachmentButton.connect('clicked', () => this._clearPendingAttachments());
+        this._attachmentRow.append(this._attachmentLabel);
+        this._attachmentRow.append(this._removeAttachmentButton);
 
         this._attachButton = new Gtk.Button({
             tooltip_text: 'Attach file or image',
+            valign: Gtk.Align.CENTER,
         });
         this._attachButton.set_child(createBundledIcon(ATTACHMENT_ICON_FILE, 'mail-attachment-symbolic'));
         this._attachButton.connect('clicked', () => this._attachFileContext());
 
         this._promptMenuButton = this._createPromptMenuButton();
+        this._promptMenuButton.set_valign(Gtk.Align.CENTER);
 
-        this._composer = new Gtk.Entry({
-            placeholder_text: 'Message Cusco',
+        composerMetaRow.append(this._providerPicker);
+        composerMetaRow.append(this._modelPicker);
+        composerMetaRow.append(this._attachButton);
+        composerMetaRow.append(this._promptMenuButton);
+        composerMetaRow.append(this._chatOptionsMenuButton);
+
+        this._composerBuffer = new Gtk.TextBuffer();
+        this._composer = new Gtk.TextView({
+            buffer: this._composerBuffer,
+            accepts_tab: false,
+            hexpand: true,
+            top_margin: 8,
+            bottom_margin: 26,
+            left_margin: 10,
+            right_margin: 10,
+            wrap_mode: Gtk.WrapMode.WORD_CHAR,
+        });
+        this._composer.add_css_class('cusco-composer-text');
+
+        this._composerPlaceholder = new Gtk.Label({
+            label: 'Message Cusco',
+            xalign: 0,
+            yalign: 0,
+            halign: Gtk.Align.START,
+            valign: Gtk.Align.START,
+            margin_top: 10,
+            margin_start: 12,
+        });
+        this._composerPlaceholder.add_css_class('dim-label');
+        this._composerPlaceholder.set_can_target(false);
+
+        this._composerScroller = new Gtk.ScrolledWindow({
+            child: this._composer,
+            hexpand: true,
+            min_content_height: 88,
+            max_content_height: 176,
+            propagate_natural_height: true,
+            hscrollbar_policy: Gtk.PolicyType.NEVER,
+            vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+        });
+        this._composerScroller.add_css_class('cusco-composer-input');
+
+        const composerOverlay = new Gtk.Overlay({
+            child: this._composerScroller,
             hexpand: true,
         });
+        composerOverlay.add_overlay(this._composerPlaceholder);
 
-        this._sendButton = new Gtk.Button({
-            tooltip_text: 'Send',
+        this._composerHint = new Gtk.Label({
+            xalign: 1,
+            yalign: 1,
+            halign: Gtk.Align.END,
+            valign: Gtk.Align.END,
+            margin_end: 12,
+            margin_bottom: 8,
         });
-        this._sendButton.set_child(createBundledIcon(PAPER_PLANE_ICON_FILE, 'document-send-symbolic'));
+        this._composerHint.add_css_class('caption');
+        this._composerHint.add_css_class('dim-label');
+        this._composerHint.set_can_target(false);
+        composerOverlay.add_overlay(this._composerHint);
 
         const sendMessage = () => {
             if (this._activeChatCancellable) {
@@ -436,31 +493,40 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 return;
             }
 
-            const text = this._composer.get_text().trim();
+            const text = this._getComposerText().trim();
 
             if (!text)
                 return;
 
-            this._composer.set_text('');
+            this._setComposerText('');
             this._sendMessage(text).catch((error) => {
                 logError(error, 'Failed to stream provider response');
                 this._appendSystemError(getProviderErrorMessage(error));
             });
         };
 
-        this._composer.connect('activate', () => {
-            if (this._appSettings.sendWithEnter)
-                sendMessage();
-        });
-        this._sendButton.connect('clicked', sendMessage);
+        const composerKeyController = new Gtk.EventControllerKey();
+        composerKeyController.connect('key-pressed', (_controller, keyval, _keycode, state) => {
+            const isEnter = keyval === Gdk.KEY_Return || keyval === Gdk.KEY_KP_Enter;
+            const shiftPressed = (state & Gdk.ModifierType.SHIFT_MASK) !== 0;
+            const controlPressed = (state & Gdk.ModifierType.CONTROL_MASK) !== 0;
 
-        composerRow.append(this._attachButton);
-        composerRow.append(this._promptMenuButton);
-        composerRow.append(this._composer);
-        composerRow.append(this._sendButton);
+            if (isEnter && !shiftPressed && (this._appSettings.sendWithEnter || controlPressed)) {
+                sendMessage();
+                return true;
+            }
+
+            return false;
+        });
+        this._composer.add_controller(composerKeyController);
+        this._composerBuffer.connect('changed', () => this._syncComposerPlaceholder());
+        this._syncComposerPlaceholder();
+        this._syncComposerHint();
+
+        composerRow.append(composerOverlay);
 
         composerShell.append(composerMetaRow);
-        composerShell.append(this._attachmentLabel);
+        composerShell.append(this._attachmentRow);
         composerShell.append(composerRow);
 
         main.append(this._scroller);
@@ -503,8 +569,42 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     setComposerText(text) {
-        this._composer?.set_text(text);
+        this._setComposerText(text);
         this.focusComposer();
+    }
+
+    _getComposerText() {
+        if (!this._composerBuffer)
+            return '';
+
+        const [start, end] = this._composerBuffer.get_bounds();
+        return this._composerBuffer.get_text(start, end, true);
+    }
+
+    _setComposerText(text) {
+        if (!this._composerBuffer)
+            return;
+
+        this._composerBuffer.set_text(String(text ?? ''), -1);
+        const [, end] = this._composerBuffer.get_bounds();
+        this._composerBuffer.place_cursor(end);
+        this._syncComposerPlaceholder();
+    }
+
+    _syncComposerPlaceholder() {
+        if (!this._composerPlaceholder || !this._composerBuffer)
+            return;
+
+        this._composerPlaceholder.set_visible(this._composerBuffer.get_char_count() === 0);
+    }
+
+    _syncComposerHint(isBusy = false) {
+        if (!this._composerHint)
+            return;
+
+        this._composerHint.set_label(isBusy
+            ? 'Esc to stop'
+            : `${this._appSettings.sendWithEnter ? 'Enter' : 'Ctrl+Enter'} ↵ to send`);
     }
 
     selectConversation(conversationId) {
@@ -747,7 +847,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._populateProviderPicker();
         this._syncProviderControls(this._conversations.activeConversation);
         this._refreshPromptMenu();
-        this._refreshSkillMenu(this._conversations.activeConversation);
+        this._syncComposerHint();
         this._applyAccessibilityPreferences();
         this._refreshConversationList();
     }
@@ -949,15 +1049,21 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return attachments;
     }
 
+    _clearPendingAttachments() {
+        this._pendingAttachments = [];
+        this._updateAttachmentLabel();
+        this.focusComposer();
+    }
+
     _updateAttachmentLabel() {
         if (this._pendingAttachments.length === 0) {
-            this._attachmentLabel.set_visible(false);
             this._attachmentLabel.set_label('');
+            this._attachmentRow.set_visible(false);
             return;
         }
 
         this._attachmentLabel.set_label(`Attached: ${this._pendingAttachments.map((attachment) => attachment.name).join(', ')}`);
-        this._attachmentLabel.set_visible(true);
+        this._attachmentRow.set_visible(true);
     }
 
     _formatUserMessageContent(text, attachments) {
@@ -1375,8 +1481,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (!isCancellableCancelled(cancellable))
             cancellable.cancel();
 
-        this._sendButton?.set_sensitive(false);
-        this._sendButton?.set_tooltip_text('Stopping current response');
         return true;
     }
 
@@ -1748,26 +1852,67 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return picker;
     }
 
-    _createSkillMenuButton() {
+    _createChatOptionsMenuButton() {
         const menuButton = new Gtk.MenuButton({
-            icon_name: 'emblem-system-symbolic',
-            tooltip_text: 'Skills',
+            label: 'Chat Options',
+            tooltip_text: 'Chat options',
         });
         const popover = new Gtk.Popover();
+        const content = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 8,
+            margin_top: 10,
+            margin_bottom: 10,
+            margin_start: 10,
+            margin_end: 10,
+        });
 
+        this._thinkingLevelPicker = new Gtk.ComboBoxText({
+            tooltip_text: 'Thinking level',
+        });
+        this._thinkingLevelPicker.connect('changed', () => this._handleThinkingLevelChanged());
+
+        this._memoryToggleButton = new Gtk.Switch({
+            tooltip_text: 'Use memories for this chat',
+            valign: Gtk.Align.CENTER,
+        });
+        this._memoryToggleButton.connect('notify::active', () => this._handleMemoryToggleChanged());
+
+        this._agentModeToggleButton = new Gtk.Switch({
+            tooltip_text: 'Agent mode',
+            valign: Gtk.Align.CENTER,
+        });
+        this._agentModeToggleButton.connect('notify::active', () => this._handleAgentModeToggleChanged());
+
+        this._skillsToggleButton = new Gtk.Switch({
+            tooltip_text: 'Use enabled skills for this chat',
+            valign: Gtk.Align.CENTER,
+        });
+        this._skillsToggleButton.connect('notify::active', () => this._handleSkillsToggleChanged());
+
+        content.append(createLabeledControlRow('Thinking', this._thinkingLevelPicker));
+        content.append(createLabeledControlRow('Memory', this._memoryToggleButton));
+        content.append(createLabeledControlRow('Agent mode', this._agentModeToggleButton));
+        content.append(createLabeledControlRow('Skills', this._skillsToggleButton));
+
+        popover.set_child(new Gtk.ScrolledWindow({
+            child: content,
+            max_content_height: 240,
+            min_content_width: 320,
+            propagate_natural_height: true,
+        }));
+        this._chatOptionsMenuButton = menuButton;
         menuButton.set_popover(popover);
-        this._skillMenuPopover = popover;
-        this._refreshSkillMenu();
         return menuButton;
     }
 
     _createPromptMenuButton() {
         const menuButton = new Gtk.MenuButton({
-            icon_name: 'insert-text-symbolic',
             tooltip_text: 'Insert prompt',
         });
         const popover = new Gtk.Popover();
 
+        menuButton.set_child(createBundledIcon(PROMPT_ICON_FILE, 'insert-text-symbolic'));
         menuButton.set_popover(popover);
         this._promptMenuButton = menuButton;
         this._promptMenuPopover = popover;
@@ -1937,97 +2082,19 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _insertPromptContent(content) {
-        const existingText = this._composer.get_text();
-        const cursorPosition = Math.max(this._composer.get_position(), 0);
+        const existingText = this._getComposerText();
+        const cursorIter = this._composerBuffer.get_iter_at_mark(this._composerBuffer.get_insert());
+        const cursorPosition = Math.max(cursorIter.get_offset(), 0);
         const before = existingText.slice(0, cursorPosition);
         const after = existingText.slice(cursorPosition);
         const beforeSeparator = before && !/\s$/.test(before) ? ' ' : '';
         const afterSeparator = after && !/^\s/.test(after) ? ' ' : '';
         const nextText = `${before}${beforeSeparator}${content}${afterSeparator}${after}`;
+        const nextCursorPosition = before.length + beforeSeparator.length + content.length;
 
-        this._composer.set_text(nextText);
-        this._composer.set_position(before.length + beforeSeparator.length + content.length);
+        this._setComposerText(nextText);
+        this._composerBuffer.place_cursor(this._composerBuffer.get_iter_at_offset(nextCursorPosition));
         this.focusComposer();
-    }
-
-    _refreshSkillMenu(conversation = this._conversations?.activeConversation) {
-        if (!this._skillMenuPopover || !this._skillMenuButton)
-            return;
-
-        this._isUpdatingSkillControls = true;
-
-        const selectedSkillIds = new Set(conversation?.skillIds ?? []);
-        const enabledSkills = this._workspace.enabledSkills;
-        const box = new Gtk.Box({
-            orientation: Gtk.Orientation.VERTICAL,
-            spacing: 4,
-            margin_top: 8,
-            margin_bottom: 8,
-            margin_start: 8,
-            margin_end: 8,
-        });
-
-        if (enabledSkills.length === 0) {
-            const emptyLabel = new Gtk.Label({
-                label: 'No enabled skills',
-                xalign: 0,
-            });
-            emptyLabel.add_css_class('dim-label');
-            box.append(emptyLabel);
-        }
-
-        for (const skill of enabledSkills) {
-            const row = new Gtk.Box({
-                orientation: Gtk.Orientation.HORIZONTAL,
-                spacing: 8,
-                margin_top: 3,
-                margin_bottom: 3,
-                margin_start: 3,
-                margin_end: 3,
-            });
-            const check = new Gtk.CheckButton({
-                active: selectedSkillIds.has(skill.id),
-                tooltip_text: skill.description || skill.path,
-            });
-            const labels = new Gtk.Box({
-                orientation: Gtk.Orientation.VERTICAL,
-                spacing: 2,
-                hexpand: true,
-            });
-            const nameLabel = new Gtk.Label({
-                label: skill.name,
-                xalign: 0,
-                hexpand: true,
-            });
-            const descriptionLabel = new Gtk.Label({
-                label: skill.description || skill.path,
-                xalign: 0,
-                hexpand: true,
-                wrap: true,
-            });
-            descriptionLabel.add_css_class('caption');
-            descriptionLabel.add_css_class('dim-label');
-
-            check.connect('toggled', () => {
-                if (this._isUpdatingSkillControls)
-                    return;
-
-                this._setConversationSkillSelected(skill.id, check.get_active());
-            });
-
-            labels.append(nameLabel);
-            labels.append(descriptionLabel);
-            row.append(check);
-            row.append(labels);
-            box.append(row);
-        }
-
-        const selectedCount = enabledSkills.filter((skill) => selectedSkillIds.has(skill.id)).length;
-        this._skillMenuButton.set_tooltip_text(selectedCount > 0
-            ? `${selectedCount} skill${selectedCount === 1 ? '' : 's'} selected`
-            : 'Skills');
-        this._skillMenuPopover.set_child(box);
-        this._isUpdatingSkillControls = false;
     }
 
     _syncProviderControls(conversation) {
@@ -2040,25 +2107,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._populateThinkingLevelPicker(conversation);
         this._memoryToggleButton.set_active(conversation.memoryEnabled !== false);
         this._agentModeToggleButton.set_active(Boolean(conversation.agentModeEnabled));
-        this._refreshSkillMenu(conversation);
+        this._skillsToggleButton.set_active(this._workspace.getSkillsForConversation(conversation).length > 0);
+        this._skillsToggleButton.set_sensitive(this._workspace.enabledSkills.length > 0);
         this._isUpdatingProviderControls = false;
-    }
-
-    _setConversationSkillSelected(skillId, selected) {
-        const conversation = this._conversations.activeConversation;
-
-        if (!conversation)
-            return;
-
-        const skillIds = new Set(conversation.skillIds ?? []);
-
-        if (selected)
-            skillIds.add(skillId);
-        else
-            skillIds.delete(skillId);
-
-        this._conversations.setSkillIds(conversation.id, [...skillIds]);
-        this._refreshSkillMenu(conversation);
     }
 
     _handleMemoryToggleChanged() {
@@ -2084,6 +2135,23 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return;
 
         this._conversations.setAgentModeEnabled(conversation.id, this._agentModeToggleButton.get_active());
+        this._refreshConversationList();
+    }
+
+    _handleSkillsToggleChanged() {
+        if (this._isUpdatingProviderControls)
+            return;
+
+        const conversation = this._conversations.activeConversation;
+
+        if (!conversation)
+            return;
+
+        const skillIds = this._skillsToggleButton.get_active()
+            ? this._workspace.enabledSkills.map((skill) => skill.id)
+            : [];
+
+        this._conversations.setSkillIds(conversation.id, skillIds);
         this._refreshConversationList();
     }
 
@@ -2517,7 +2585,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _updateUsageDisplay(conversation = this._conversations.activeConversation, pendingAssistantText = '') {
-        if (!this._usageLabel)
+        if (!this._windowTitle)
             return;
 
         const messages = [...(conversation?.messages ?? [])];
@@ -2526,24 +2594,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
             messages.push({ content: pendingAssistantText });
 
         const usage = estimateConversationUsage(messages);
-        this._usageLabel.set_label(`${usage.tokens} est. tokens · ${usage.messages} messages`);
+        this._windowTitle.set_subtitle(`${usage.tokens} est. tokens · ${usage.messages} messages`);
     }
 
     _setComposerBusy(isBusy) {
         this._composer.set_sensitive(!isBusy);
         this._attachButton.set_sensitive(!isBusy);
-        this._sendButton.set_sensitive(true);
-        this._sendButton.set_tooltip_text(isBusy ? 'Stop response' : 'Send');
-
-        if (isBusy) {
-            const stopIcon = new Gtk.Image({ icon_name: STOP_ICON_NAME });
-            stopIcon.set_pixel_size(16);
-            this._sendButton.set_child(stopIcon);
-            this._sendButton.add_css_class('destructive-action');
-        } else {
-            this._sendButton.set_child(createBundledIcon(PAPER_PLANE_ICON_FILE, 'document-send-symbolic'));
-            this._sendButton.remove_css_class('destructive-action');
-        }
+        this._syncComposerHint(isBusy);
 
         this._newChatButton.set_sensitive(!isBusy);
         this._chatSearch.set_sensitive(!isBusy);
@@ -2557,7 +2614,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
         ));
         this._memoryToggleButton.set_sensitive(!isBusy);
         this._agentModeToggleButton.set_sensitive(!isBusy);
-        this._skillMenuButton.set_sensitive(!isBusy);
+        this._skillsToggleButton.set_sensitive(!isBusy && this._workspace.enabledSkills.length > 0);
+        this._chatOptionsMenuButton.set_sensitive(!isBusy);
         this._settingsButton.set_sensitive(!isBusy);
     }
 

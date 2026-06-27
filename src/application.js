@@ -5,10 +5,11 @@ import GLib from 'gi://GLib?version=2.0';
 import GObject from 'gi://GObject?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
 
+import { APP_ID } from './appInfo.js';
 import { CuscoWindow } from './window.js';
 import { installSearchProvider } from './searchProvider.js';
 
-export const APP_ID = 'io.github.stonega.Cusco';
+export { APP_ID };
 
 let applicationStylesInstalled = false;
 

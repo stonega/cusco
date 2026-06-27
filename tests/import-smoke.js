@@ -1,4 +1,10 @@
-import { APP_ID, CuscoApplication } from '../src/application.js';
+import {
+    APP_AUTHOR,
+    APP_ID,
+    APP_NAME,
+    APP_VERSION,
+} from '../src/appInfo.js';
+import { APP_ID as APPLICATION_APP_ID, CuscoApplication } from '../src/application.js';
 import { buildAgentModeSystemPrompt, parseAgentToolCall } from '../src/chat/agentMode.js';
 import { ConversationManager } from '../src/chat/conversation.js';
 import { markdownToPangoMarkup, parseMarkdownBlocks } from '../src/chat/markdown.js';
@@ -20,6 +26,7 @@ import {
 } from '../src/providers/remoteProvider.js';
 import { MemoryApiKeyStore, SecretServiceApiKeyStore } from '../src/secrets/apiKeyStore.js';
 import { ConversationSearchIndex, installSearchProvider } from '../src/searchProvider.js';
+import { createAppInfoSettingsPage } from '../src/settings/appInfoSettings.js';
 import { AppSettingsStore, createApplicationSettingsPage } from '../src/settings/appSettings.js';
 import { createMemorySettingsPage } from '../src/settings/memorySettings.js';
 import { createMcpSettingsPage } from '../src/settings/mcpSettings.js';
@@ -37,6 +44,12 @@ import { WorkspaceManager } from '../src/workspace/workspace.js';
 
 if (APP_ID !== 'io.github.stonega.Cusco')
     throw new Error(`Unexpected application id: ${APP_ID}`);
+
+if (APPLICATION_APP_ID !== APP_ID)
+    throw new Error(`Unexpected application module id: ${APPLICATION_APP_ID}`);
+
+if (APP_NAME !== 'Cusco' || APP_VERSION.length === 0 || APP_AUTHOR.length === 0)
+    throw new Error('App info metadata did not import correctly');
 
 if (typeof CuscoApplication !== 'function')
     throw new Error('CuscoApplication did not import as a class');
@@ -102,6 +115,9 @@ if (typeof ConversationSearchIndex !== 'function' || typeof installSearchProvide
 
 if (typeof createApplicationSettingsPage !== 'function')
     throw new Error('createApplicationSettingsPage did not import as a function');
+
+if (typeof createAppInfoSettingsPage !== 'function')
+    throw new Error('createAppInfoSettingsPage did not import as a function');
 
 if (typeof createMemorySettingsPage !== 'function')
     throw new Error('createMemorySettingsPage did not import as a function');

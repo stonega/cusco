@@ -4,6 +4,7 @@
     <file>resources/attachment-symbolic.svg</file>
     <file>resources/git-branch-symbolic.svg</file>
     <file>resources/paper-plane-symbolic.svg</file>
+    <file>resources/prompt-symbolic.svg</file>
     <file>resources/providers/provider-anthropic.svg</file>
     <file>resources/providers/provider-custom.svg</file>
     <file>resources/providers/provider-deepseek.svg</file>

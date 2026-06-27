@@ -275,35 +275,7 @@ export function createWorkspaceSettingsPage(parent, workspaceManager, mcpManager
     refreshers.push(renderPrompts);
     renderPrompts();
 
-    const profilesGroup = new Adw.PreferencesGroup({
-        title: 'Agent Profiles',
-    });
-    const addProfileRow = new Adw.ActionRow({
-        title: 'Add profile',
-        subtitle: 'Create a reusable agent system prompt.',
-    });
-    addProfileRow.add_suffix(createActionButton('list-add-symbolic', 'Add profile', () => {
-        promptForText(parent, 'Add Agent Profile', 'System prompt', (systemPrompt) => {
-            workspaceManager.createProfile({
-                name: systemPrompt.slice(0, 48) || 'Agent Profile',
-                systemPrompt,
-            });
-            refresh();
-        });
-    }));
-    profilesGroup.add(addProfileRow);
-    let profileRows = [];
-    const renderProfiles = () => {
-        for (const row of profileRows)
-            profilesGroup.remove(row);
-
-        profileRows = addRecordRows(profilesGroup, workspaceManager.profiles, 'profiles', workspaceManager, refresh);
-    };
-    refreshers.push(renderProfiles);
-    renderProfiles();
-
     page.add(promptsGroup);
-    page.add(profilesGroup);
 
     if (mcpManager)
         page.add(createMcpConfigGroup(parent, mcpManager, onChanged));

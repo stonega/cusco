@@ -1,5 +1,6 @@
 cusco_sources = files(
   'main.js',
+  'appInfo.js',
   'application.js',
   'searchProvider.js',
   'window.js',
@@ -36,6 +37,7 @@ cron_sources = files(
 )
 
 settings_sources = files(
+  'settings/appInfoSettings.js',
   'settings/appSettings.js',
   'settings/memorySettings.js',
   'settings/mcpSettings.js',

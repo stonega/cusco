@@ -2,6 +2,7 @@ import Adw from 'gi://Adw?version=1';
 import Gtk from 'gi://Gtk?version=4.0';
 
 import { createProviderIcon } from '../providers/icons.js';
+import { createAppInfoSettingsPage } from './appInfoSettings.js';
 import { createApplicationSettingsPage } from './appSettings.js';
 import { createMemorySettingsPage } from './memorySettings.js';
 import { createSkillsSettingsPage, createWorkspaceSettingsPage } from './workspaceSettings.js';
@@ -370,6 +371,7 @@ export function presentProviderSettingsDialog(
 
     const page = createProviderSettingsPage(providerConfigs, onChanged);
     dialog.add(page);
+    dialog.add(createAppInfoSettingsPage());
 
     dialog.present(parent);
 }
