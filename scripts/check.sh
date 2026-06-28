@@ -21,6 +21,10 @@ gjs -m tests/remote-provider-adapters-smoke.js
 gjs -m tests/remote-provider-http-smoke.js
 gjs -m tests/provider-settings-smoke.js
 
+if command -v glib-compile-schemas >/dev/null 2>&1; then
+  glib-compile-schemas --strict --dry-run data
+fi
+
 if command -v meson >/dev/null 2>&1; then
   if [ -d builddir ]; then
     meson setup builddir --wipe
