@@ -12,10 +12,15 @@
     </p>
   </description>
   <launchable type="desktop-id">@APP_ID@.desktop</launchable>
+  <developer id="io.github.stonega">
+    <name>stonega</name>
+  </developer>
+  <url type="homepage">https://github.com/stonega/cusco</url>
+  <content_rating type="oars-1.1" />
   <provides>
     <binary>cusco</binary>
   </provides>
   <releases>
-    <release version="@VERSION@" date="2026-06-27" />
+    <release version="@VERSION@" date="2026-06-28" />
   </releases>
 </component>
