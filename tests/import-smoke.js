@@ -32,7 +32,12 @@ import { createMemorySettingsPage } from '../src/settings/memorySettings.js';
 import { createMcpSettingsPage } from '../src/settings/mcpSettings.js';
 import { createProviderSettingsPage, presentProviderSettingsDialog } from '../src/settings/providerSettings.js';
 import { createSkillsSettingsPage, createWorkspaceSettingsPage } from '../src/settings/workspaceSettings.js';
-import { buildSkillContext, discoverInstalledSkills, loadSkillFromPath } from '../src/skills/skills.js';
+import {
+    buildSkillContext,
+    discoverInstalledSkills,
+    getAlwaysAvailableSkills,
+    loadSkillFromPath,
+} from '../src/skills/skills.js';
 import { ConversationFileStore } from '../src/storage/conversationStore.js';
 import { MemoryFileStore } from '../src/storage/memoryStore.js';
 import { WorkspaceFileStore } from '../src/storage/workspaceStore.js';
@@ -107,7 +112,10 @@ if (typeof ToolManager !== 'function' || typeof calculateExpression !== 'functio
 if (typeof createToolPermissionDecision !== 'function')
     throw new Error('Tool permission helpers did not import');
 
-if (typeof buildSkillContext !== 'function' || typeof discoverInstalledSkills !== 'function' || typeof loadSkillFromPath !== 'function')
+if (typeof buildSkillContext !== 'function'
+    || typeof discoverInstalledSkills !== 'function'
+    || typeof getAlwaysAvailableSkills !== 'function'
+    || typeof loadSkillFromPath !== 'function')
     throw new Error('Skill helpers did not import');
 
 if (typeof ConversationSearchIndex !== 'function' || typeof installSearchProvider !== 'function')

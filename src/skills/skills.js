@@ -9,6 +9,37 @@ export const DEFAULT_GLOBAL_SKILLS_PATH = GLib.build_filenamev([
 ]);
 
 const MAX_SKILL_BYTES = 120000;
+const CUSCO_MCP_SETUP_SKILL_CONTENT = [
+    '# Cusco MCP Setup',
+    '',
+    'Use this built-in skill when the user asks how to configure, add, troubleshoot, document, or explain Model Context Protocol (MCP) servers for Cusco.',
+    '',
+    'Cusco loads MCP servers from `~/.config/io.github.stonega.Cusco/mcp.json`. Prefer a top-level `mcpServers` object. Cusco also accepts `servers` or a bare object/array, but `mcpServers` is the clearest format.',
+    '',
+    'For a stdio MCP server, use `command`, `args`, optional `cwd`, optional `env`, `enabled: true`, and `permissionPolicy: "ask"` unless the user explicitly trusts the server. Use absolute paths for local scripts and working directories.',
+    '',
+    'For a Streamable HTTP MCP server, use `url`, optional `headers`, `enabled: true`, and `permissionPolicy: "ask"`. Do not place real bearer tokens or API keys in committed examples.',
+    '',
+    'Cusco infers the transport: `url` means `streamable-http`; no `url` means `stdio`. A `namespace` can be set to make tool names stable and easy to recognize.',
+    '',
+    'After editing `mcp.json`, tell the user to reload the MCP config from Cusco Preferences, then use Agent Mode. MCP tools appear as `mcp__<namespace>__<tool>`. Resource helpers appear as `mcp__<namespace>__list_resources` and `mcp__<namespace>__read_resource`; prompt helpers appear as `mcp__<namespace>__list_prompts` and `mcp__<namespace>__get_prompt`.',
+    '',
+    'When working inside the Cusco repo, verify MCP behavior with `gjs -m tests/mcp-smoke.js`. The focused smoke test checks config parsing, stdio discovery, tool registration, resource helpers, prompt helpers, and tool calls.',
+].join('\n');
+
+const ALWAYS_AVAILABLE_SKILLS = Object.freeze([
+    Object.freeze({
+        id: 'cusco-mcp-setup',
+        name: 'cusco-mcp-setup',
+        description: 'Always-available Cusco guidance for configuring, adding, troubleshooting, documenting, or explaining MCP servers.',
+        path: '',
+        source: 'builtin',
+        enabled: true,
+        selectedByDefault: true,
+        content: CUSCO_MCP_SETUP_SKILL_CONTENT,
+        loadError: '',
+    }),
+]);
 
 function now() {
     return new Date().toISOString();
@@ -34,6 +65,31 @@ function checksumId(prefix, value) {
 
 function normalizeWhitespace(value) {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function activeSkillList(skills, { includeAlwaysAvailable = true } = {}) {
+    const seen = new Set();
+    const activeSkills = [];
+
+    for (const skill of [
+        ...(includeAlwaysAvailable ? ALWAYS_AVAILABLE_SKILLS : []),
+        ...(skills ?? []),
+    ]) {
+        if (!skill || skill.loadError || !skill.content)
+            continue;
+
+        const keys = [skill.id, skill.name].map((key) => String(key ?? '').trim()).filter(Boolean);
+
+        if (keys.some((key) => seen.has(key)))
+            continue;
+
+        for (const key of keys)
+            seen.add(key);
+
+        activeSkills.push(skill);
+    }
+
+    return activeSkills;
 }
 
 function parseFrontMatter(content) {
@@ -230,8 +286,12 @@ export function discoverInstalledSkills({ rootPath = DEFAULT_GLOBAL_SKILLS_PATH 
     return skills.sort((left, right) => left.name.localeCompare(right.name));
 }
 
-export function buildSkillContext(skills) {
-    const enabledSkills = (skills ?? []).filter((skill) => skill && !skill.loadError && skill.content);
+export function getAlwaysAvailableSkills() {
+    return ALWAYS_AVAILABLE_SKILLS.map((skill) => ({ ...skill }));
+}
+
+export function buildSkillContext(skills, options = {}) {
+    const enabledSkills = activeSkillList(skills, options);
 
     if (enabledSkills.length === 0)
         return '';
@@ -243,7 +303,7 @@ export function buildSkillContext(skills) {
     ].filter(Boolean).join('\n\n'));
 
     return [
-        'The following local SKILL instructions are active for this response. Follow them when they are relevant to the user request.',
+        'The following SKILL instructions are active for this response. Follow them when they are relevant to the user request.',
         ...sections,
     ].join('\n\n');
 }

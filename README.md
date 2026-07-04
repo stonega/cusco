@@ -58,6 +58,8 @@ Installed skills are discovered from:
 
 Enable skills in the Skills preferences page, then select them from the composer skill menu for a chat. Cusco sends selected skills as instruction context and records a visible transcript note; it does not execute skill files.
 
+Cusco also ships compact built-in MCP setup guidance that is always available to the model. The repo includes the longer reference/installable version at [examples/skills/cusco-mcp-setup/SKILL.md](examples/skills/cusco-mcp-setup/SKILL.md).
+
 ## Build
 
 ```sh

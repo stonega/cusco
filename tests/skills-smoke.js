@@ -1,7 +1,12 @@
 import GLib from 'gi://GLib?version=2.0';
 
 import { ConversationManager } from '../src/chat/conversation.js';
-import { buildSkillContext, discoverInstalledSkills, loadSkillFromPath } from '../src/skills/skills.js';
+import {
+    buildSkillContext,
+    discoverInstalledSkills,
+    getAlwaysAvailableSkills,
+    loadSkillFromPath,
+} from '../src/skills/skills.js';
 import { WorkspaceFileStore } from '../src/storage/workspaceStore.js';
 import { WorkspaceManager } from '../src/workspace/workspace.js';
 
@@ -44,6 +49,17 @@ const loaded = loadSkillFromPath(reviewSkillPath, { source: 'global', id: 'revie
 if (loaded.name !== 'careful-review' || !loaded.description.includes('correctness'))
     throw new Error('Skill front matter was not parsed');
 
+const alwaysAvailableSkills = getAlwaysAvailableSkills();
+
+if (!alwaysAvailableSkills.find((skill) => skill.id === 'cusco-mcp-setup'))
+    throw new Error('Cusco MCP setup skill was not registered as always available');
+
+if (!buildSkillContext([]).includes('~/.config/io.github.stonega.Cusco/mcp.json'))
+    throw new Error('Always-available Cusco MCP setup skill was not added to skill context');
+
+if (buildSkillContext([], { includeAlwaysAvailable: false }) !== '')
+    throw new Error('Always-available skills could not be omitted for focused contexts');
+
 if (!buildSkillContext([loaded]).includes('Check claims against the available context'))
     throw new Error('Skill context was not built from SKILL.md content');
 
@@ -73,6 +89,9 @@ if (activeSkills.length !== 2 || activeSkills[0].id !== 'review')
 
 if (!workspace.buildSkillContextForConversation(conversation).includes('Prefer concise implementation notes'))
     throw new Error('Workspace did not build selected skill context');
+
+if (!workspace.buildSkillContextForConversation(conversation).includes('Cusco MCP Setup'))
+    throw new Error('Workspace did not include always-available skills in conversation context');
 
 const reloaded = new WorkspaceManager({
     store: new WorkspaceFileStore({ path: workspacePath }),
