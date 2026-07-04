@@ -1,6 +1,20 @@
 #!/usr/bin/env sh
 set -eu
 
+missing_sources=$(
+  find src -type f -name '*.js' | sort | while IFS= read -r source; do
+    relative=${source#src/}
+    if ! grep -F "'$relative'" src/meson.build >/dev/null 2>&1; then
+      printf '%s\n' "$source"
+    fi
+  done
+)
+
+if [ -n "$missing_sources" ]; then
+  printf 'src/meson.build is missing install entries for:\n%s\n' "$missing_sources" >&2
+  exit 1
+fi
+
 gjs -m tests/import-smoke.js
 gjs -m tests/mock-provider-smoke.js
 gjs -m tests/markdown-smoke.js

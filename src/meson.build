@@ -20,6 +20,8 @@ provider_sources = files(
   'providers/provider.js',
   'providers/mockProvider.js',
   'providers/remoteProvider.js',
+  'providers/thinking.js',
+  'providers/usage.js',
 )
 
 memory_sources = files(
