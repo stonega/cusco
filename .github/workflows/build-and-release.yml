@@ -153,28 +153,9 @@ jobs:
           mkdir -p %{buildroot}
           cp -a . %{buildroot}/
 
-          %post
-          if command -v glib-compile-schemas >/dev/null 2>&1; then
-            glib-compile-schemas /usr/share/glib-2.0/schemas || :
-          fi
-          if command -v update-desktop-database >/dev/null 2>&1; then
-            update-desktop-database -q /usr/share/applications || :
-          fi
-          if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-            gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || :
-          fi
-
-          %postun
-          if command -v glib-compile-schemas >/dev/null 2>&1; then
-            glib-compile-schemas /usr/share/glib-2.0/schemas || :
-          fi
-          if command -v update-desktop-database >/dev/null 2>&1; then
-            update-desktop-database -q /usr/share/applications || :
-          fi
-          if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-            gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || :
-          fi
-
+          # RPM file triggers update GLib schemas, desktop metadata, and icon caches.
+          # Avoid manual cache scriptlets, which can print unrelated host schema
+          # warnings as Cusco install output.
           %files
           %{_bindir}/cusco
           %{_datadir}/applications/io.github.stonega.Cusco.desktop

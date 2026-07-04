@@ -54,7 +54,9 @@ glib-compile-schemas --strict --dry-run data
 
 For distro packaging, install through `DESTDIR`; Meson skips live schema cache
 updates in that mode and lets the package manager run its normal GLib schema
-trigger.
+trigger. RPM specs should not add manual `%post` or `%postun`
+`glib-compile-schemas` calls for Cusco; those compile every host schema and can
+print unrelated system warnings as Cusco install output.
 
 ## Next Implementation Steps
 
