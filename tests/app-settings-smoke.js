@@ -45,6 +45,7 @@ const settings = new MemorySettings({
     },
     uints: {
         'response-timeout-seconds': 90,
+        'max-output-tokens': 16384,
     },
     strings: {
         'thinking-level': 'high',
@@ -61,6 +62,9 @@ if (appSettings.autoModeEnabled !== true)
 if (appSettings.responseTimeoutSeconds !== 90)
     throw new Error(`Timeout preference was not loaded: ${appSettings.responseTimeoutSeconds}`);
 
+if (appSettings.maxOutputTokens !== 16384)
+    throw new Error(`Maximum output tokens preference was not loaded: ${appSettings.maxOutputTokens}`);
+
 if (appSettings.providerFallbackEnabled !== true)
     throw new Error('Provider fallback preference was not loaded');
 
@@ -73,6 +77,7 @@ if (appSettings.highContrastEnabled !== true || appSettings.reducedMotionEnabled
 appSettings.setSendWithEnter(true);
 appSettings.setAutoModeEnabled(false);
 appSettings.setResponseTimeoutSeconds(2);
+appSettings.setMaxOutputTokens(999999);
 appSettings.setProviderFallbackEnabled(false);
 appSettings.setThinkingLevel('low');
 appSettings.setHighContrastEnabled(false);
@@ -86,6 +91,9 @@ if (settings.get_boolean('auto-mode-enabled') !== false)
 
 if (settings.get_uint('response-timeout-seconds') !== 5)
     throw new Error(`Timeout preference was not clamped and persisted: ${settings.get_uint('response-timeout-seconds')}`);
+
+if (settings.get_uint('max-output-tokens') !== 32768)
+    throw new Error(`Maximum output tokens preference was not clamped and persisted: ${settings.get_uint('max-output-tokens')}`);
 
 if (settings.get_boolean('provider-fallback-enabled') !== false)
     throw new Error('Provider fallback preference was not persisted');

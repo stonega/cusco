@@ -47,6 +47,11 @@ const PROMPT_ICON_FILE = 'prompt-symbolic.svg';
 const PROVIDER_PICKER_ID_COLUMN = 0;
 const PROVIDER_PICKER_NAME_COLUMN = 1;
 const PROVIDER_PICKER_ICON_COLUMN = 2;
+const BASE_RESPONSE_SYSTEM_PROMPT = [
+    'Complete the user\'s current request in one assistant response whenever possible.',
+    'If more work remains, keep going within the available output budget instead of asking the user to say "continue".',
+    'Ask a follow-up only when required information is missing or the user must choose between options.',
+].join(' ');
 
 function isGioError(error, code) {
     return typeof error?.matches === 'function' && error.matches(Gio.IOErrorEnum, code);
@@ -193,6 +198,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._isRefreshingConversations = false;
         this._isUpdatingProviderControls = false;
         this._activeChatCancellable = null;
+        this._lastAssistantMessageView = null;
         this.connect('close-request', () => {
             this._stopActiveConversation();
             this._stopCronLogSync();
@@ -1178,6 +1184,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             ...providerConfig,
             cancellable,
             timeoutSeconds: this._appSettings.responseTimeoutSeconds,
+            maxOutputTokens: this._appSettings.maxOutputTokens,
             thinkingLevel: this._conversations.activeConversation?.thinkingLevel ?? this._appSettings.thinkingLevel,
         })) {
             const normalizedChunk = normalizeProviderChunk(chunk);
@@ -1676,23 +1683,15 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _injectSkillContext(conversation) {
-        const skills = this._workspace.getSkillsForConversation(conversation);
-
-        if (skills.length === 0)
-            return [];
-
-        const auditMessage = createMessage(
-            'system',
-            `Skills used for this response:\n${skills.map((skill) => `- ${skill.name}`).join('\n')}`,
-        );
-        this._conversations.appendMessage(conversation.id, auditMessage);
-        this._addMessage(auditMessage.content, auditMessage.role, auditMessage);
-        this._updateUsageDisplay(conversation);
-        return skills;
+        return this._workspace.getSkillsForConversation(conversation);
     }
 
     _buildProviderMessages(conversation, skills, options = {}) {
-        const systemMessages = [];
+        const systemMessages = [{
+            role: 'system',
+            content: BASE_RESPONSE_SYSTEM_PROMPT,
+        }];
+
         if (options.agentMode) {
             systemMessages.push({
                 role: 'system',
@@ -2575,6 +2574,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
     _renderActiveConversation() {
         const conversation = this._conversations.activeConversation;
         this._clearBox(this._messages);
+        this._lastAssistantMessageView = null;
         this._syncProviderControls(conversation);
 
         for (const message of conversation?.messages ?? [])
@@ -2619,7 +2619,46 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._settingsButton.set_sensitive(!isBusy);
     }
 
+    _createToolResultExpander(message, options = {}) {
+        const statusLabel = message.toolCall.status === 'failed'
+            ? 'failed'
+            : message.toolCall.status === 'cancelled'
+                ? 'cancelled'
+                : 'result';
+        const expander = new Gtk.Expander({
+            label: `${message.toolCall.label} ${statusLabel}`,
+            expanded: false,
+            hexpand: true,
+        });
+        expander.add_css_class('cusco-tool-result');
+
+        if (!options.embedded)
+            expander.set_size_request(460, -1);
+
+        const bodyContent = createMessageContent(message.content, {
+            role: 'system',
+            hexpand: true,
+            codeMinWidth: 380,
+        });
+
+        if (!options.embedded) {
+            bodyContent.add_css_class('cusco-message-bubble');
+            bodyContent.add_css_class('cusco-message-assistant');
+        }
+
+        expander.set_child(bodyContent);
+        return expander;
+    }
+
     _addMessage(body, kind, message = null) {
+        if (message?.toolCall?.agentMode && this._lastAssistantMessageView?.append_tool_result) {
+            this._lastAssistantMessageView.append_tool_result(message);
+            this._scrollToBottom();
+            return {
+                set_label: () => {},
+            };
+        }
+
         if (message?.toolCall)
             return this._addToolMessage(message);
 
@@ -2655,13 +2694,34 @@ class CuscoWindow extends Adw.ApplicationWindow {
             wrapper.append(reasoningExpander);
         }
 
+        const bubble = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 8,
+            hexpand: Boolean(kind !== 'user'),
+        });
+        bubble.add_css_class('cusco-message-bubble');
+        bubble.add_css_class(kind === 'user' ? 'cusco-message-user' : 'cusco-message-assistant');
+
         const bodyContent = createMessageContent(body, {
             role: kind,
         });
-        bodyContent.add_css_class('cusco-message-bubble');
-        bodyContent.add_css_class(kind === 'user' ? 'cusco-message-user' : 'cusco-message-assistant');
+        bubble.append(bodyContent);
 
-        wrapper.append(bodyContent);
+        let toolResultsBox = null;
+        const appendToolResult = (toolMessage) => {
+            if (!toolResultsBox) {
+                toolResultsBox = new Gtk.Box({
+                    orientation: Gtk.Orientation.VERTICAL,
+                    spacing: 4,
+                    hexpand: true,
+                });
+                bubble.append(toolResultsBox);
+            }
+
+            toolResultsBox.append(this._createToolResultExpander(toolMessage, { embedded: true }));
+        };
+
+        wrapper.append(bubble);
 
         if (message?.id && kind !== 'system')
             wrapper.append(this._createMessageActions(message));
@@ -2669,7 +2729,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._messages.append(wrapper);
         this._scrollToBottom();
 
-        return {
+        const messageView = {
             set_label: (text) => bodyContent.updateContent(text),
             set_reasoning: (text) => {
                 if (!reasoningContent || !reasoningExpander)
@@ -2679,7 +2739,15 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 reasoningContent.updateContent(nextText || ' ');
                 reasoningExpander.set_visible(Boolean(nextText));
             },
+            append_tool_result: appendToolResult,
         };
+
+        if (kind === 'assistant')
+            this._lastAssistantMessageView = messageView;
+        else
+            this._lastAssistantMessageView = null;
+
+        return messageView;
     }
 
     _addToolMessage(message) {
@@ -2690,29 +2758,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
             hexpand: true,
             halign: Gtk.Align.START,
         });
-        const statusLabel = message.toolCall.status === 'failed'
-            ? 'failed'
-            : message.toolCall.status === 'cancelled'
-                ? 'cancelled'
-                : 'result';
-        const expander = new Gtk.Expander({
-            label: `${message.toolCall.label} ${statusLabel}`,
-            expanded: true,
-            hexpand: true,
-        });
-        expander.set_size_request(460, -1);
-        expander.add_css_class('cusco-tool-result');
-
-        const bodyContent = createMessageContent(message.content, {
-            role: 'system',
-            hexpand: true,
-            codeMinWidth: 380,
-        });
-        bodyContent.add_css_class('cusco-message-bubble');
-        bodyContent.add_css_class('cusco-message-assistant');
-        expander.set_child(bodyContent);
-        wrapper.append(expander);
+        wrapper.append(this._createToolResultExpander(message));
         this._messages.append(wrapper);
+        this._lastAssistantMessageView = null;
         this._scrollToBottom();
 
         return {

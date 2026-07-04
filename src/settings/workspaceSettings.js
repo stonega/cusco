@@ -187,6 +187,7 @@ function addSkillRows(group, workspaceManager, refresh) {
         const row = new Adw.ActionRow({
             title: skill.name,
             subtitle: skillSubtitle(skill),
+            subtitle_lines: 2,
         });
         row.add_suffix(createSwitch(skill.enabled, 'Enable skill', (enabled) => {
             try {

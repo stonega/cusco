@@ -23,6 +23,11 @@ if (blocks[1].type !== 'code' || blocks[1].language !== 'js')
 if (!markdownToPangoMarkup('# Title').includes('weight="bold"'))
     throw new Error('Heading markdown was not converted to Pango markup');
 
+const closedHeadingMarkup = markdownToPangoMarkup('# 👋 #');
+
+if (!closedHeadingMarkup.includes('👋') || closedHeadingMarkup.includes('#'))
+    throw new Error(`Closed heading marker was not stripped: ${closedHeadingMarkup}`);
+
 if (!inlineMarkdownToPangoMarkup('Use **bold** and `code`.').includes('<b>bold</b>'))
     throw new Error('Inline bold markdown was not converted');
 

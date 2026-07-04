@@ -8,12 +8,19 @@ import {
     normalizeThinkingLevel,
     THINKING_LEVELS,
 } from '../providers/thinking.js';
+import {
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    MAX_MAX_OUTPUT_TOKENS,
+    MIN_MAX_OUTPUT_TOKENS,
+    normalizeMaxOutputTokens,
+} from '../providers/outputLimits.js';
 
 const SETTINGS_SCHEMA_ID = 'io.github.stonega.Cusco';
 const REQUIRED_SETTINGS_KEYS = [
     'send-with-enter',
     'auto-mode-enabled',
     'response-timeout-seconds',
+    'max-output-tokens',
     'provider-fallback-enabled',
     'thinking-level',
     'high-contrast-enabled',
@@ -50,6 +57,7 @@ export class AppSettingsStore {
         this._sendWithEnter = DEFAULT_SEND_WITH_ENTER;
         this._autoModeEnabled = DEFAULT_AUTO_MODE_ENABLED;
         this._responseTimeoutSeconds = DEFAULT_RESPONSE_TIMEOUT_SECONDS;
+        this._maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS;
         this._providerFallbackEnabled = DEFAULT_PROVIDER_FALLBACK_ENABLED;
         this._thinkingLevel = DEFAULT_THINKING_LEVEL;
         this._highContrastEnabled = DEFAULT_HIGH_CONTRAST_ENABLED;
@@ -85,6 +93,16 @@ export class AppSettingsStore {
         this._responseTimeoutSeconds = clampTimeoutSeconds(value);
         this._settings?.set_uint('response-timeout-seconds', this._responseTimeoutSeconds);
         return this._responseTimeoutSeconds;
+    }
+
+    get maxOutputTokens() {
+        return this._maxOutputTokens;
+    }
+
+    setMaxOutputTokens(value) {
+        this._maxOutputTokens = normalizeMaxOutputTokens(value);
+        this._settings?.set_uint('max-output-tokens', this._maxOutputTokens);
+        return this._maxOutputTokens;
     }
 
     get providerFallbackEnabled() {
@@ -134,6 +152,7 @@ export class AppSettingsStore {
         this._sendWithEnter = this._settings.get_boolean('send-with-enter');
         this._autoModeEnabled = this._settings.get_boolean('auto-mode-enabled');
         this._responseTimeoutSeconds = clampTimeoutSeconds(this._settings.get_uint('response-timeout-seconds'));
+        this._maxOutputTokens = normalizeMaxOutputTokens(this._settings.get_uint('max-output-tokens'));
         this._providerFallbackEnabled = this._settings.get_boolean('provider-fallback-enabled');
         this._thinkingLevel = normalizeThinkingLevel(this._settings.get_string?.('thinking-level'));
         this._highContrastEnabled = this._settings.get_boolean('high-contrast-enabled');
@@ -206,6 +225,25 @@ export function createApplicationSettingsPage(appSettings, onChanged) {
         onChanged?.();
     });
     providerGroup.add(timeoutRow);
+
+    const maxOutputAdjustment = new Gtk.Adjustment({
+        lower: MIN_MAX_OUTPUT_TOKENS,
+        upper: MAX_MAX_OUTPUT_TOKENS,
+        step_increment: 1024,
+        page_increment: 4096,
+        value: appSettings.maxOutputTokens,
+    });
+    const maxOutputRow = new Adw.SpinRow({
+        title: 'Maximum output tokens',
+        subtitle: 'Higher values help long answers finish without asking to continue.',
+        adjustment: maxOutputAdjustment,
+        digits: 0,
+    });
+    maxOutputRow.connect('notify::value', () => {
+        appSettings.setMaxOutputTokens(maxOutputRow.get_value());
+        onChanged?.();
+    });
+    providerGroup.add(maxOutputRow);
 
     const fallbackRow = new Adw.SwitchRow({
         title: 'Provider fallback',

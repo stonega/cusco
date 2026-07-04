@@ -22,7 +22,7 @@ Cusco already has the first useful pieces of an agent harness:
 The core runtime path is:
 
 1. `_sendMessage()` appends the user message, proposes memory when relevant, runs an explicit slash-command tool if requested, then starts a provider response.
-2. `_streamAssistantResponse()` injects visible memory context, loads selected skills, builds provider messages, streams the selected provider, optionally falls back to another provider, then persists the assistant message.
+2. `_streamAssistantResponse()` injects visible memory context, loads selected skills as hidden provider context, builds provider messages, streams the selected provider, optionally falls back to another provider, then persists the assistant message.
 3. Provider classes normalize Cusco messages into each remote API format. Remote providers currently request the full response and then stream display chunks; true network streaming remains a planned improvement.
 
 When `agentModeEnabled` is set on a conversation, Cusco adds an Agent Mode system prompt and lets the model request one existing tool at a time with a `<cusco_tool_call>` JSON tag. Cusco validates the request, applies permissions, appends visible tool audit rows, feeds the result back to the model, and repeats until the model returns final text or the iteration limit is reached.
@@ -91,7 +91,7 @@ Good skill behavior:
 - Discover installed skills without loading every byte into every response.
 - Show name, description, path, enabled state, and load errors.
 - Select skills per chat, with profile defaults later.
-- Inject selected skill content as system context with a transcript audit message.
+- Inject selected skill content as hidden system context.
 - Cap SKILL.md size and surface load errors clearly.
 
 Future improvement: split skill metadata from full content in the provider prompt. The model can first see available skills, then request a specific skill body when needed.

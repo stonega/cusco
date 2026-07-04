@@ -19,6 +19,7 @@ provider_sources = files(
   'providers/icons.js',
   'providers/provider.js',
   'providers/mockProvider.js',
+  'providers/outputLimits.js',
   'providers/remoteProvider.js',
   'providers/thinking.js',
   'providers/usage.js',

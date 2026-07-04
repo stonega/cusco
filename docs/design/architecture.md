@@ -63,7 +63,7 @@ Cusco starts as a standalone native GNOME application.
 - Provider model discovery refreshes model lists from supported provider APIs and persists discovered model metadata in GSettings.
 - Memory writes are never implicit: user messages can trigger a proposal dialog, and only explicit approval stores memory.
 - Memory use is per-chat controllable and creates both a visible transcript system message and a stored usage audit entry.
-- Installed skills are discovered from `~/.agents/skills`, enabled in the Skills preferences page, selected per chat, and injected as ephemeral provider context with a visible transcript audit.
+- Installed skills are discovered from `~/.agents/skills`, enabled in the Skills preferences page, selected per chat, and injected as ephemeral hidden provider context.
 - Tools run before the assistant response when requested with slash commands; sensitive web search asks for permission and tool results render as expandable transcript entries with citations where available.
 - Local file and image attachments are selected through the native GTK file dialog and folded into the user message context.
 - GNOME integration uses app actions for shortcuts and desktop actions, native preferences windows, notifications for long responses, and a Shell SearchProvider2 conversation index.

@@ -186,6 +186,10 @@ function headingSize(level) {
     return 'medium';
 }
 
+function headingText(text) {
+    return text.trim().replace(/\s+#+\s*$/, '').trimEnd();
+}
+
 function lineToPangoMarkup(line) {
     if (line.trim() === '')
         return '';
@@ -193,7 +197,7 @@ function lineToPangoMarkup(line) {
     const heading = line.match(/^(#{1,6})\s+(.+)$/);
 
     if (heading) {
-        return `<span weight="bold" size="${headingSize(heading[1].length)}">${inlineMarkdownToPangoMarkup(heading[2])}</span>`;
+        return `<span weight="bold" size="${headingSize(heading[1].length)}">${inlineMarkdownToPangoMarkup(headingText(heading[2]))}</span>`;
     }
 
     const bullet = line.match(/^\s*[-*]\s+(.+)$/);

@@ -3,12 +3,20 @@ import GLib from 'gi://GLib?version=2.0';
 import Soup from 'gi://Soup?version=3.0';
 
 import { ChatProvider } from './provider.js';
+import {
+    DEFAULT_MAX_CONTINUATION_TURNS,
+    normalizeMaxOutputTokens,
+} from './outputLimits.js';
 import { getThinkingCapability, normalizeThinkingLevel } from './thinking.js';
 import { normalizeTokenUsage } from './usage.js';
 
 const DISPLAY_STREAM_DELAY_MS = 10;
-const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_REQUEST_TIMEOUT_SECONDS = 45;
+const CONTINUATION_PROMPT = [
+    'Continue exactly where your previous assistant message stopped.',
+    'Do not repeat completed text.',
+    'Do not ask the user to reply "continue"; finish the requested work now.',
+].join(' ');
 const OPENAI_REASONING_EFFORTS = {
     off: 'none',
     low: 'low',
@@ -263,7 +271,45 @@ function normalizeProviderResponse(response) {
         text: String(response.text ?? ''),
         reasoning: String(response.reasoning ?? ''),
         usage: normalizeTokenUsage(response.usage),
+        finishReason: String(response.finishReason ?? ''),
     };
+}
+
+function normalizeFinishReason(reason) {
+    return String(reason ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function stoppedForMaxOutput(reason) {
+    return [
+        'length',
+        'max_tokens',
+        'max_output_tokens',
+        'token_limit',
+        'output_token_limit',
+    ].includes(normalizeFinishReason(reason));
+}
+
+function normalizeMaxContinuationTurns(value) {
+    const turns = Number(value);
+
+    if (!Number.isFinite(turns) || turns < 0)
+        return DEFAULT_MAX_CONTINUATION_TURNS;
+
+    return Math.min(5, Math.floor(turns));
+}
+
+function continuationMessages(messages, assistantText) {
+    return [
+        ...messages,
+        {
+            role: 'assistant',
+            content: assistantText,
+        },
+        {
+            role: 'user',
+            content: CONTINUATION_PROMPT,
+        },
+    ];
 }
 
 function joinTextParts(parts) {
@@ -401,6 +447,7 @@ export function buildOpenAiResponsesBody(messages, modelId, options = {}) {
     const body = {
         model: modelId,
         input: openAiMessages(messages),
+        max_output_tokens: normalizeMaxOutputTokens(options.maxOutputTokens),
     };
 
     const reasoning = buildOpenAiReasoningConfig(options.provider ?? options.config, options.model, options.thinkingLevel);
@@ -411,10 +458,11 @@ export function buildOpenAiResponsesBody(messages, modelId, options = {}) {
     return body;
 }
 
-export function buildOpenAiCompatibleChatBody(messages, modelId) {
+export function buildOpenAiCompatibleChatBody(messages, modelId, options = {}) {
     return {
         model: modelId,
         messages: openAiCompatibleMessages(messages),
+        max_tokens: normalizeMaxOutputTokens(options.maxOutputTokens),
         stream: false,
     };
 }
@@ -424,7 +472,7 @@ export function buildAnthropicMessagesBody(messages, modelId, options = {}) {
     const thinking = buildAnthropicThinkingConfig(options.provider ?? options.config, options.model, options.thinkingLevel);
     const body = {
         model: modelId,
-        max_tokens: DEFAULT_MAX_TOKENS,
+        max_tokens: normalizeMaxOutputTokens(options.maxOutputTokens),
         messages: conversationMessages,
     };
 
@@ -441,8 +489,14 @@ export function buildAnthropicMessagesBody(messages, modelId, options = {}) {
     return body;
 }
 
-export function buildGeminiGenerateContentBody(messages) {
-    return geminiPayload(messages);
+export function buildGeminiGenerateContentBody(messages, options = {}) {
+    const payload = geminiPayload(messages);
+
+    payload.generationConfig = {
+        maxOutputTokens: normalizeMaxOutputTokens(options.maxOutputTokens),
+    };
+
+    return payload;
 }
 
 export function extractOpenAiText(response) {
@@ -472,11 +526,23 @@ export function extractOpenAiUsage(response) {
     return normalizeTokenUsage(response.usage);
 }
 
+export function extractOpenAiFinishReason(response) {
+    if (response.incomplete_details?.reason)
+        return response.incomplete_details.reason;
+
+    const incompleteOutput = (response.output ?? []).find((item) => item.incomplete_details?.reason);
+
+    return incompleteOutput?.incomplete_details?.reason
+        ?? response.choices?.[0]?.finish_reason
+        ?? '';
+}
+
 export function extractOpenAiResponse(response) {
     return {
         text: extractOpenAiText(response),
         reasoning: extractOpenAiReasoning(response),
         usage: extractOpenAiUsage(response),
+        finishReason: extractOpenAiFinishReason(response),
     };
 }
 
@@ -497,11 +563,16 @@ export function extractChatCompletionUsage(response) {
     return normalizeTokenUsage(response.usage);
 }
 
+export function extractChatCompletionFinishReason(response) {
+    return response.choices?.[0]?.finish_reason ?? '';
+}
+
 export function extractChatCompletionResponse(response) {
     return {
         text: extractChatCompletionText(response),
         reasoning: extractChatCompletionReasoning(response),
         usage: extractChatCompletionUsage(response),
+        finishReason: extractChatCompletionFinishReason(response),
     };
 }
 
@@ -522,11 +593,16 @@ export function extractAnthropicUsage(response) {
     return normalizeTokenUsage(response.usage);
 }
 
+export function extractAnthropicFinishReason(response) {
+    return response.stop_reason ?? '';
+}
+
 export function extractAnthropicResponse(response) {
     return {
         text: extractAnthropicText(response),
         reasoning: extractAnthropicReasoning(response),
         usage: extractAnthropicUsage(response),
+        finishReason: extractAnthropicFinishReason(response),
     };
 }
 
@@ -547,11 +623,16 @@ export function extractGeminiUsage(response) {
     return normalizeTokenUsage(response.usageMetadata ?? response.usage);
 }
 
+export function extractGeminiFinishReason(response) {
+    return response.candidates?.[0]?.finishReason ?? '';
+}
+
 export function extractGeminiResponse(response) {
     return {
         text: extractGeminiText(response),
         reasoning: extractGeminiReasoning(response),
         usage: extractGeminiUsage(response),
+        finishReason: extractGeminiFinishReason(response),
     };
 }
 
@@ -650,31 +731,48 @@ class RemoteProvider extends ChatProvider {
     }
 
     async *streamChat(messages, options = {}) {
-        const response = normalizeProviderResponse(await this._complete(
-            messages,
-            options.model?.id ?? this._config.defaultModelId,
-            options,
-        ));
+        let requestMessages = messages;
+        let assistantText = '';
+        const maxContinuationTurns = normalizeMaxContinuationTurns(options.maxContinuationTurns);
 
-        if (!response.text && !response.reasoning && !response.usage)
-            throw new Error(`${this.name} returned an empty response`);
+        for (let turn = 0; turn <= maxContinuationTurns; turn++) {
+            const response = normalizeProviderResponse(await this._complete(
+                requestMessages,
+                options.model?.id ?? this._config.defaultModelId,
+                options,
+            ));
 
-        if (response.usage) {
-            yield {
-                type: 'usage',
-                usage: response.usage,
-            };
+            if (!response.text && !response.reasoning && !response.usage)
+                throw new Error(`${this.name} returned an empty response`);
+
+            if (response.usage) {
+                yield {
+                    type: 'usage',
+                    usage: response.usage,
+                };
+            }
+
+            if (response.reasoning) {
+                yield {
+                    type: 'reasoning',
+                    text: response.reasoning,
+                };
+            }
+
+            if (response.text) {
+                assistantText += response.text;
+                yield* displayStream(response.text, options.cancellable ?? null);
+            }
+
+            if (!response.text
+                || !stoppedForMaxOutput(response.finishReason)
+                || turn >= maxContinuationTurns
+                || isCancelled(options.cancellable)) {
+                return;
+            }
+
+            requestMessages = continuationMessages(messages, assistantText);
         }
-
-        if (response.reasoning) {
-            yield {
-                type: 'reasoning',
-                text: response.reasoning,
-            };
-        }
-
-        if (response.text)
-            yield* displayStream(response.text, options.cancellable ?? null);
     }
 }
 
@@ -687,6 +785,7 @@ export class OpenAiResponsesProvider extends RemoteProvider {
                 provider: this._config,
                 model: options.model,
                 thinkingLevel: options.thinkingLevel,
+                maxOutputTokens: options.maxOutputTokens,
             }),
             {
                 cancellable: options.cancellable ?? null,
@@ -704,7 +803,9 @@ export class OpenAiCompatibleChatProvider extends RemoteProvider {
         const response = await postJson(
             normalizeUrl(this._config.baseUrl, this._config.chatPath ?? '/chat/completions'),
             { Authorization: `Bearer ${getApiKey(this._config)}` },
-            buildOpenAiCompatibleChatBody(messages, modelId),
+            buildOpenAiCompatibleChatBody(messages, modelId, {
+                maxOutputTokens: options.maxOutputTokens,
+            }),
             {
                 cancellable: options.cancellable ?? null,
                 providerName: this.name,
@@ -728,6 +829,7 @@ export class AnthropicMessagesProvider extends RemoteProvider {
                 provider: this._config,
                 model: options.model,
                 thinkingLevel: options.thinkingLevel,
+                maxOutputTokens: options.maxOutputTokens,
             }),
             {
                 cancellable: options.cancellable ?? null,
@@ -743,7 +845,9 @@ export class AnthropicMessagesProvider extends RemoteProvider {
 export class GeminiGenerateContentProvider extends RemoteProvider {
     async _complete(messages, modelId, options = {}) {
         const url = `${normalizeUrl(this._config.baseUrl, `/models/${modelId}:generateContent`)}?key=${encodeURIComponent(getApiKey(this._config))}`;
-        const response = await postJson(url, {}, buildGeminiGenerateContentBody(messages), {
+        const response = await postJson(url, {}, buildGeminiGenerateContentBody(messages, {
+            maxOutputTokens: options.maxOutputTokens,
+        }), {
             cancellable: options.cancellable ?? null,
             providerName: this.name,
             timeoutSeconds: options.timeoutSeconds,
