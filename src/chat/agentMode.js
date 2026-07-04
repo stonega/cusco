@@ -29,6 +29,8 @@ export function buildAgentModeSystemPrompt(tools, { maxIterations = DEFAULT_AGEN
         'Agent Mode is enabled for this chat.',
         'You may solve the user request normally, or request one available tool when a tool result would materially help.',
         'Do not invent tool results. Do not request a tool unless the tool is listed below.',
+        'Tools whose names start with mcp__ are configured MCP server tools exposed through Cusco. If the user asks to use an MCP server such as Context7 and a matching mcp__ tool is listed, use that tool instead of saying the MCP server is not configured.',
+        'For MCP tools, pass JSON matching the listed input fields. Include every required or clearly relevant field from the input description.',
         `You have at most ${maxIterations} tool-use iterations for this response.`,
         '',
         'When you need a tool, respond with exactly one tool call and no other text:',

@@ -11,8 +11,13 @@ import { ToolManager } from '../src/tools/tools.js';
 const tools = new ToolManager();
 const prompt = buildAgentModeSystemPrompt(tools.listTools(), { maxIterations: 2 });
 
-if (!prompt.includes('Agent Mode is enabled') || !prompt.includes('calc') || !prompt.includes('<cusco_tool_call>'))
+if (!prompt.includes('Agent Mode is enabled')
+    || !prompt.includes('calc')
+    || !prompt.includes('<cusco_tool_call>')
+    || !prompt.includes('mcp__')
+    || !prompt.includes('MCP server tools exposed through Cusco')) {
     throw new Error('Agent Mode prompt did not describe the tool protocol');
+}
 
 const parsedCall = parseAgentToolCall('<cusco_tool_call>{"name":"calc","input":"2 + 2"}</cusco_tool_call>');
 
