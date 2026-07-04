@@ -358,7 +358,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _createChatSurface() {
         const main = new Gtk.Overlay({
-            margin_top: 18,
             hexpand: true,
             vexpand: true,
         });
