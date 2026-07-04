@@ -7,6 +7,10 @@ import {
     MCP_TRANSPORT_HTTP,
     MCP_TRANSPORT_STDIO,
 } from './config.js';
+import {
+    createMcpAuthRequiredError,
+    isMcpAuthRequiredStatus,
+} from './auth.js';
 
 const DEFAULT_MCP_TIMEOUT_SECONDS = 30;
 
@@ -66,10 +70,18 @@ function createHttpSession(url, timeoutSeconds) {
 
 function responseHeader(message, name) {
     try {
-        return message.response_headers?.get_one?.(name) ?? '';
+        return message.response_headers?.get_one?.(name)
+            ?? message.get_response_headers?.()?.get_one?.(name)
+            ?? '';
     } catch (_error) {
         return '';
     }
+}
+
+function hasHeader(headers, name) {
+    const normalizedName = String(name ?? '').toLowerCase();
+
+    return Object.keys(headers ?? {}).some((headerName) => headerName.toLowerCase() === normalizedName);
 }
 
 function rootToMcpRoot(root) {
@@ -370,6 +382,7 @@ class McpHttpSession extends McpJsonRpcSession {
     constructor(config) {
         super(config);
         this._sessionId = '';
+        this.protocolVersion = '';
     }
 
     connect() {
@@ -417,11 +430,17 @@ class McpHttpSession extends McpJsonRpcSession {
         message.request_headers.append('Content-Type', 'application/json');
         message.request_headers.append('Accept', 'application/json, text/event-stream');
 
+        if (this.protocolVersion)
+            message.request_headers.append('MCP-Protocol-Version', this.protocolVersion);
+
         if (this._sessionId)
             message.request_headers.append('Mcp-Session-Id', this._sessionId);
 
         for (const [name, value] of Object.entries(this.config.headers ?? {}))
             message.request_headers.append(name, value);
+
+        if (this.config.authToken && !hasHeader(this.config.headers, 'Authorization'))
+            message.request_headers.append('Authorization', `Bearer ${this.config.authToken}`);
 
         message.set_request_body_from_bytes('application/json', encodeJsonBody(payload));
 
@@ -447,18 +466,35 @@ class McpHttpSession extends McpJsonRpcSession {
         const status = message.get_status();
         const responseText = new TextDecoder().decode(bytes.get_data()).trim();
 
-        if (status === 202 || !responseText)
-            return null;
-
-        const responseJson = parseHttpJsonRpcResponse(responseText);
-
         if (status < 200 || status >= 300) {
+            const wwwAuthenticate = responseHeader(message, 'WWW-Authenticate');
+
+            if (isMcpAuthRequiredStatus(status, wwwAuthenticate)) {
+                throw createMcpAuthRequiredError(this.config.name, {
+                    status,
+                    wwwAuthenticate,
+                    serverUrl: this.config.url,
+                });
+            }
+
+            let responseJson = null;
+
+            try {
+                responseJson = parseHttpJsonRpcResponse(responseText);
+            } catch (_error) {
+            }
+
             const messageText = responseJson?.error?.message ?? responseJson?.message ?? responseText;
             throw createUserVisibleError(
                 `${this.config.name} request failed (${status}): ${messageText}`,
                 `${this.config.name} request failed with HTTP ${status}.`,
             );
         }
+
+        if (status === 202 || !responseText)
+            return null;
+
+        const responseJson = parseHttpJsonRpcResponse(responseText);
 
         return responseJson;
     }
@@ -508,6 +544,16 @@ export class McpClient {
                 version: '0.1.0',
             },
         }, options);
+
+        if (result?.protocolVersion && result.protocolVersion !== MCP_PROTOCOL_VERSION) {
+            this.disconnect();
+            throw createUserVisibleError(
+                `${this.config.name} negotiated unsupported MCP protocol version ${result.protocolVersion}.`,
+            );
+        }
+
+        if (this._session && this.config.transport === MCP_TRANSPORT_HTTP)
+            this._session.protocolVersion = result?.protocolVersion ?? MCP_PROTOCOL_VERSION;
 
         this.capabilities = result?.capabilities ?? {};
         this.serverInfo = result?.serverInfo ?? {};

@@ -24,6 +24,7 @@ gjs -m tests/tools-smoke.js
 gjs -m tests/cron-smoke.js
 gjs -m tests/agent-mode-smoke.js
 gjs -m tests/skills-smoke.js
+gjs -m tests/mcp-smoke.js
 gjs -m tests/search-provider-smoke.js
 gjs -m tests/workspace-smoke.js
 gjs -m tests/prompt-variables-smoke.js

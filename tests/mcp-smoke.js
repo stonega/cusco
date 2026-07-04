@@ -1,6 +1,13 @@
 import GLib from 'gi://GLib?version=2.0';
+import Soup from 'gi://Soup?version=3.0';
 
 import {
+    createPkceChallenge,
+    MemoryMcpTokenStore,
+    parseWwwAuthenticate,
+} from '../src/mcp/auth.js';
+import {
+    MCP_PROTOCOL_VERSION,
     MCP_TRANSPORT_HTTP,
     MCP_TRANSPORT_STDIO,
     parseMcpConfigFile,
@@ -50,6 +57,20 @@ if (parsed.find((server) => server.id === 'local')?.transport !== MCP_TRANSPORT_
 if (parsed.find((server) => server.id === 'disabled')?.enabled !== false)
     throw new Error('Disabled MCP config was not normalized');
 
+const authChallenge = parseWwwAuthenticate(
+    'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource", scope="files:read"',
+);
+
+if (authChallenge?.resourceMetadataUrl !== 'https://mcp.example.com/.well-known/oauth-protected-resource'
+    || authChallenge.scope !== 'files:read') {
+    throw new Error('MCP WWW-Authenticate challenge was not parsed');
+}
+
+const pkceChallenge = createPkceChallenge('dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk');
+
+if (pkceChallenge !== 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM')
+    throw new Error(`MCP PKCE challenge was not generated correctly: ${pkceChallenge}`);
+
 const configPath = GLib.build_filenamev([
     GLib.get_tmp_dir(),
     `cusco-mcp-${GLib.uuid_string_random()}.json`,
@@ -79,12 +100,141 @@ workspace.addMcpServer({
 const manager = new McpManager({
     workspaceManager: workspace,
     configPath,
+    tokenStore: new MemoryMcpTokenStore(),
 });
 const tools = new ToolManager();
+const httpServer = new Soup.Server();
+let httpListening = false;
+let sawProtocolVersionHeader = false;
+
+function requestJson(message) {
+    return JSON.parse(new TextDecoder().decode(message.get_request_body().flatten().get_data()));
+}
+
+function setJsonResponse(message, body) {
+    message.set_status(Soup.Status.OK, null);
+    message.set_response('application/json', Soup.MemoryUse.COPY, JSON.stringify(body));
+}
+
+GLib.setenv('NO_PROXY', '127.0.0.1,localhost', true);
+GLib.setenv('no_proxy', '127.0.0.1,localhost', true);
+GLib.unsetenv('HTTP_PROXY');
+GLib.unsetenv('HTTPS_PROXY');
+GLib.unsetenv('http_proxy');
+GLib.unsetenv('https_proxy');
+
+httpServer.add_handler('/mcp', (_server, message) => {
+    message.set_status(Soup.Status.UNAUTHORIZED, null);
+    message.get_response_headers().append(
+        'WWW-Authenticate',
+        'Bearer resource_metadata="http://127.0.0.1/.well-known/oauth-protected-resource", scope="tools:read"',
+    );
+    message.set_response('application/json', Soup.MemoryUse.COPY, JSON.stringify({
+        error: {
+            message: 'Authorization required',
+        },
+    }));
+});
+httpServer.add_handler('/versioned-mcp', (_server, message) => {
+    const request = requestJson(message);
+
+    if (request.method !== 'initialize') {
+        const protocolVersion = message.get_request_headers().get_one('MCP-Protocol-Version') ?? '';
+
+        if (protocolVersion !== MCP_PROTOCOL_VERSION) {
+            message.set_status(Soup.Status.BAD_REQUEST, null);
+            message.set_response('application/json', Soup.MemoryUse.COPY, JSON.stringify({
+                error: {
+                    message: `Missing MCP-Protocol-Version: ${protocolVersion}`,
+                },
+            }));
+            return;
+        }
+
+        sawProtocolVersionHeader = true;
+    }
+
+    switch (request.method) {
+    case 'initialize':
+        setJsonResponse(message, {
+            jsonrpc: '2.0',
+            id: request.id,
+            result: {
+                protocolVersion: MCP_PROTOCOL_VERSION,
+                capabilities: {
+                    tools: { listChanged: false },
+                },
+                serverInfo: {
+                    name: 'Versioned MCP',
+                    version: '1.0.0',
+                },
+            },
+        });
+        break;
+    case 'tools/list':
+        setJsonResponse(message, {
+            jsonrpc: '2.0',
+            id: request.id,
+            result: {
+                tools: [],
+            },
+        });
+        break;
+    default:
+        setJsonResponse(message, {
+            jsonrpc: '2.0',
+            id: request.id,
+            result: {},
+        });
+        break;
+    }
+});
+
+try {
+    httpServer.listen_local(0, Soup.ServerListenOptions.IPV4_ONLY);
+    httpListening = true;
+} catch (error) {
+    print(`Cusco MCP HTTP auth smoke skipped: ${error.message}`);
+}
 
 try {
     if (!manager.listServers().find((server) => server.source === 'file' && server.name === 'file-mcp'))
         throw new Error('MCP config file server was not loaded');
+
+    if (httpListening) {
+        workspace.addMcpServer({
+            name: 'auth-mcp',
+            transport: MCP_TRANSPORT_HTTP,
+            url: `${httpServer.get_uris()[0].to_string().replace(/\/$/, '')}/mcp`,
+            enabled: true,
+            permissionPolicy: 'allow',
+        });
+        await manager.refreshServers({ timeoutSeconds: 5 });
+        const authServer = manager.listServers().find((item) => item.name === 'auth-mcp');
+
+        if (authServer?.status.state !== 'auth_required')
+            throw new Error(`MCP auth-required status was not recorded: ${authServer?.status.message}`);
+
+        if (authServer.status.auth?.scope !== 'tools:read'
+            || !authServer.status.auth?.resourceMetadataUrl.includes('oauth-protected-resource')) {
+            throw new Error('MCP auth challenge metadata was not preserved');
+        }
+
+        workspace.addMcpServer({
+            name: 'versioned-mcp',
+            transport: MCP_TRANSPORT_HTTP,
+            url: `${httpServer.get_uris()[0].to_string().replace(/\/$/, '')}/versioned-mcp`,
+            enabled: true,
+            permissionPolicy: 'allow',
+        });
+        manager.reloadConfig();
+        const versionedServer = manager.listServers().find((item) => item.name === 'versioned-mcp');
+
+        await manager.refreshServer(versionedServer.key, { timeoutSeconds: 5 });
+
+        if (!sawProtocolVersionHeader)
+            throw new Error('MCP HTTP protocol version header was not sent after initialization');
+    }
 
     await manager.refreshTools(tools, { timeoutSeconds: 5 });
 
@@ -144,6 +294,7 @@ try {
     print('Cusco MCP smoke passed');
 } finally {
     manager.shutdown();
+    httpServer.disconnect();
 
     if (GLib.file_test(configPath, GLib.FileTest.EXISTS))
         GLib.unlink(configPath);

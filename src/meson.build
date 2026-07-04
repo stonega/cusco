@@ -30,6 +30,7 @@ memory_sources = files(
 )
 
 mcp_sources = files(
+  'mcp/auth.js',
   'mcp/client.js',
   'mcp/config.js',
   'mcp/manager.js',

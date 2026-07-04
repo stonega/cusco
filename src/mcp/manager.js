@@ -5,6 +5,10 @@ import {
     sanitizeMcpName,
 } from './config.js';
 import { McpClient } from './client.js';
+import {
+    authorizeMcpServer,
+    createDefaultMcpTokenStore,
+} from './auth.js';
 
 const MAX_SCHEMA_DESCRIPTION_CHARS = 1200;
 const MCP_TOOL_PREFIX = 'mcp__';
@@ -241,9 +245,14 @@ function parsePromptInput(input) {
 }
 
 export class McpManager {
-    constructor({ workspaceManager = null, configPath = defaultMcpConfigFilePath() } = {}) {
+    constructor({
+        workspaceManager = null,
+        configPath = defaultMcpConfigFilePath(),
+        tokenStore = createDefaultMcpTokenStore(),
+    } = {}) {
         this._workspaceManager = workspaceManager;
         this._configPath = configPath;
+        this._tokenStore = tokenStore;
         this._servers = [];
         this._clients = new Map();
         this._status = new Map();
@@ -305,6 +314,7 @@ export class McpManager {
                 state: server.enabled ? 'idle' : 'disabled',
                 message: server.enabled ? 'Not connected.' : 'Disabled.',
                 updatedAt: '',
+                auth: null,
             },
             toolCount: this._serverTools.get(server.key)?.length ?? 0,
             resourceCount: (this._serverResources.get(server.key)?.length ?? 0)
@@ -364,7 +374,26 @@ export class McpManager {
                 await this.refreshServer(server.key, options);
                 this._registerServerTools(toolManager, server);
             } catch (error) {
-                this._setStatus(server.key, 'error', error.userMessage ?? error.message);
+                this._setErrorStatus(server.key, error);
+            }
+        }
+
+        return this.listServers();
+    }
+
+    async refreshServers(options = {}) {
+        this.reloadConfig();
+
+        for (const server of this._servers) {
+            if (!server.enabled) {
+                this._setStatus(server.key, 'disabled', 'Disabled.');
+                continue;
+            }
+
+            try {
+                await this.refreshServer(server.key, options);
+            } catch (error) {
+                this._setErrorStatus(server.key, error);
             }
         }
 
@@ -402,6 +431,19 @@ export class McpManager {
         );
     }
 
+    async authorizeServer(key, options = {}) {
+        const server = this._servers.find((item) => item.key === key);
+
+        if (!server)
+            throw createUserVisibleError(`Unknown MCP server: ${key}`);
+
+        const status = this._status.get(key);
+        await authorizeMcpServer(server, status?.auth ?? {}, this._tokenStore, options);
+        this.disconnectServer(key);
+        await this.refreshServer(key, options);
+        return this.listServers().find((item) => item.key === key);
+    }
+
     async callTool(serverKeyValue, toolName, input, options = {}) {
         const server = this._servers.find((item) => item.key === serverKeyValue);
 
@@ -411,8 +453,13 @@ export class McpManager {
         const tools = this._serverTools.get(server.key) ?? [];
         const tool = tools.find((item) => item.name === toolName);
         const args = parseMcpToolArguments(input, tool?.inputSchema);
-        const result = await this._clientFor(server).callTool(toolName, args, options);
-        return formatMcpToolResult(result);
+        try {
+            const result = await this._clientFor(server).callTool(toolName, args, options);
+            return formatMcpToolResult(result);
+        } catch (error) {
+            this._setErrorStatus(server.key, error);
+            throw error;
+        }
     }
 
     async listResources(serverKeyValue) {
@@ -431,7 +478,12 @@ export class McpManager {
         if (!uri)
             throw createUserVisibleError('MCP resource URI cannot be empty.');
 
-        return formatMcpResourceRead(await this._clientFor(server).readResource(uri, options));
+        try {
+            return formatMcpResourceRead(await this._clientFor(server).readResource(uri, options));
+        } catch (error) {
+            this._setErrorStatus(server.key, error);
+            throw error;
+        }
     }
 
     async listPrompts(serverKeyValue) {
@@ -448,7 +500,12 @@ export class McpManager {
         if (!name)
             throw createUserVisibleError('MCP prompt name cannot be empty.');
 
-        return formatMcpPrompt(await this._clientFor(server).getPrompt(name, args, options));
+        try {
+            return formatMcpPrompt(await this._clientFor(server).getPrompt(name, args, options));
+        } catch (error) {
+            this._setErrorStatus(server.key, error);
+            throw error;
+        }
     }
 
     disconnectServer(key) {
@@ -472,7 +529,14 @@ export class McpManager {
         let client = this._clients.get(server.key);
 
         if (!client) {
-            client = new McpClient(server);
+            const token = this._tokenStore?.lookup?.(server.key);
+            const authToken = token?.accessToken && String(token.tokenType ?? 'Bearer').toLowerCase() === 'bearer'
+                ? token.accessToken
+                : '';
+            client = new McpClient({
+                ...server,
+                authToken,
+            });
             this._clients.set(server.key, client);
         }
 
@@ -559,10 +623,22 @@ export class McpManager {
         }
     }
 
-    _setStatus(key, state, message) {
+    _setErrorStatus(key, error) {
+        if (error?.mcpAuth) {
+            this._setStatus(key, 'auth_required', error.userMessage ?? error.message, {
+                auth: error.mcpAuth,
+            });
+            return;
+        }
+
+        this._setStatus(key, 'error', error.userMessage ?? error.message);
+    }
+
+    _setStatus(key, state, message, details = {}) {
         this._status.set(key, {
             state,
             message,
+            auth: details.auth ?? null,
             updatedAt: now(),
         });
     }

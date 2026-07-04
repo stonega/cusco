@@ -13,6 +13,7 @@ import { estimateConversationUsage } from '../src/chat/usage.js';
 import { createCronCreateTool, CronJobManager } from '../src/cron/manager.js';
 import { MemoryManager } from '../src/memory/memory.js';
 import { defaultMcpConfigFilePath, parseMcpConfigFile } from '../src/mcp/config.js';
+import { parseWwwAuthenticate, SecretServiceMcpTokenStore } from '../src/mcp/auth.js';
 import { McpClient } from '../src/mcp/client.js';
 import { McpManager } from '../src/mcp/manager.js';
 import { ProviderConfigStore } from '../src/providers/config.js';
@@ -99,6 +100,8 @@ if (typeof MemoryManager !== 'function')
 
 if (typeof McpClient !== 'function'
     || typeof McpManager !== 'function'
+    || typeof parseWwwAuthenticate !== 'function'
+    || typeof SecretServiceMcpTokenStore !== 'function'
     || typeof parseMcpConfigFile !== 'function'
     || typeof defaultMcpConfigFilePath !== 'function')
     throw new Error('MCP helpers did not import');
