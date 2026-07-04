@@ -2,6 +2,7 @@ import Adw from 'gi://Adw?version=1';
 import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
+import Pango from 'gi://Pango?version=1.0';
 
 function createActionButton(iconName, tooltipText, onClicked) {
     const button = new Gtk.Button({
@@ -41,15 +42,47 @@ function createStatusDot(status) {
     const message = status.message ? `: ${status.message}` : '';
     const dot = new Gtk.Box({
         tooltip_text: `${label}${message}`,
-        valign: Gtk.Align.START,
-        halign: Gtk.Align.END,
-        margin_top: 7,
+        valign: Gtk.Align.CENTER,
+        halign: Gtk.Align.CENTER,
     });
 
     dot.set_size_request(9, 9);
     dot.add_css_class('cusco-status-dot');
     dot.add_css_class(`cusco-status-dot-${statusDotClass(status.state)}`);
     return dot;
+}
+
+function createServerTitle(server) {
+    const box = new Gtk.Box({
+        orientation: Gtk.Orientation.HORIZONTAL,
+        spacing: 7,
+        valign: Gtk.Align.CENTER,
+    });
+    const label = new Gtk.Label({
+        label: server.name,
+        xalign: 0,
+        ellipsize: Pango.EllipsizeMode.END,
+        valign: Gtk.Align.CENTER,
+    });
+
+    label.add_css_class('heading');
+    box.append(label);
+    box.append(createStatusDot(server.status));
+    return box;
+}
+
+function createServerSubtitle(text) {
+    const label = new Gtk.Label({
+        label: text,
+        xalign: 0,
+        wrap: true,
+        lines: 3,
+        ellipsize: Pango.EllipsizeMode.END,
+    });
+
+    label.add_css_class('caption');
+    label.add_css_class('dim-label');
+    return label;
 }
 
 function ensureConfigFile(path) {
@@ -149,11 +182,33 @@ export function createMcpConfigGroup(parent, mcpManager, onChanged = () => {}) {
 
         serverRows = mcpManager.listServers()
             .map((server) => {
-                const row = new Adw.ActionRow({
-                    title: server.name,
-                    subtitle: serverStatusSubtitle(server),
-                    subtitle_lines: 3,
+                const row = new Adw.PreferencesRow();
+                const content = new Gtk.Box({
+                    orientation: Gtk.Orientation.HORIZONTAL,
+                    spacing: 12,
+                    margin_top: 9,
+                    margin_bottom: 9,
+                    margin_start: 12,
+                    margin_end: 12,
                 });
+                const textColumn = new Gtk.Box({
+                    orientation: Gtk.Orientation.VERTICAL,
+                    spacing: 3,
+                    hexpand: true,
+                    valign: Gtk.Align.CENTER,
+                });
+                const actions = new Gtk.Box({
+                    orientation: Gtk.Orientation.HORIZONTAL,
+                    spacing: 6,
+                    valign: Gtk.Align.CENTER,
+                });
+                const subtitle = serverStatusSubtitle(server);
+
+                textColumn.append(createServerTitle(server));
+
+                if (subtitle)
+                    textColumn.append(createServerSubtitle(subtitle));
+
                 const refreshButton = createActionButton('view-refresh-symbolic', `Refresh ${server.name}`, () => {
                     refreshButton.set_sensitive(false);
                     mcpManager.refreshServer(server.key).then(() => {
@@ -203,13 +258,15 @@ export function createMcpConfigGroup(parent, mcpManager, onChanged = () => {}) {
                             authButton.set_sensitive(true);
                         });
                     });
-                    row.add_suffix(authButton);
+                    actions.append(authButton);
                 }
 
                 toggle.set_sensitive(server.source === 'workspace');
-                row.add_suffix(refreshButton);
-                row.add_suffix(toggle);
-                row.add_suffix(createStatusDot(server.status));
+                actions.append(refreshButton);
+                actions.append(toggle);
+                content.append(textColumn);
+                content.append(actions);
+                row.set_child(content);
                 configGroup.add(row);
                 return row;
             });
