@@ -357,11 +357,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _createChatSurface() {
-        const main = new Gtk.Box({
-            orientation: Gtk.Orientation.VERTICAL,
-            spacing: 12,
+        const main = new Gtk.Overlay({
             margin_top: 18,
-            margin_bottom: 18,
             hexpand: true,
             vexpand: true,
         });
@@ -369,9 +366,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const composerShell = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
             spacing: 6,
+            halign: Gtk.Align.FILL,
+            valign: Gtk.Align.END,
+            hexpand: true,
             margin_start: 18,
             margin_end: 18,
+            margin_bottom: 18,
         });
+        composerShell.add_css_class('cusco-floating-composer');
 
         const composerMetaRow = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
@@ -390,10 +392,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
             orientation: Gtk.Orientation.VERTICAL,
             spacing: 12,
             margin_top: 8,
-            margin_bottom: 8,
             margin_start: 26,
             margin_end: 26,
         });
+        this._messageBottomSpacer = new Gtk.Box();
+        this._messageBottomSpacer.set_size_request(-1, 260);
+        this._messageBottomSpacer.add_css_class('cusco-message-bottom-spacer');
+        this._appendMessageBottomSpacer();
 
         this._scroller = new Gtk.ScrolledWindow({
             child: this._messages,
@@ -544,8 +549,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
         composerShell.append(this._attachmentRow);
         composerShell.append(composerRow);
 
-        main.append(this._scroller);
-        main.append(composerShell);
+        main.set_child(this._scroller);
+        main.add_overlay(composerShell);
 
         return main;
     }
@@ -2632,6 +2637,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
     _renderActiveConversation() {
         const conversation = this._conversations.activeConversation;
         this._clearBox(this._messages);
+        this._appendMessageBottomSpacer();
         this._lastAssistantMessageView = null;
         this._syncProviderControls(conversation);
 
@@ -2784,7 +2790,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (message?.id && kind !== 'system')
             wrapper.append(this._createMessageActions(message));
 
-        this._messages.append(wrapper);
+        this._appendMessageWidget(wrapper);
         this._scrollToBottom();
 
         const messageView = {
@@ -2817,7 +2823,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             halign: Gtk.Align.START,
         });
         wrapper.append(this._createToolResultExpander(message));
-        this._messages.append(wrapper);
+        this._appendMessageWidget(wrapper);
         this._lastAssistantMessageView = null;
         this._scrollToBottom();
 
@@ -2997,6 +3003,24 @@ class CuscoWindow extends Adw.ApplicationWindow {
             box.remove(child);
             child = next;
         }
+    }
+
+    _appendMessageBottomSpacer() {
+        if (!this._messages || !this._messageBottomSpacer)
+            return;
+
+        if (this._messageBottomSpacer.get_parent() === this._messages)
+            return;
+
+        this._messages.append(this._messageBottomSpacer);
+    }
+
+    _appendMessageWidget(widget) {
+        if (this._messageBottomSpacer?.get_parent?.() === this._messages)
+            this._messages.remove(this._messageBottomSpacer);
+
+        this._messages.append(widget);
+        this._appendMessageBottomSpacer();
     }
 
     _scrollToBottom() {
