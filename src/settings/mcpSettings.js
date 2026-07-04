@@ -36,6 +36,22 @@ function createSwitch(active, tooltipText, onChanged) {
     return control;
 }
 
+function createStatusDot(status) {
+    const label = statusLabel(status.state);
+    const message = status.message ? `: ${status.message}` : '';
+    const dot = new Gtk.Box({
+        tooltip_text: `${label}${message}`,
+        valign: Gtk.Align.START,
+        halign: Gtk.Align.END,
+        margin_top: 7,
+    });
+
+    dot.set_size_request(9, 9);
+    dot.add_css_class('cusco-status-dot');
+    dot.add_css_class(`cusco-status-dot-${statusDotClass(status.state)}`);
+    return dot;
+}
+
 function ensureConfigFile(path) {
     const directory = GLib.path_get_dirname(path);
 
@@ -61,13 +77,6 @@ function presentError(parent, heading, error) {
     dialog.present(parent);
 }
 
-function serverLocation(server) {
-    if (server.transport === 'streamable-http')
-        return server.url || 'HTTP URL not configured';
-
-    return [server.command, ...(server.args ?? [])].filter(Boolean).join(' ') || 'Command not configured';
-}
-
 function statusLabel(state) {
     switch (state) {
     case 'auth_required':
@@ -85,18 +94,37 @@ function statusLabel(state) {
     }
 }
 
+function statusDotClass(state) {
+    switch (state) {
+    case 'auth_required':
+        return 'warning';
+    case 'connected':
+        return 'connected';
+    case 'connecting':
+        return 'connecting';
+    case 'disabled':
+        return 'disabled';
+    case 'error':
+        return 'error';
+    default:
+        return 'idle';
+    }
+}
+
 function serverStatusSubtitle(server) {
     const status = server.status;
     const counts = status.state === 'connected'
         ? `${server.toolCount} tools, ${server.resourceCount} resources, ${server.promptCount} prompts`
         : '';
+    const statusMessage = ['auth_required', 'error'].includes(status.state)
+        ? status.message
+        : '';
 
     return [
-        `${statusLabel(status.state)}: ${status.message}`,
         counts,
+        statusMessage,
         status.auth?.scope ? `Scope: ${status.auth.scope}` : '',
         `${server.source === 'file' ? 'mcp.json' : 'Workspace'} · ${server.transport}`,
-        serverLocation(server),
     ].filter(Boolean).join('\n');
 }
 
@@ -124,7 +152,7 @@ export function createMcpConfigGroup(parent, mcpManager, onChanged = () => {}) {
                 const row = new Adw.ActionRow({
                     title: server.name,
                     subtitle: serverStatusSubtitle(server),
-                    subtitle_lines: 4,
+                    subtitle_lines: 3,
                 });
                 const refreshButton = createActionButton('view-refresh-symbolic', `Refresh ${server.name}`, () => {
                     refreshButton.set_sensitive(false);
@@ -181,6 +209,7 @@ export function createMcpConfigGroup(parent, mcpManager, onChanged = () => {}) {
                 toggle.set_sensitive(server.source === 'workspace');
                 row.add_suffix(refreshButton);
                 row.add_suffix(toggle);
+                row.add_suffix(createStatusDot(server.status));
                 configGroup.add(row);
                 return row;
             });
