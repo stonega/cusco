@@ -43,6 +43,13 @@ export function buildAgentModeSystemPrompt(tools, { maxIterations = DEFAULT_AGEN
     ].join('\n');
 }
 
+export function formatAgentToolCall(toolCall) {
+    return `${TOOL_CALL_OPEN_TAG}${JSON.stringify({
+        name: toolCall?.name ?? '',
+        input: toolCall?.input ?? '',
+    })}${TOOL_CALL_CLOSE_TAG}`;
+}
+
 export function parseAgentToolCall(text) {
     const source = String(text ?? '');
     const match = source.match(/<cusco_tool_call>\s*([\s\S]*?)\s*<\/cusco_tool_call>/i);

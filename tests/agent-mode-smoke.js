@@ -2,6 +2,7 @@ import {
     buildAgentModeSystemPrompt,
     createAgentToolFailurePrompt,
     createAgentToolResultPrompt,
+    formatAgentToolCall,
     isPartialAgentToolCall,
     parseAgentToolCall,
 } from '../src/chat/agentMode.js';
@@ -23,6 +24,16 @@ const parsedCall = parseAgentToolCall('<cusco_tool_call>{"name":"calc","input":"
 
 if (parsedCall.name !== 'calc' || parsedCall.input !== '2 + 2')
     throw new Error('Agent tool call was not parsed');
+
+const formattedCall = parseAgentToolCall(formatAgentToolCall({
+    name: 'mcp__context7__resolve_library_id',
+    input: '{"query":"React","libraryName":"React"}',
+}));
+
+if (formattedCall.name !== 'mcp__context7__resolve_library_id'
+    || !formattedCall.input.includes('libraryName')) {
+    throw new Error('Formatted Agent tool call was not parsed');
+}
 
 const objectInput = parseAgentToolCall('<cusco_tool_call>{"tool":"data","input":{"a":1}}</cusco_tool_call>');
 

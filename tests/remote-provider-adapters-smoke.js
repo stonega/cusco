@@ -3,6 +3,7 @@ import {
     buildGeminiGenerateContentBody,
     buildOpenAiCompatibleChatBody,
     buildOpenAiResponsesBody,
+    extractAnthropicToolCalls,
     extractAnthropicReasoning,
     extractAnthropicText,
     extractAnthropicUsage,
@@ -10,15 +11,18 @@ import {
     extractChatCompletionFinishReason,
     extractChatCompletionReasoning,
     extractChatCompletionText,
+    extractChatCompletionToolCalls,
     extractChatCompletionUsage,
     extractDiscoveredModels,
     extractGeminiFinishReason,
     extractGeminiReasoning,
     extractGeminiText,
+    extractGeminiToolCalls,
     extractGeminiUsage,
     extractOpenAiFinishReason,
     extractOpenAiReasoning,
     extractOpenAiText,
+    extractOpenAiToolCalls,
     extractOpenAiUsage,
     OpenAiCompatibleChatProvider,
 } from '../src/providers/remoteProvider.js';
@@ -43,6 +47,26 @@ assertEqual(openAiBody.input.length, 4, 'OpenAI filtered message count');
 assertEqual(openAiBody.input[0].role, 'developer', 'OpenAI system role');
 assertEqual(openAiBody.max_output_tokens, 8192, 'OpenAI default max output tokens');
 
+const mcpTool = {
+    name: 'mcp__context7__resolve_library_id',
+    label: 'context7: Resolve Context7 Library ID',
+    description: 'Resolve a package name to a Context7 library ID.',
+    inputDescription: 'JSON object with fields: query, libraryName.',
+    inputSchema: {
+        type: 'object',
+        properties: {
+            query: { type: 'string' },
+            libraryName: { type: 'string' },
+        },
+        required: ['query', 'libraryName'],
+    },
+};
+const openAiToolBody = buildOpenAiResponsesBody(messages, 'gpt-test', {
+    tools: [mcpTool],
+});
+assertEqual(openAiToolBody.tool_choice, 'auto', 'OpenAI tool choice');
+assertEqual(openAiToolBody.tools[0].name, 'mcp__context7__resolve_library_id', 'OpenAI tool name');
+
 const openAiThinkingBody = buildOpenAiResponsesBody(messages, 'gpt-test', {
     provider: {
         thinking: {
@@ -63,11 +87,23 @@ assertEqual(chatBody.messages[0].role, 'system', 'OpenAI-compatible system role'
 assertEqual(chatBody.max_tokens, 8192, 'OpenAI-compatible default max tokens');
 assertEqual(chatBody.stream, false, 'OpenAI-compatible stream flag');
 
+const chatToolBody = buildOpenAiCompatibleChatBody(messages, 'chat-test', {
+    tools: [mcpTool],
+});
+assertEqual(chatToolBody.tool_choice, 'auto', 'OpenAI-compatible tool choice');
+assertEqual(chatToolBody.tools[0].function.name, 'mcp__context7__resolve_library_id', 'OpenAI-compatible tool name');
+assertEqual(chatToolBody.tools[0].function.parameters.required.length, 2, 'OpenAI-compatible tool schema');
+
 const anthropicBody = buildAnthropicMessagesBody(messages, 'claude-test');
 assertEqual(anthropicBody.model, 'claude-test', 'Anthropic model');
 assertEqual(anthropicBody.system, 'Keep answers concise.', 'Anthropic system text');
 assertEqual(anthropicBody.max_tokens, 8192, 'Anthropic default max tokens');
 assertEqual(anthropicBody.messages.length, 3, 'Anthropic conversation message count');
+const anthropicToolBody = buildAnthropicMessagesBody(messages, 'claude-test', {
+    tools: [mcpTool],
+});
+assertEqual(anthropicToolBody.tools[0].name, 'mcp__context7__resolve_library_id', 'Anthropic tool name');
+assertEqual(anthropicToolBody.tools[0].input_schema.required.length, 2, 'Anthropic tool schema');
 
 const anthropicThinkingBody = buildAnthropicMessagesBody(messages, 'claude-test', {
     provider: {
@@ -89,6 +125,10 @@ const geminiBody = buildGeminiGenerateContentBody(messages);
 assertEqual(geminiBody.systemInstruction.parts[0].text, 'Keep answers concise.', 'Gemini system instruction');
 assertEqual(geminiBody.contents[1].role, 'model', 'Gemini assistant role');
 assertEqual(geminiBody.generationConfig.maxOutputTokens, 8192, 'Gemini default max output tokens');
+const geminiToolBody = buildGeminiGenerateContentBody(messages, {
+    tools: [mcpTool],
+});
+assertEqual(geminiToolBody.tools[0].functionDeclarations[0].name, 'mcp__context7__resolve_library_id', 'Gemini tool name');
 
 assertEqual(extractOpenAiText({ output_text: 'OpenAI text' }), 'OpenAI text', 'OpenAI output_text extraction');
 assertEqual(extractOpenAiReasoning({
@@ -112,6 +152,15 @@ assertEqual(openAiUsage.cachedInputTokens, 3, 'OpenAI cached token extraction');
 assertEqual(extractOpenAiFinishReason({
     incomplete_details: { reason: 'max_output_tokens' },
 }), 'max_output_tokens', 'OpenAI finish reason extraction');
+const openAiToolCalls = extractOpenAiToolCalls({
+    output: [{
+        type: 'function_call',
+        call_id: 'call_1',
+        name: 'mcp__context7__resolve_library_id',
+        arguments: '{"query":"React hooks","libraryName":"React"}',
+    }],
+});
+assertEqual(openAiToolCalls[0].input, '{"query":"React hooks","libraryName":"React"}', 'OpenAI tool call extraction');
 assertEqual(extractChatCompletionText({ choices: [{ message: { content: 'Chat text' } }] }), 'Chat text', 'Chat extraction');
 assertEqual(extractChatCompletionReasoning({ choices: [{ message: { reasoning_content: 'Chat reasoning' } }] }), 'Chat reasoning', 'Chat reasoning extraction');
 assertEqual(extractChatCompletionFinishReason({ choices: [{ finish_reason: 'length' }] }), 'length', 'Chat finish reason extraction');
@@ -123,9 +172,45 @@ assertEqual(extractChatCompletionUsage({
         completion_tokens_details: { reasoning_tokens: 4 },
     },
 }).reasoningTokens, 4, 'Chat reasoning token extraction');
+const chatToolCalls = extractChatCompletionToolCalls({
+    choices: [{
+        message: {
+            tool_calls: [{
+                id: 'call_1',
+                type: 'function',
+                function: {
+                    name: 'mcp__context7__resolve_library_id',
+                    arguments: '{"query":"React hooks","libraryName":"React"}',
+                },
+            }],
+        },
+    }],
+});
+assertEqual(chatToolCalls[0].name, 'mcp__context7__resolve_library_id', 'Chat tool call name extraction');
+assertEqual(chatToolCalls[0].input, '{"query":"React hooks","libraryName":"React"}', 'Chat tool call object input extraction');
+const genericChatToolCalls = extractChatCompletionToolCalls({
+    choices: [{
+        message: {
+            function_call: {
+                name: 'calc',
+                arguments: '{"input":"2 + 2"}',
+            },
+        },
+    }],
+});
+assertEqual(genericChatToolCalls[0].input, '2 + 2', 'Chat tool call generic input extraction');
 assertEqual(extractAnthropicText({ content: [{ type: 'text', text: 'Claude text' }] }), 'Claude text', 'Anthropic extraction');
 assertEqual(extractAnthropicReasoning({ content: [{ type: 'thinking', thinking: 'Claude reasoning' }] }), 'Claude reasoning', 'Anthropic reasoning extraction');
 assertEqual(extractAnthropicFinishReason({ stop_reason: 'max_tokens' }), 'max_tokens', 'Anthropic finish reason extraction');
+const anthropicToolCalls = extractAnthropicToolCalls({
+    content: [{
+        type: 'tool_use',
+        id: 'toolu_1',
+        name: 'mcp__context7__query_docs',
+        input: { libraryId: '/reactjs/react.dev', query: 'useEffect cleanup' },
+    }],
+});
+assertEqual(anthropicToolCalls[0].input, '{"libraryId":"/reactjs/react.dev","query":"useEffect cleanup"}', 'Anthropic tool call extraction');
 assertEqual(extractAnthropicUsage({
     usage: {
         input_tokens: 12,
@@ -137,6 +222,19 @@ assertEqual(extractAnthropicUsage({
 assertEqual(extractGeminiText({ candidates: [{ content: { parts: [{ text: 'Gemini thought', thought: true }, { text: 'Gemini text' }] } }] }), 'Gemini text', 'Gemini extraction');
 assertEqual(extractGeminiReasoning({ candidates: [{ content: { parts: [{ text: 'Gemini thought', thought: true }] } }] }), 'Gemini thought', 'Gemini reasoning extraction');
 assertEqual(extractGeminiFinishReason({ candidates: [{ finishReason: 'MAX_TOKENS' }] }), 'MAX_TOKENS', 'Gemini finish reason extraction');
+const geminiToolCalls = extractGeminiToolCalls({
+    candidates: [{
+        content: {
+            parts: [{
+                functionCall: {
+                    name: 'mcp__context7__query_docs',
+                    args: { libraryId: '/reactjs/react.dev', query: 'hooks' },
+                },
+            }],
+        },
+    }],
+});
+assertEqual(geminiToolCalls[0].input, '{"libraryId":"/reactjs/react.dev","query":"hooks"}', 'Gemini tool call extraction');
 assertEqual(extractGeminiUsage({
     usageMetadata: {
         promptTokenCount: 6,
@@ -196,5 +294,26 @@ assertEqual(
     true,
     'Automatic continuation prompt',
 );
+
+const toolCallingProvider = new ContinuingProvider([
+    {
+        toolCalls: [{
+            name: 'calc',
+            input: '2 + 2',
+        }],
+        finishReason: 'tool_calls',
+    },
+]);
+let providerToolCall = null;
+
+for await (const chunk of toolCallingProvider.streamChat([createMessage('user', 'Calculate')], {
+    tools: [{ name: 'calc', label: 'Calculator', description: 'Calculate.', inputDescription: 'Expression.' }],
+})) {
+    if (chunk.type === 'tool_calls')
+        providerToolCall = chunk.toolCalls[0];
+}
+
+assertEqual(providerToolCall.name, 'calc', 'Provider tool call chunk name');
+assertEqual(providerToolCall.input, '2 + 2', 'Provider tool call chunk input');
 
 print('Cusco remote provider adapters smoke passed');

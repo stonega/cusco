@@ -11,6 +11,7 @@ import {
     createAgentToolFailurePrompt,
     createAgentToolResultPrompt,
     DEFAULT_AGENT_MAX_ITERATIONS,
+    formatAgentToolCall,
     isPartialAgentToolCall,
     parseAgentToolCall,
 } from './chat/agentMode.js';
@@ -136,6 +137,14 @@ function normalizeProviderChunk(chunk) {
             type: 'usage',
             text: '',
             usage: normalizeTokenUsage(chunk.usage),
+        };
+
+    if (chunk.type === 'tool_calls')
+        return {
+            type: 'tool_calls',
+            text: '',
+            toolCalls: Array.isArray(chunk.toolCalls) ? chunk.toolCalls : [],
+            usage: null,
         };
 
     return {
@@ -1173,12 +1182,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
         }
     }
 
-    async _collectProviderResponse(providerId, modelId, providerMessages, cancellable, onChunk = null) {
+    async _collectProviderResponse(providerId, modelId, providerMessages, cancellable, onChunk = null, collectOptions = {}) {
         const activeProvider = this._providerConfigs.createProvider(providerId);
         const providerConfig = this._providerConfigs.resolve(providerId, modelId);
         let responseText = '';
         let reasoningText = '';
         let usage = null;
+        const toolCalls = [];
 
         for await (const chunk of activeProvider.streamChat(providerMessages, {
             ...providerConfig,
@@ -1186,6 +1196,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             timeoutSeconds: this._appSettings.responseTimeoutSeconds,
             maxOutputTokens: this._appSettings.maxOutputTokens,
             thinkingLevel: this._conversations.activeConversation?.thinkingLevel ?? this._appSettings.thinkingLevel,
+            tools: collectOptions.tools ?? [],
         })) {
             const normalizedChunk = normalizeProviderChunk(chunk);
 
@@ -1193,6 +1204,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 usage = normalizedChunk.usage;
             else if (normalizedChunk.type === 'reasoning')
                 reasoningText += normalizedChunk.text;
+            else if (normalizedChunk.type === 'tool_calls')
+                toolCalls.push(...normalizedChunk.toolCalls);
             else
                 responseText += normalizedChunk.text;
 
@@ -1201,13 +1214,22 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 text: responseText,
                 reasoning: reasoningText,
                 usage,
+                toolCalls,
             });
         }
+
+        if (collectOptions.returnState)
+            return {
+                text: responseText,
+                reasoning: reasoningText,
+                usage,
+                toolCalls,
+            };
 
         return responseText;
     }
 
-    async _collectProviderResponseWithFallback(conversation, providerMessages, cancellable, onChunk = null) {
+    async _collectProviderResponseWithFallback(conversation, providerMessages, cancellable, onChunk = null, collectOptions = {}) {
         try {
             return await this._collectProviderResponse(
                 conversation.providerId,
@@ -1215,6 +1237,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 providerMessages,
                 cancellable,
                 onChunk,
+                collectOptions,
             );
         } catch (error) {
             const fallback = this._getProviderFallback(conversation.providerId, error);
@@ -1235,6 +1258,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 providerMessages,
                 cancellable,
                 onChunk,
+                collectOptions,
             );
         }
     }
@@ -1253,7 +1277,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 return '';
 
             setAssistantStatus(iteration === 0 ? 'Agent Mode is thinking...' : 'Agent Mode is continuing...');
-            const responseText = await this._collectProviderResponseWithFallback(
+            const responseState = await this._collectProviderResponseWithFallback(
                 conversation,
                 runtimeMessages,
                 cancellable,
@@ -1264,13 +1288,47 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     if (state?.type === 'reasoning')
                         assistantView.set_reasoning(state.reasoning);
 
-                    if (state?.type !== 'usage')
+                    if (state?.type !== 'usage' && state?.type !== 'tool_calls')
                         this._updateAgentModeAssistantView(conversation, assistantView, text);
                 },
+                {
+                    returnState: true,
+                    tools: this._tools.listTools(),
+                },
             );
+            const responseText = responseState.text;
 
             if (isCancellableCancelled(cancellable))
                 return responseText;
+
+            if (responseState.toolCalls.length > 0) {
+                let ranAnyTool = false;
+
+                for (const nativeToolCall of responseState.toolCalls) {
+                    const runtimeToolCallText = responseText || formatAgentToolCall(nativeToolCall);
+                    const request = this._createAgentToolRequest(
+                        nativeToolCall,
+                        runtimeToolCallText,
+                        conversation,
+                        runtimeMessages,
+                    );
+
+                    if (!request)
+                        continue;
+
+                    setAssistantStatus(`Agent Mode requested ${request.label}...`);
+                    ranAnyTool = await this._runAgentToolRequest(
+                        request,
+                        runtimeToolCallText,
+                        conversation,
+                        runtimeMessages,
+                        cancellable,
+                    ) || ranAnyTool;
+                }
+
+                if (ranAnyTool)
+                    continue;
+            }
 
             const toolCall = this._parseAgentToolCallForRuntime(responseText, conversation, runtimeMessages);
 

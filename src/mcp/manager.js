@@ -568,6 +568,7 @@ export class McpManager {
                 label: `${server.name}: ${tool.title ?? tool.name}`,
                 description: tool.description ?? `Run ${tool.name} on ${server.name}.`,
                 inputDescription: toolInputDescription(tool),
+                inputSchema: tool.inputSchema ?? null,
                 permissionPolicy: server.permissionPolicy,
                 requiresPermission: server.permissionPolicy !== 'allow',
                 concurrencySafe: false,

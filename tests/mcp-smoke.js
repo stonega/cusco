@@ -259,6 +259,11 @@ try {
             throw new Error(`MCP tool was not registered: ${expected}`);
     }
 
+    const echoTool = tools.getTool('mcp__local_mcp__echo');
+
+    if (echoTool.inputSchema?.properties?.message?.type !== 'string')
+        throw new Error('MCP tool input schema was not preserved');
+
     const echo = await tools.runRequest(
         tools.createRequest('mcp__local_mcp__echo', '{"message":"hello"}'),
         { timeoutSeconds: 5 },

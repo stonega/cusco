@@ -22,7 +22,12 @@ function setJsonErrorResponse(message, status, body) {
     message.set_response('application/json', Soup.MemoryUse.COPY, JSON.stringify(body));
 }
 
+function requestJson(message) {
+    return JSON.parse(new TextDecoder().decode(message.get_request_body().flatten().get_data()));
+}
+
 const server = new Soup.Server();
+let sawNativeTools = false;
 
 GLib.setenv('NO_PROXY', '127.0.0.1,localhost', true);
 GLib.setenv('no_proxy', '127.0.0.1,localhost', true);
@@ -40,6 +45,10 @@ server.add_handler('/v1/models', (_server, message) => {
 });
 
 server.add_handler('/v1/chat/completions', (_server, message) => {
+    const request = requestJson(message);
+    sawNativeTools = Array.isArray(request.tools)
+        && request.tools.some((tool) => tool.function?.name === 'calc');
+
     setJsonResponse(message, {
         choices: [
             {
@@ -86,10 +95,19 @@ if (listening) {
         const provider = new OpenAiCompatibleChatProvider(config);
         let text = '';
 
-        for await (const chunk of provider.streamChat([createMessage('user', 'Hello')], { timeoutSeconds: 5 }))
+        for await (const chunk of provider.streamChat([createMessage('user', 'Hello')], {
+            timeoutSeconds: 5,
+            tools: [{
+                name: 'calc',
+                label: 'Calculator',
+                description: 'Evaluate a math expression.',
+                inputDescription: 'Expression.',
+            }],
+        }))
             text += chunk;
 
         assertEqual(text, 'Local provider response', 'Streamed provider text');
+        assertEqual(sawNativeTools, true, 'Native tool definitions were sent');
 
         const rateLimitedProvider = new OpenAiCompatibleChatProvider({
             ...config,

@@ -29,6 +29,7 @@ const ANTHROPIC_DEFAULT_THINKING_BUDGETS = {
     medium: 2048,
     high: 3072,
 };
+const MAX_NATIVE_TOOL_DESCRIPTION_CHARS = 1024;
 
 function createUserVisibleError(message, userMessage = message) {
     const error = new Error(message);
@@ -262,16 +263,23 @@ async function* displayStream(text, cancellable = null) {
 
 function normalizeProviderResponse(response) {
     if (typeof response === 'string')
-        return { text: response, reasoning: '' };
+        return { text: response, reasoning: '', toolCalls: [] };
 
     if (!response || typeof response !== 'object')
-        return { text: '', reasoning: '' };
+        return { text: '', reasoning: '', toolCalls: [] };
 
     return {
         text: String(response.text ?? ''),
         reasoning: String(response.reasoning ?? ''),
         usage: normalizeTokenUsage(response.usage),
         finishReason: String(response.finishReason ?? ''),
+        toolCalls: Array.isArray(response.toolCalls)
+            ? response.toolCalls.map((toolCall) => ({
+                id: String(toolCall?.id ?? ''),
+                name: String(toolCall?.name ?? '').trim(),
+                input: String(toolCall?.input ?? ''),
+            })).filter((toolCall) => toolCall.name)
+            : [],
     };
 }
 
@@ -317,6 +325,194 @@ function joinTextParts(parts) {
         .map((part) => String(part ?? '').trim())
         .filter(Boolean)
         .join('\n\n');
+}
+
+function compactToolDescription(tool) {
+    const text = [
+        tool.label ? `Label: ${tool.label}` : '',
+        tool.description ?? '',
+        tool.inputDescription ? `Input: ${tool.inputDescription}` : '',
+    ].filter(Boolean).join('\n\n').trim();
+
+    return text.length > MAX_NATIVE_TOOL_DESCRIPTION_CHARS
+        ? `${text.slice(0, MAX_NATIVE_TOOL_DESCRIPTION_CHARS - 3)}...`
+        : text;
+}
+
+function fallbackToolParameters(tool) {
+    return {
+        type: 'object',
+        properties: {
+            input: {
+                type: 'string',
+                description: tool.inputDescription
+                    ? `Tool input. ${tool.inputDescription}`
+                    : 'Tool input as text or JSON.',
+            },
+        },
+        required: [],
+        additionalProperties: true,
+    };
+}
+
+function normalizeToolParameters(tool) {
+    const schema = tool.inputSchema;
+
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema))
+        return fallbackToolParameters(tool);
+
+    if (schema.type === 'object' || schema.properties)
+        return {
+            ...schema,
+            type: 'object',
+        };
+
+    return fallbackToolParameters(tool);
+}
+
+function openAiCompatibleToolDefinitions(tools = []) {
+    return (tools ?? [])
+        .filter((tool) => /^[A-Za-z0-9_-]{1,64}$/.test(String(tool?.name ?? '')))
+        .map((tool) => ({
+            type: 'function',
+            function: {
+                name: tool.name,
+                description: compactToolDescription(tool) || `Run ${tool.name}.`,
+                parameters: normalizeToolParameters(tool),
+            },
+        }));
+}
+
+function openAiResponsesToolDefinitions(tools = []) {
+    return openAiCompatibleToolDefinitions(tools).map((tool) => ({
+        type: 'function',
+        name: tool.function.name,
+        description: tool.function.description,
+        parameters: tool.function.parameters,
+    }));
+}
+
+function anthropicToolDefinitions(tools = []) {
+    return (tools ?? [])
+        .filter((tool) => /^[A-Za-z0-9_-]{1,64}$/.test(String(tool?.name ?? '')))
+        .map((tool) => ({
+            name: tool.name,
+            description: compactToolDescription(tool) || `Run ${tool.name}.`,
+            input_schema: normalizeToolParameters(tool),
+        }));
+}
+
+function geminiToolDefinitions(tools = []) {
+    const declarations = (tools ?? [])
+        .filter((tool) => /^[A-Za-z0-9_-]{1,64}$/.test(String(tool?.name ?? '')))
+        .map((tool) => ({
+            name: tool.name,
+            description: compactToolDescription(tool) || `Run ${tool.name}.`,
+            parameters: normalizeToolParameters(tool),
+        }));
+
+    return declarations.length > 0
+        ? [{ functionDeclarations: declarations }]
+        : [];
+}
+
+function parseToolArgumentsInput(argumentsText) {
+    const text = String(argumentsText ?? '').trim();
+
+    if (!text)
+        return '';
+
+    try {
+        const parsed = JSON.parse(text);
+
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const keys = Object.keys(parsed);
+
+            if (keys.length === 1 && Object.hasOwn(parsed, 'input'))
+                return String(parsed.input ?? '');
+
+            return JSON.stringify(parsed);
+        }
+
+        return String(parsed ?? '');
+    } catch (_error) {
+        return text;
+    }
+}
+
+function toolInputFromValue(value) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const keys = Object.keys(value);
+
+        if (keys.length === 1 && Object.hasOwn(value, 'input'))
+            return String(value.input ?? '');
+
+        return JSON.stringify(value);
+    }
+
+    return String(value ?? '');
+}
+
+export function extractOpenAiToolCalls(response) {
+    const outputCalls = (response?.output ?? [])
+        .filter((item) => item?.type === 'function_call')
+        .map((item) => ({
+            id: String(item.call_id ?? item.id ?? ''),
+            name: String(item.name ?? '').trim(),
+            input: parseToolArgumentsInput(item.arguments),
+        }));
+    const chatCalls = extractChatCompletionToolCalls(response);
+
+    return [...outputCalls, ...chatCalls].filter((toolCall) => toolCall.name);
+}
+
+export function extractChatCompletionToolCalls(response) {
+    const message = response?.choices?.[0]?.message ?? {};
+    const nativeToolCalls = Array.isArray(message.tool_calls)
+        ? message.tool_calls
+        : [];
+    const functionCall = message.function_call
+        ? [{ id: '', function: message.function_call }]
+        : [];
+
+    return [...nativeToolCalls, ...functionCall]
+        .map((toolCall) => {
+            const call = toolCall.function ?? toolCall;
+            const name = String(call?.name ?? '').trim();
+
+            if (!name)
+                return null;
+
+            return {
+                id: String(toolCall.id ?? ''),
+                name,
+                input: parseToolArgumentsInput(call.arguments),
+            };
+        })
+        .filter(Boolean);
+}
+
+export function extractAnthropicToolCalls(response) {
+    return (response?.content ?? [])
+        .filter((content) => content?.type === 'tool_use')
+        .map((content) => ({
+            id: String(content.id ?? ''),
+            name: String(content.name ?? '').trim(),
+            input: toolInputFromValue(content.input),
+        }))
+        .filter((toolCall) => toolCall.name);
+}
+
+export function extractGeminiToolCalls(response) {
+    return (response?.candidates?.[0]?.content?.parts ?? [])
+        .map((part) => part.functionCall ?? part.function_call ?? null)
+        .filter(Boolean)
+        .map((call) => ({
+            id: '',
+            name: String(call.name ?? '').trim(),
+            input: toolInputFromValue(call.args ?? call.arguments ?? {}),
+        }))
+        .filter((toolCall) => toolCall.name);
 }
 
 export function openAiMessages(messages) {
@@ -455,16 +651,31 @@ export function buildOpenAiResponsesBody(messages, modelId, options = {}) {
     if (reasoning)
         body.reasoning = reasoning;
 
+    const tools = openAiResponsesToolDefinitions(options.tools);
+
+    if (tools.length > 0) {
+        body.tools = tools;
+        body.tool_choice = 'auto';
+    }
+
     return body;
 }
 
 export function buildOpenAiCompatibleChatBody(messages, modelId, options = {}) {
-    return {
+    const body = {
         model: modelId,
         messages: openAiCompatibleMessages(messages),
         max_tokens: normalizeMaxOutputTokens(options.maxOutputTokens),
         stream: false,
     };
+    const tools = openAiCompatibleToolDefinitions(options.tools);
+
+    if (tools.length > 0) {
+        body.tools = tools;
+        body.tool_choice = 'auto';
+    }
+
+    return body;
 }
 
 export function buildAnthropicMessagesBody(messages, modelId, options = {}) {
@@ -486,6 +697,11 @@ export function buildAnthropicMessagesBody(messages, modelId, options = {}) {
             body.max_tokens = thinking.budget_tokens + 1024;
     }
 
+    const tools = anthropicToolDefinitions(options.tools);
+
+    if (tools.length > 0)
+        body.tools = tools;
+
     return body;
 }
 
@@ -495,6 +711,10 @@ export function buildGeminiGenerateContentBody(messages, options = {}) {
     payload.generationConfig = {
         maxOutputTokens: normalizeMaxOutputTokens(options.maxOutputTokens),
     };
+    const tools = geminiToolDefinitions(options.tools);
+
+    if (tools.length > 0)
+        payload.tools = tools;
 
     return payload;
 }
@@ -543,6 +763,7 @@ export function extractOpenAiResponse(response) {
         reasoning: extractOpenAiReasoning(response),
         usage: extractOpenAiUsage(response),
         finishReason: extractOpenAiFinishReason(response),
+        toolCalls: extractOpenAiToolCalls(response),
     };
 }
 
@@ -573,6 +794,7 @@ export function extractChatCompletionResponse(response) {
         reasoning: extractChatCompletionReasoning(response),
         usage: extractChatCompletionUsage(response),
         finishReason: extractChatCompletionFinishReason(response),
+        toolCalls: extractChatCompletionToolCalls(response),
     };
 }
 
@@ -603,6 +825,7 @@ export function extractAnthropicResponse(response) {
         reasoning: extractAnthropicReasoning(response),
         usage: extractAnthropicUsage(response),
         finishReason: extractAnthropicFinishReason(response),
+        toolCalls: extractAnthropicToolCalls(response),
     };
 }
 
@@ -633,6 +856,7 @@ export function extractGeminiResponse(response) {
         reasoning: extractGeminiReasoning(response),
         usage: extractGeminiUsage(response),
         finishReason: extractGeminiFinishReason(response),
+        toolCalls: extractGeminiToolCalls(response),
     };
 }
 
@@ -742,7 +966,7 @@ class RemoteProvider extends ChatProvider {
                 options,
             ));
 
-            if (!response.text && !response.reasoning && !response.usage)
+            if (!response.text && !response.reasoning && !response.usage && response.toolCalls.length === 0)
                 throw new Error(`${this.name} returned an empty response`);
 
             if (response.usage) {
@@ -762,6 +986,14 @@ class RemoteProvider extends ChatProvider {
             if (response.text) {
                 assistantText += response.text;
                 yield* displayStream(response.text, options.cancellable ?? null);
+            }
+
+            if (response.toolCalls.length > 0) {
+                yield {
+                    type: 'tool_calls',
+                    toolCalls: response.toolCalls,
+                };
+                return;
             }
 
             if (!response.text
@@ -784,6 +1016,7 @@ export class OpenAiResponsesProvider extends RemoteProvider {
             buildOpenAiResponsesBody(messages, modelId, {
                 provider: this._config,
                 model: options.model,
+                tools: options.tools,
                 thinkingLevel: options.thinkingLevel,
                 maxOutputTokens: options.maxOutputTokens,
             }),
@@ -804,6 +1037,7 @@ export class OpenAiCompatibleChatProvider extends RemoteProvider {
             normalizeUrl(this._config.baseUrl, this._config.chatPath ?? '/chat/completions'),
             { Authorization: `Bearer ${getApiKey(this._config)}` },
             buildOpenAiCompatibleChatBody(messages, modelId, {
+                tools: options.tools,
                 maxOutputTokens: options.maxOutputTokens,
             }),
             {
@@ -828,6 +1062,7 @@ export class AnthropicMessagesProvider extends RemoteProvider {
             buildAnthropicMessagesBody(messages, modelId, {
                 provider: this._config,
                 model: options.model,
+                tools: options.tools,
                 thinkingLevel: options.thinkingLevel,
                 maxOutputTokens: options.maxOutputTokens,
             }),
@@ -846,6 +1081,7 @@ export class GeminiGenerateContentProvider extends RemoteProvider {
     async _complete(messages, modelId, options = {}) {
         const url = `${normalizeUrl(this._config.baseUrl, `/models/${modelId}:generateContent`)}?key=${encodeURIComponent(getApiKey(this._config))}`;
         const response = await postJson(url, {}, buildGeminiGenerateContentBody(messages, {
+            tools: options.tools,
             maxOutputTokens: options.maxOutputTokens,
         }), {
             cancellable: options.cancellable ?? null,
