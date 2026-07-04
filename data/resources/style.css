@@ -58,7 +58,7 @@
 .cusco-floating-composer {
     padding: 10px 12px 12px;
     border-radius: 16px;
-    background-color: alpha(@window_bg_color, 0.94);
+    background-color: transparent;
 }
 
 .cusco-composer-input {
