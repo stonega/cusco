@@ -62,7 +62,7 @@
 }
 
 .cusco-floating-composer .cusco-composer-meta button {
-    background-color: transparent;
+    background-color: @view_bg_color;
     background-image: none;
     box-shadow: none;
 }
@@ -70,7 +70,7 @@
 .cusco-floating-composer .cusco-composer-meta button:hover,
 .cusco-floating-composer .cusco-composer-meta button:active,
 .cusco-floating-composer .cusco-composer-meta button:checked {
-    background-color: transparent;
+    background-color: shade(@view_bg_color, 0.94);
     background-image: none;
 }
 
