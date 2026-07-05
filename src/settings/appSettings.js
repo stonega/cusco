@@ -1,5 +1,6 @@
 import Adw from 'gi://Adw?version=1';
 import Gio from 'gi://Gio?version=2.0';
+import GLib from 'gi://GLib?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
 
 import {
@@ -21,7 +22,7 @@ import {
 } from '../chat/codeThemes.js';
 
 const SETTINGS_SCHEMA_ID = 'io.github.stonega.Cusco';
-const REQUIRED_SETTINGS_KEYS = [
+const PERSISTENT_SETTINGS_KEYS = [
     'send-with-enter',
     'auto-mode-enabled',
     'response-timeout-seconds',
@@ -41,15 +42,228 @@ const DEFAULT_HIGH_CONTRAST_ENABLED = false;
 const DEFAULT_REDUCED_MOTION_ENABLED = false;
 const MIN_RESPONSE_TIMEOUT_SECONDS = 5;
 const MAX_RESPONSE_TIMEOUT_SECONDS = 300;
+const FALLBACK_SETTINGS_VERSION = 1;
+const FALLBACK_BOOLEAN_DEFAULTS = {
+    'send-with-enter': DEFAULT_SEND_WITH_ENTER,
+    'auto-mode-enabled': DEFAULT_AUTO_MODE_ENABLED,
+    'provider-fallback-enabled': DEFAULT_PROVIDER_FALLBACK_ENABLED,
+    'high-contrast-enabled': DEFAULT_HIGH_CONTRAST_ENABLED,
+    'reduced-motion-enabled': DEFAULT_REDUCED_MOTION_ENABLED,
+};
+const FALLBACK_UINT_DEFAULTS = {
+    'response-timeout-seconds': DEFAULT_RESPONSE_TIMEOUT_SECONDS,
+    'max-output-tokens': DEFAULT_MAX_OUTPUT_TOKENS,
+};
+const FALLBACK_STRING_DEFAULTS = {
+    'thinking-level': DEFAULT_THINKING_LEVEL,
+    'code-theme': DEFAULT_CODE_THEME_ID,
+};
 
-function createDefaultSettings() {
+function defaultFallbackSettingsPath() {
+    return GLib.build_filenamev([
+        GLib.get_user_config_dir(),
+        SETTINGS_SCHEMA_ID,
+        'app-settings.json',
+    ]);
+}
+
+function hasOwn(object, key) {
+    return Object.prototype.hasOwnProperty.call(object, key);
+}
+
+function isRecord(value) {
+    return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeFallbackBooleans(value) {
+    const booleans = {};
+
+    if (!isRecord(value))
+        return booleans;
+
+    for (const key of Object.keys(FALLBACK_BOOLEAN_DEFAULTS)) {
+        if (typeof value[key] === 'boolean')
+            booleans[key] = value[key];
+    }
+
+    return booleans;
+}
+
+function normalizeFallbackUints(value) {
+    const uints = {};
+
+    if (!isRecord(value))
+        return uints;
+
+    for (const key of Object.keys(FALLBACK_UINT_DEFAULTS)) {
+        if (Number.isFinite(value[key]))
+            uints[key] = Math.max(0, Math.round(value[key]));
+    }
+
+    return uints;
+}
+
+function normalizeFallbackStrings(value) {
+    const strings = {};
+
+    if (!isRecord(value))
+        return strings;
+
+    for (const key of Object.keys(FALLBACK_STRING_DEFAULTS)) {
+        if (typeof value[key] === 'string')
+            strings[key] = value[key];
+    }
+
+    return strings;
+}
+
+function writeFileAtomically(path, contents) {
+    const directory = GLib.path_get_dirname(path);
+    const basename = GLib.path_get_basename(path);
+    const tempPath = GLib.build_filenamev([
+        directory,
+        `.${basename}.${GLib.uuid_string_random()}.tmp`,
+    ]);
+
+    GLib.mkdir_with_parents(directory, 0o700);
+    GLib.file_set_contents(tempPath, contents);
+
+    try {
+        Gio.File.new_for_path(tempPath).move(
+            Gio.File.new_for_path(path),
+            Gio.FileCopyFlags.OVERWRITE,
+            null,
+            null,
+        );
+    } finally {
+        if (GLib.file_test(tempPath, GLib.FileTest.EXISTS))
+            GLib.unlink(tempPath);
+    }
+}
+
+function flushSettings() {
+    try {
+        Gio.Settings.sync();
+    } catch (_error) {
+        // Non-GSettings test doubles and file-backed fallbacks persist synchronously.
+    }
+}
+
+class JsonAppSettingsStore {
+    constructor(path = defaultFallbackSettingsPath()) {
+        this.path = path;
+        const data = this._load();
+
+        this._booleans = data.booleans;
+        this._uints = data.uints;
+        this._strings = data.strings;
+    }
+
+    has_key(key) {
+        return hasOwn(this._booleans, key)
+            || hasOwn(this._uints, key)
+            || hasOwn(this._strings, key);
+    }
+
+    get_boolean(key) {
+        return this._booleans[key] ?? FALLBACK_BOOLEAN_DEFAULTS[key] ?? false;
+    }
+
+    set_boolean(key, value) {
+        if (!hasOwn(FALLBACK_BOOLEAN_DEFAULTS, key))
+            return false;
+
+        this._booleans[key] = Boolean(value);
+        this._persist();
+        return true;
+    }
+
+    get_uint(key) {
+        return this._uints[key] ?? FALLBACK_UINT_DEFAULTS[key] ?? 0;
+    }
+
+    set_uint(key, value) {
+        if (!hasOwn(FALLBACK_UINT_DEFAULTS, key))
+            return false;
+
+        this._uints[key] = Math.max(0, Math.round(value));
+        this._persist();
+        return true;
+    }
+
+    get_string(key) {
+        return this._strings[key] ?? FALLBACK_STRING_DEFAULTS[key] ?? '';
+    }
+
+    set_string(key, value) {
+        if (!hasOwn(FALLBACK_STRING_DEFAULTS, key))
+            return false;
+
+        this._strings[key] = String(value ?? '');
+        this._persist();
+        return true;
+    }
+
+    _load() {
+        if (!GLib.file_test(this.path, GLib.FileTest.EXISTS)) {
+            return {
+                booleans: {},
+                uints: {},
+                strings: {},
+            };
+        }
+
+        try {
+            const [, contents] = GLib.file_get_contents(this.path);
+            const parsed = JSON.parse(new TextDecoder().decode(contents));
+
+            return {
+                booleans: normalizeFallbackBooleans(parsed?.booleans),
+                uints: normalizeFallbackUints(parsed?.uints),
+                strings: normalizeFallbackStrings(parsed?.strings),
+            };
+        } catch (error) {
+            logError(error, 'Failed to load app settings fallback');
+            return {
+                booleans: {},
+                uints: {},
+                strings: {},
+            };
+        }
+    }
+
+    _persist() {
+        const payload = JSON.stringify({
+            version: FALLBACK_SETTINGS_VERSION,
+            booleans: this._booleans,
+            uints: this._uints,
+            strings: this._strings,
+        }, null, 2);
+
+        writeFileAtomically(this.path, `${payload}\n`);
+    }
+}
+
+function createDefaultSettingsContext(fallbackPath = null) {
     const settingsSource = Gio.SettingsSchemaSource.get_default();
     const schema = settingsSource?.lookup(SETTINGS_SCHEMA_ID, true);
 
-    if (!schema || REQUIRED_SETTINGS_KEYS.some((key) => !schema.has_key(key)))
-        return null;
+    if (!schema)
+        return {
+            settings: null,
+            keys: new Set(),
+            fallbackSettings: new JsonAppSettingsStore(fallbackPath ?? defaultFallbackSettingsPath()),
+        };
 
-    return new Gio.Settings({ schema_id: SETTINGS_SCHEMA_ID });
+    const keys = new Set(PERSISTENT_SETTINGS_KEYS.filter((key) => schema.has_key(key)));
+
+    return {
+        settings: new Gio.Settings({ schema_id: SETTINGS_SCHEMA_ID }),
+        keys,
+        fallbackSettings: keys.size === PERSISTENT_SETTINGS_KEYS.length && !fallbackPath
+            ? null
+            : new JsonAppSettingsStore(fallbackPath ?? defaultFallbackSettingsPath()),
+    };
 }
 
 function clampTimeoutSeconds(value) {
@@ -59,7 +273,17 @@ function clampTimeoutSeconds(value) {
 
 export class AppSettingsStore {
     constructor(options = {}) {
-        this._settings = options.settings === undefined ? createDefaultSettings() : options.settings;
+        const settingsContext = options.settings === undefined
+            ? createDefaultSettingsContext(options.settingsPath)
+            : {
+                settings: options.settings,
+                keys: options.settingsKeys ? new Set(options.settingsKeys) : null,
+                fallbackSettings: options.settingsPath ? new JsonAppSettingsStore(options.settingsPath) : null,
+            };
+
+        this._settings = settingsContext.settings;
+        this._settingsKeys = settingsContext.keys;
+        this._fallbackSettings = settingsContext.fallbackSettings;
         this._sendWithEnter = DEFAULT_SEND_WITH_ENTER;
         this._autoModeEnabled = DEFAULT_AUTO_MODE_ENABLED;
         this._responseTimeoutSeconds = DEFAULT_RESPONSE_TIMEOUT_SECONDS;
@@ -82,13 +306,13 @@ export class AppSettingsStore {
 
     setSendWithEnter(value) {
         this._sendWithEnter = Boolean(value);
-        this._settings?.set_boolean('send-with-enter', this._sendWithEnter);
+        this._setBoolean('send-with-enter', this._sendWithEnter);
         return this._sendWithEnter;
     }
 
     setAutoModeEnabled(value) {
         this._autoModeEnabled = Boolean(value);
-        this._settings?.set_boolean('auto-mode-enabled', this._autoModeEnabled);
+        this._setBoolean('auto-mode-enabled', this._autoModeEnabled);
         return this._autoModeEnabled;
     }
 
@@ -98,7 +322,7 @@ export class AppSettingsStore {
 
     setResponseTimeoutSeconds(value) {
         this._responseTimeoutSeconds = clampTimeoutSeconds(value);
-        this._settings?.set_uint('response-timeout-seconds', this._responseTimeoutSeconds);
+        this._setUint('response-timeout-seconds', this._responseTimeoutSeconds);
         return this._responseTimeoutSeconds;
     }
 
@@ -108,7 +332,7 @@ export class AppSettingsStore {
 
     setMaxOutputTokens(value) {
         this._maxOutputTokens = normalizeMaxOutputTokens(value);
-        this._settings?.set_uint('max-output-tokens', this._maxOutputTokens);
+        this._setUint('max-output-tokens', this._maxOutputTokens);
         return this._maxOutputTokens;
     }
 
@@ -118,7 +342,7 @@ export class AppSettingsStore {
 
     setProviderFallbackEnabled(value) {
         this._providerFallbackEnabled = Boolean(value);
-        this._settings?.set_boolean('provider-fallback-enabled', this._providerFallbackEnabled);
+        this._setBoolean('provider-fallback-enabled', this._providerFallbackEnabled);
         return this._providerFallbackEnabled;
     }
 
@@ -128,7 +352,7 @@ export class AppSettingsStore {
 
     setThinkingLevel(value) {
         this._thinkingLevel = normalizeThinkingLevel(value);
-        this._settings?.set_string?.('thinking-level', this._thinkingLevel);
+        this._setString('thinking-level', this._thinkingLevel);
         return this._thinkingLevel;
     }
 
@@ -138,7 +362,7 @@ export class AppSettingsStore {
 
     setCodeTheme(value) {
         this._codeTheme = normalizeCodeTheme(value);
-        this._settings?.set_string?.('code-theme', this._codeTheme);
+        this._setString('code-theme', this._codeTheme);
         return this._codeTheme;
     }
 
@@ -148,7 +372,7 @@ export class AppSettingsStore {
 
     setHighContrastEnabled(value) {
         this._highContrastEnabled = Boolean(value);
-        this._settings?.set_boolean('high-contrast-enabled', this._highContrastEnabled);
+        this._setBoolean('high-contrast-enabled', this._highContrastEnabled);
         return this._highContrastEnabled;
     }
 
@@ -158,23 +382,98 @@ export class AppSettingsStore {
 
     setReducedMotionEnabled(value) {
         this._reducedMotionEnabled = Boolean(value);
-        this._settings?.set_boolean('reduced-motion-enabled', this._reducedMotionEnabled);
+        this._setBoolean('reduced-motion-enabled', this._reducedMotionEnabled);
         return this._reducedMotionEnabled;
     }
 
+    _hasSettingsKey(key) {
+        return Boolean(this._settings) && (!this._settingsKeys || this._settingsKeys.has(key));
+    }
+
+    _getBoolean(key, fallback) {
+        if (this._hasSettingsKey(key))
+            return this._settings.get_boolean(key);
+
+        return this._fallbackSettings?.has_key(key)
+            ? this._fallbackSettings.get_boolean(key)
+            : fallback;
+    }
+
+    _setBoolean(key, value) {
+        let changed = false;
+
+        if (this._hasSettingsKey(key)) {
+            this._settings.set_boolean(key, value);
+            changed = true;
+        } else if (this._fallbackSettings) {
+            changed = this._fallbackSettings.set_boolean(key, value);
+        }
+
+        if (changed)
+            flushSettings();
+    }
+
+    _getUint(key, fallback) {
+        if (this._hasSettingsKey(key))
+            return this._settings.get_uint(key);
+
+        return this._fallbackSettings?.has_key(key)
+            ? this._fallbackSettings.get_uint(key)
+            : fallback;
+    }
+
+    _setUint(key, value) {
+        let changed = false;
+
+        if (this._hasSettingsKey(key)) {
+            this._settings.set_uint(key, value);
+            changed = true;
+        } else if (this._fallbackSettings) {
+            changed = this._fallbackSettings.set_uint(key, value);
+        }
+
+        if (changed)
+            flushSettings();
+    }
+
+    _getString(key, fallback) {
+        if (this._hasSettingsKey(key) && typeof this._settings.get_string === 'function')
+            return this._settings.get_string(key);
+
+        return this._fallbackSettings?.has_key(key)
+            ? this._fallbackSettings.get_string(key)
+            : fallback;
+    }
+
+    _setString(key, value) {
+        let changed = false;
+
+        if (this._hasSettingsKey(key) && typeof this._settings.set_string === 'function') {
+            this._settings.set_string(key, value);
+            changed = true;
+        } else if (this._fallbackSettings) {
+            changed = this._fallbackSettings.set_string(key, value);
+        }
+
+        if (changed)
+            flushSettings();
+    }
+
     _loadPersistentState() {
-        if (!this._settings)
+        if (!this._settings && !this._fallbackSettings)
             return;
 
-        this._sendWithEnter = this._settings.get_boolean('send-with-enter');
-        this._autoModeEnabled = this._settings.get_boolean('auto-mode-enabled');
-        this._responseTimeoutSeconds = clampTimeoutSeconds(this._settings.get_uint('response-timeout-seconds'));
-        this._maxOutputTokens = normalizeMaxOutputTokens(this._settings.get_uint('max-output-tokens'));
-        this._providerFallbackEnabled = this._settings.get_boolean('provider-fallback-enabled');
-        this._thinkingLevel = normalizeThinkingLevel(this._settings.get_string?.('thinking-level'));
-        this._codeTheme = normalizeCodeTheme(this._settings.get_string?.('code-theme'));
-        this._highContrastEnabled = this._settings.get_boolean('high-contrast-enabled');
-        this._reducedMotionEnabled = this._settings.get_boolean('reduced-motion-enabled');
+        this._sendWithEnter = this._getBoolean('send-with-enter', this._sendWithEnter);
+        this._autoModeEnabled = this._getBoolean('auto-mode-enabled', this._autoModeEnabled);
+        this._responseTimeoutSeconds = clampTimeoutSeconds(
+            this._getUint('response-timeout-seconds', this._responseTimeoutSeconds),
+        );
+        this._maxOutputTokens = normalizeMaxOutputTokens(this._getUint('max-output-tokens', this._maxOutputTokens));
+        this._providerFallbackEnabled = this._getBoolean('provider-fallback-enabled', this._providerFallbackEnabled);
+        this._thinkingLevel = normalizeThinkingLevel(this._getString('thinking-level', this._thinkingLevel));
+        this._codeTheme = normalizeCodeTheme(this._getString('code-theme', this._codeTheme));
+        this._highContrastEnabled = this._getBoolean('high-contrast-enabled', this._highContrastEnabled);
+        this._reducedMotionEnabled = this._getBoolean('reduced-motion-enabled', this._reducedMotionEnabled);
     }
 }
 

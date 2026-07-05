@@ -1,3 +1,5 @@
+import GLib from 'gi://GLib?version=2.0';
+
 import { AppSettingsStore } from '../src/settings/appSettings.js';
 import {
     DEFAULT_CODE_THEME_ID,
@@ -121,5 +123,67 @@ if (settings.get_string('code-theme') !== nextCodeTheme)
 
 if (settings.get_boolean('high-contrast-enabled') !== false || settings.get_boolean('reduced-motion-enabled') !== true)
     throw new Error('Accessibility preferences were not persisted');
+
+const partialSettings = new MemorySettings({
+    uints: {
+        'max-output-tokens': 12288,
+    },
+});
+const partialAppSettings = new AppSettingsStore({
+    settings: partialSettings,
+    settingsKeys: ['max-output-tokens'],
+});
+
+if (partialAppSettings.maxOutputTokens !== 12288)
+    throw new Error(`Maximum output tokens did not load with partial schema support: ${partialAppSettings.maxOutputTokens}`);
+
+partialAppSettings.setMaxOutputTokens(24576);
+partialAppSettings.setCodeTheme(nextCodeTheme);
+
+if (partialSettings.get_uint('max-output-tokens') !== 24576)
+    throw new Error('Maximum output tokens did not persist when unrelated schema keys were missing');
+
+if (partialSettings.get_string('code-theme') !== '')
+    throw new Error('Missing schema keys should not be written');
+
+const fallbackSettingsPath = GLib.build_filenamev([
+    GLib.get_tmp_dir(),
+    `cusco-app-settings-${GLib.uuid_string_random()}.json`,
+]);
+const staleSchemaSettings = new MemorySettings({
+    uints: {
+        'max-output-tokens': 12288,
+    },
+});
+
+try {
+    const staleSchemaAppSettings = new AppSettingsStore({
+        settings: staleSchemaSettings,
+        settingsKeys: ['max-output-tokens'],
+        settingsPath: fallbackSettingsPath,
+    });
+
+    staleSchemaAppSettings.setMaxOutputTokens(24576);
+    staleSchemaAppSettings.setCodeTheme(nextCodeTheme);
+    staleSchemaAppSettings.setHighContrastEnabled(true);
+
+    const reloadedStaleSchemaAppSettings = new AppSettingsStore({
+        settings: staleSchemaSettings,
+        settingsKeys: ['max-output-tokens'],
+        settingsPath: fallbackSettingsPath,
+    });
+
+    if (reloadedStaleSchemaAppSettings.maxOutputTokens !== 24576)
+        throw new Error(`Schema-backed setting did not reload: ${reloadedStaleSchemaAppSettings.maxOutputTokens}`);
+
+    if (reloadedStaleSchemaAppSettings.codeTheme !== nextCodeTheme)
+        throw new Error(`Fallback code theme preference was not reloaded: ${reloadedStaleSchemaAppSettings.codeTheme}`);
+
+    if (reloadedStaleSchemaAppSettings.highContrastEnabled !== true)
+        throw new Error('Fallback boolean preference was not reloaded');
+} finally {
+    if (GLib.file_test(fallbackSettingsPath, GLib.FileTest.EXISTS))
+        GLib.unlink(fallbackSettingsPath);
+}
 
 print('Cusco app settings smoke passed');
