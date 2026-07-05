@@ -13,6 +13,12 @@
 
 .cusco-conversation-list {
     background-color: transparent;
+    padding: 6px 6px 12px;
+}
+
+.cusco-conversation-list-scroller,
+.cusco-conversation-list-scroller viewport {
+    background-color: transparent;
 }
 
 .cusco-conversation-list row {
@@ -61,6 +67,37 @@
     background-color: transparent;
 }
 
+.cusco-empty-conversation-state {
+    opacity: 0.9;
+}
+
+.cusco-empty-photo-frame {
+    padding: 3px;
+    border-radius: 3px;
+    border: 1px solid alpha(@window_fg_color, 0.36);
+    background-color: shade(@window_bg_color, 0.72);
+}
+
+.cusco-empty-photo-lip {
+    padding: 2px;
+    border-radius: 2px;
+    border: 1px solid alpha(@window_bg_color, 0.72);
+    background-color: alpha(@window_fg_color, 0.18);
+}
+
+.cusco-empty-photo-mat {
+    padding: 3px;
+    border-radius: 2px;
+    border: 1px solid alpha(@window_fg_color, 0.12);
+    background-color: shade(@window_bg_color, 1.08);
+}
+
+.cusco-empty-photo {
+    border-radius: 1px;
+    border: 1px solid alpha(@window_fg_color, 0.22);
+    background-color: alpha(@window_fg_color, 0.06);
+}
+
 .cusco-floating-composer .cusco-composer-meta button {
     background-color: @view_bg_color;
     background-image: none;
@@ -72,6 +109,11 @@
 .cusco-floating-composer .cusco-composer-meta button:checked {
     background-color: shade(@view_bg_color, 0.94);
     background-image: none;
+}
+
+.cusco-floating-composer .cusco-composer-meta button image,
+.cusco-message-actions button image {
+    color: @window_fg_color;
 }
 
 .cusco-composer-input {
@@ -170,9 +212,30 @@
     margin-bottom: 2px;
 }
 
+.cusco-tool-result-header {
+    padding: 2px 4px;
+}
+
+.cusco-tool-result-toggle-icon {
+    transition: -gtk-icon-transform 150ms ease;
+    -gtk-icon-transform: rotate(0deg);
+}
+
+.cusco-tool-result-toggle-icon-expanded {
+    -gtk-icon-transform: rotate(90deg);
+}
+
 .cusco-reasoning {
     margin-bottom: 2px;
     color: alpha(@window_fg_color, 0.74);
+}
+
+.cusco-knot-status {
+    color: alpha(@window_fg_color, 0.78);
+}
+
+.cusco-knot-icon {
+    color: @accent_color;
 }
 
 .cusco-message-markdown {

@@ -50,3 +50,4 @@ Cusco is a native GNOME AI chat application built with GJS, GTK 4, and libadwait
 - Keep provider-specific code behind a small provider interface before adding individual API clients.
 - Store secrets through the desktop Secret Service, not plain settings files.
 - Make memory features explicit and user-controlled; never hide stored memory state.
+- Preserve custom bundled icon artwork. If an icon has the wrong color in dark/light themes, fix the symbolic icon loading or CSS recoloring path instead of replacing it with a different system icon.

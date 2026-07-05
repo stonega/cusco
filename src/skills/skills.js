@@ -22,7 +22,7 @@ const CUSCO_MCP_SETUP_SKILL_CONTENT = [
     '',
     'Cusco infers the transport: `url` means `streamable-http`; no `url` means `stdio`. A `namespace` can be set to make tool names stable and easy to recognize.',
     '',
-    'After editing `mcp.json`, tell the user to reload the MCP config from Cusco Preferences, then use Agent Mode. MCP tools appear as `mcp__<namespace>__<tool>`. Resource helpers appear as `mcp__<namespace>__list_resources` and `mcp__<namespace>__read_resource`; prompt helpers appear as `mcp__<namespace>__list_prompts` and `mcp__<namespace>__get_prompt`.',
+    'After editing `mcp.json`, tell the user to reload the MCP config from Cusco Preferences, then use Agent. MCP tools appear as `mcp__<namespace>__<tool>`. Resource helpers appear as `mcp__<namespace>__list_resources` and `mcp__<namespace>__read_resource`; prompt helpers appear as `mcp__<namespace>__list_prompts` and `mcp__<namespace>__get_prompt`.',
     '',
     'When working inside the Cusco repo, verify MCP behavior with `gjs -m tests/mcp-smoke.js`. The focused smoke test checks config parsing, stdio discovery, tool registration, resource helpers, prompt helpers, and tool calls.',
 ].join('\n');

@@ -1,3 +1,4 @@
+import Cairo from 'cairo';
 import Adw from 'gi://Adw?version=1';
 import Gdk from 'gi://Gdk?version=4.0';
 import Gio from 'gi://Gio?version=2.0';
@@ -45,14 +46,122 @@ import { WorkspaceManager } from './workspace/workspace.js';
 const GIT_BRANCH_ICON_FILE = 'git-branch-symbolic.svg';
 const ATTACHMENT_ICON_FILE = 'attachment-symbolic.svg';
 const PROMPT_ICON_FILE = 'prompt-symbolic.svg';
+const TOOL_ICON_FILE = 'tool-symbolic.svg';
+const EMPTY_STATE_IMAGE_DARK = 'machupicchu_dark.png';
+const EMPTY_STATE_IMAGE_LIGHT = 'machupicchu_light.png';
+const EMPTY_STATE_FRAME_WIDTH_RATIO = 1 / 3;
+const EMPTY_STATE_FRAME_ASPECT_RATIO = 176 / 236;
+const EMPTY_STATE_VERTICAL_RATIO = 0.618;
+const EMPTY_STATE_FADE_DURATION_MS = 220;
 const PROVIDER_PICKER_ID_COLUMN = 0;
 const PROVIDER_PICKER_NAME_COLUMN = 1;
 const PROVIDER_PICKER_ICON_COLUMN = 2;
+const KNOT_ICON_VIEWBOX_WIDTH = 903;
+const KNOT_ICON_VIEWBOX_HEIGHT = 414;
+const KNOT_ICON_STROKE_WIDTH = 35;
+const KNOT_ICON_SAMPLE_STEPS = 28;
+const KNOT_ICON_ANIMATION_SECONDS = 1;
+const LONG_RESPONSE_NOTIFICATION_DELAY_MS = 10000;
+const KNOT_ICON_CURVES = [
+    [15, 219.379, 56.5, 207.379, 186.6, 201.8, 431, 259],
+    [431, 259, 736.5, 330.5, 706.5, 70.3797, 706.5, 70.3797],
+    [706.5, 70.3797, 659.7, -11.2203, 510, 15.0463, 441, 38.3797],
+    [441, 38.3797, 441, 38.3797, 376.641, 62.7237, 343, 89.8799],
+    [343, 89.8799, 307.145, 118.823, 268.5, 181.38, 268.5, 181.38],
+    [268.5, 181.38, 169.3, 339.38, 278.5, 394.667, 359.5, 398.5],
+    [359.5, 398.5, 440.5, 402.333, 483, 301, 483, 301],
+    [483, 301, 483, 301, 505.689, 221.851, 532.5, 181.38],
+    [532.5, 181.38, 566.79, 129.62, 598.134, 103.051, 656.5, 81.8799],
+    [656.5, 81.8799, 708.53, 63.0069, 742.856, 69.1365, 798, 73.8799],
+    [798, 73.8799, 833.375, 76.9228, 887.5, 89.8799, 887.5, 89.8799],
+];
 const BASE_RESPONSE_SYSTEM_PROMPT = [
     'Complete the user\'s current request in one assistant response whenever possible.',
     'If more work remains, keep going within the available output budget instead of asking the user to say "continue".',
     'Ask a follow-up only when required information is missing or the user must choose between options.',
 ].join(' ');
+
+let knotIconPath = null;
+let bundledIconThemePathsInstalled = false;
+
+function cubicPoint(curve, t) {
+    const [x0, y0, x1, y1, x2, y2, x3, y3] = curve;
+    const inverse = 1 - t;
+    const inverse2 = inverse * inverse;
+    const t2 = t * t;
+
+    return {
+        x: inverse2 * inverse * x0 + 3 * inverse2 * t * x1 + 3 * inverse * t2 * x2 + t2 * t * x3,
+        y: inverse2 * inverse * y0 + 3 * inverse2 * t * y1 + 3 * inverse * t2 * y2 + t2 * t * y3,
+    };
+}
+
+function getKnotIconPath() {
+    if (knotIconPath)
+        return knotIconPath;
+
+    const points = [];
+
+    for (const curve of KNOT_ICON_CURVES) {
+        if (points.length === 0)
+            points.push({ x: curve[0], y: curve[1] });
+
+        for (let step = 1; step <= KNOT_ICON_SAMPLE_STEPS; step++)
+            points.push(cubicPoint(curve, step / KNOT_ICON_SAMPLE_STEPS));
+    }
+
+    let totalLength = 0;
+
+    for (let index = 1; index < points.length; index++) {
+        const previous = points[index - 1];
+        const current = points[index];
+
+        totalLength += Math.hypot(current.x - previous.x, current.y - previous.y);
+    }
+
+    knotIconPath = { points, totalLength };
+    return knotIconPath;
+}
+
+function mirrorProgress(value) {
+    const phase = value % 2;
+    return phase <= 1 ? phase : 2 - phase;
+}
+
+function drawKnotIconPath(cr, progress) {
+    const { points, totalLength } = getKnotIconPath();
+    const targetLength = Math.max(0, Math.min(1, progress)) * totalLength;
+
+    if (points.length === 0 || targetLength <= 0)
+        return;
+
+    cr.moveTo(points[0].x, points[0].y);
+
+    let walkedLength = 0;
+
+    for (let index = 1; index < points.length; index++) {
+        const previous = points[index - 1];
+        const current = points[index];
+        const segmentLength = Math.hypot(current.x - previous.x, current.y - previous.y);
+
+        if (walkedLength + segmentLength <= targetLength) {
+            cr.lineTo(current.x, current.y);
+            walkedLength += segmentLength;
+            continue;
+        }
+
+        const remaining = targetLength - walkedLength;
+        const ratio = segmentLength === 0 ? 0 : remaining / segmentLength;
+
+        cr.lineTo(
+            previous.x + (current.x - previous.x) * ratio,
+            previous.y + (current.y - previous.y) * ratio,
+        );
+        break;
+    }
+
+    cr.stroke();
+}
 
 function isGioError(error, code) {
     return typeof error?.matches === 'function' && error.matches(Gio.IOErrorEnum, code);
@@ -73,18 +182,70 @@ function getBundledResourcePath(filename) {
         return null;
 
     const moduleDir = GLib.path_get_dirname(modulePath);
-    const candidates = [
-        GLib.build_filenamev([moduleDir, 'resources', filename]),
-        GLib.build_filenamev([moduleDir, '..', 'data', 'resources', filename]),
-    ];
+    const candidates = getBundledResourceDirs(moduleDir)
+        .map((directory) => GLib.build_filenamev([directory, filename]));
 
     return candidates.find((path) => GLib.file_test(path, GLib.FileTest.EXISTS)) ?? null;
 }
 
+function getBundledImagePath(filename) {
+    const modulePath = Gio.File.new_for_uri(import.meta.url).get_path();
+
+    if (!modulePath)
+        return null;
+
+    const moduleDir = GLib.path_get_dirname(modulePath);
+    const candidates = [
+        ...getBundledResourceDirs(moduleDir),
+        GLib.build_filenamev([moduleDir, '..', 'assets']),
+    ].map((directory) => GLib.build_filenamev([directory, filename]));
+
+    return candidates.find((path) => GLib.file_test(path, GLib.FileTest.EXISTS)) ?? null;
+}
+
+function getBundledResourceDirs(moduleDir) {
+    return [
+        GLib.build_filenamev([moduleDir, 'resources']),
+        GLib.build_filenamev([moduleDir, '..', 'data', 'resources']),
+    ];
+}
+
+function bundledIconName(filename) {
+    return String(filename ?? '').replace(/\.svg$/i, '');
+}
+
+function installBundledIconThemePaths() {
+    const display = Gdk.Display.get_default();
+
+    if (!display)
+        return null;
+
+    const iconTheme = Gtk.IconTheme.get_for_display(display);
+
+    if (bundledIconThemePathsInstalled)
+        return iconTheme;
+
+    const modulePath = Gio.File.new_for_uri(import.meta.url).get_path();
+
+    if (!modulePath)
+        return null;
+
+    const moduleDir = GLib.path_get_dirname(modulePath);
+
+    for (const directory of getBundledResourceDirs(moduleDir)) {
+        if (GLib.file_test(directory, GLib.FileTest.IS_DIR))
+            iconTheme.add_search_path(directory);
+    }
+
+    bundledIconThemePathsInstalled = true;
+    return iconTheme;
+}
+
 function createBundledIcon(filename, fallbackIconName) {
-    const iconPath = getBundledResourcePath(filename);
-    const image = iconPath
-        ? new Gtk.Image({ file: iconPath })
+    const iconTheme = installBundledIconThemePaths();
+    const iconName = bundledIconName(filename);
+    const image = iconTheme?.has_icon(iconName)
+        ? new Gtk.Image({ icon_name: iconName })
         : new Gtk.Image({ icon_name: fallbackIconName });
 
     image.set_pixel_size(16);
@@ -320,10 +481,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const sidebarContent = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
             spacing: 12,
-            margin_top: 6,
-            margin_bottom: 12,
-            margin_start: 6,
-            margin_end: 6,
             hexpand: true,
             vexpand: true,
         });
@@ -331,6 +488,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._chatSearch = new Gtk.SearchEntry({
             placeholder_text: 'Search chats',
             hexpand: true,
+            margin_start: 6,
+            margin_end: 6,
         });
         this._chatSearch.connect('search-changed', () => this._refreshConversationList());
 
@@ -350,7 +509,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._renderActiveConversation();
         });
 
-        sidebarContent.append(this._conversationList);
+        const conversationListScroller = new Gtk.ScrolledWindow({
+            child: this._conversationList,
+            hexpand: true,
+            vexpand: true,
+            hscrollbar_policy: Gtk.PolicyType.NEVER,
+            vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+        });
+        conversationListScroller.add_css_class('cusco-conversation-list-scroller');
+
+        sidebarContent.append(conversationListScroller);
         sidebar.append(sidebarContent);
 
         return sidebar;
@@ -404,6 +572,26 @@ class CuscoWindow extends Adw.ApplicationWindow {
             child: this._messages,
             hexpand: true,
             vexpand: true,
+        });
+
+        this._emptyConversationState = this._createEmptyConversationState();
+        main.connect('get-child-position', (overlay, child, allocation) => {
+            if (child !== this._emptyConversationState)
+                return false;
+
+            const overlayWidth = overlay.get_width();
+            const overlayHeight = overlay.get_height();
+            const frameWidth = Math.max(1, Math.round(overlayWidth * EMPTY_STATE_FRAME_WIDTH_RATIO));
+            const frameHeight = Math.max(1, Math.round(frameWidth * EMPTY_STATE_FRAME_ASPECT_RATIO));
+
+            allocation.width = frameWidth;
+            allocation.height = frameHeight;
+            allocation.x = Math.max(0, Math.round((overlayWidth - frameWidth) / 2));
+            allocation.y = Math.max(
+                0,
+                Math.round((overlayHeight * (1 - EMPTY_STATE_VERTICAL_RATIO)) - (frameHeight / 2)),
+            );
+            return true;
         });
 
         const composerRow = new Gtk.Box({
@@ -551,6 +739,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         composerShell.append(composerRow);
 
         main.set_child(this._scroller);
+        main.add_overlay(this._emptyConversationState);
         main.add_overlay(composerShell);
 
         return main;
@@ -953,7 +1142,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (permissionDecision.status === 'deny') {
             const message = createMessage('system', `${request.label} was not run because it is blocked by policy.`);
             this._conversations.appendMessage(conversationId, message);
-            this._addMessage(message.content, message.role, message);
+            this._addMessageIfActiveConversation(conversationId, message);
             return 'blocked';
         }
 
@@ -965,7 +1154,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             const message = createMessage('system', `${request.label} was not run because permission was denied.`);
             this._conversations.appendMessage(conversationId, message);
-            this._addMessage(message.content, message.role, message);
+            this._addMessageIfActiveConversation(conversationId, message);
             return 'denied';
         }
 
@@ -987,7 +1176,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 },
             });
             this._conversations.appendMessage(conversationId, message);
-            this._addMessage(message.content, message.role, message);
+            this._addMessageIfActiveConversation(conversationId, message);
             this._updateUsageDisplay(this._conversations.getConversation(conversationId));
             return status;
         } catch (error) {
@@ -998,7 +1187,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             const message = createMessage('system', error.userMessage ?? `Tool failed: ${error.message}`);
             this._conversations.appendMessage(conversationId, message);
-            this._addMessage(message.content, message.role, message);
+            this._addMessageIfActiveConversation(conversationId, message);
             logError(error, 'Failed to run tool request');
             return 'failed';
         }
@@ -1151,6 +1340,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         try {
             this._injectMemoryContext(conversation);
             const activeSkills = this._injectSkillContext(conversation);
+            assistantView = this._createStreamingAssistantView(conversation);
+            assistantView.set_loading();
+
             if (conversation.agentModeEnabled)
                 await this._mcp.refreshTools(this._tools, {
                     timeoutSeconds: this._appSettings.responseTimeoutSeconds,
@@ -1160,7 +1352,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
             const providerMessages = this._buildProviderMessages(conversation, activeSkills, {
                 agentMode: Boolean(conversation.agentModeEnabled),
             });
-            assistantView = this._createStreamingAssistantView(conversation);
             const assistantText = conversation.agentModeEnabled
                 ? await this._runAgentModeResponse(conversation, providerMessages, assistantView, cancellable)
                 : await this._collectProviderResponseWithFallback(
@@ -1183,9 +1374,17 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 );
 
             if (isCancellableCancelled(cancellable)) {
+                const hadContent = assistantView.hasContent();
+                const hadToolResults = assistantView.hasToolResults();
+
+                if (hadContent || hadToolResults)
+                    assistantView.clear_status();
+                else
+                    assistantView.remove();
+
                 this._appendStoppedMessage(
                     conversation.id,
-                    assistantView.hasContent()
+                    hadContent
                         ? 'Response stopped. Partial assistant text was saved.'
                         : 'Response stopped before the assistant returned text.',
                 );
@@ -1197,13 +1396,28 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._renderActiveConversation();
         } catch (error) {
             if (wasOperationCancelled(error, cancellable)) {
+                const hadContent = assistantView?.hasContent?.() ?? false;
+                const hadToolResults = assistantView?.hasToolResults?.() ?? false;
+
+                if (hadContent || hadToolResults)
+                    assistantView?.clear_status?.();
+                else
+                    assistantView?.remove?.();
+
                 this._appendStoppedMessage(
                     conversation.id,
-                    assistantView?.hasContent()
+                    hadContent
                         ? 'Response stopped. Partial assistant text was saved.'
                         : 'Response stopped before the assistant returned text.',
                 );
                 return;
+            }
+
+            if (assistantView) {
+                if (assistantView.hasContent() || assistantView.hasToolResults())
+                    assistantView.clear_status();
+                else
+                    assistantView.remove();
             }
 
             throw error;
@@ -1309,7 +1523,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (isCancellableCancelled(cancellable))
                 return '';
 
-            setAssistantStatus(iteration === 0 ? 'Agent Mode is thinking...' : 'Agent Mode is continuing...');
+            setAssistantStatus(iteration === 0 ? 'Agent is thinking...' : 'Agent is continuing...');
             const responseState = await this._collectProviderResponseWithFallback(
                 conversation,
                 runtimeMessages,
@@ -1349,7 +1563,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     if (!request)
                         continue;
 
-                    setAssistantStatus(`Agent Mode requested ${request.label}...`);
+                    setAssistantStatus(`Agent requested ${request.label}...`);
                     ranAnyTool = await this._runAgentToolRequest(
                         request,
                         runtimeToolCallText,
@@ -1376,7 +1590,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (!request)
                 continue;
 
-            setAssistantStatus(`Agent Mode requested ${request.label}...`);
+            setAssistantStatus(`Agent requested ${request.label}...`);
             const ranTool = await this._runAgentToolRequest(
                 request,
                 responseText,
@@ -1391,25 +1605,25 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         const limitMessage = createMessage(
             'system',
-            `Agent Mode stopped after ${DEFAULT_AGENT_MAX_ITERATIONS} tool-use iterations.`,
+            `Agent stopped after ${DEFAULT_AGENT_MAX_ITERATIONS} tool-use iterations.`,
         );
         this._conversations.appendMessage(conversation.id, limitMessage);
-        this._addMessage(limitMessage.content, limitMessage.role, limitMessage);
+        this._addMessageIfActiveConversation(conversation.id, limitMessage);
 
-        return 'Agent Mode stopped because it reached the tool-use limit. Review the tool results above or send a narrower request.';
+        return 'Agent stopped because it reached the tool-use limit. Review the tool results above or send a narrower request.';
     }
 
     _updateAgentModeAssistantView(conversation, assistantView, text) {
         let displayText;
 
         if (isPartialAgentToolCall(text)) {
-            displayText = 'Agent Mode is preparing a tool call...';
+            displayText = 'Agent is preparing a tool call...';
         } else {
             try {
                 const toolCall = parseAgentToolCall(text);
                 const tool = toolCall ? this._tools.getTool(toolCall.name) : null;
                 displayText = toolCall
-                    ? (tool ? `Agent Mode requested ${tool.label}...` : 'Agent Mode requested a tool...')
+                    ? (tool ? `Agent requested ${tool.label}...` : 'Agent requested a tool...')
                     : text;
             } catch (_error) {
                 displayText = text;
@@ -1423,6 +1637,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         this._updateUsageDisplay(conversation);
         this._scrollToBottom();
+
+        if (this._activeChatCancellable)
+            this._setComposerBusy(true);
     }
 
     _parseAgentToolCallForRuntime(responseText, conversation, runtimeMessages) {
@@ -1432,7 +1649,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             const reason = error.userMessage ?? error.message;
             const message = createMessage('system', reason);
             this._conversations.appendMessage(conversation.id, message);
-            this._addMessage(message.content, message.role, message);
+            this._addMessageIfActiveConversation(conversation.id, message);
             runtimeMessages.push(
                 { role: 'assistant', content: responseText },
                 { role: 'user', content: createAgentToolFailurePrompt({ name: 'unknown' }, reason) },
@@ -1448,7 +1665,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             const reason = error.userMessage ?? error.message;
             const message = createMessage('system', reason);
             this._conversations.appendMessage(conversation.id, message);
-            this._addMessage(message.content, message.role, message);
+            this._addMessageIfActiveConversation(conversation.id, message);
             runtimeMessages.push(
                 { role: 'assistant', content: responseText },
                 { role: 'user', content: createAgentToolFailurePrompt(toolCall, reason) },
@@ -1503,7 +1720,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 },
             });
             this._conversations.appendMessage(conversation.id, message);
-            this._addMessage(message.content, message.role, message);
+            this._addMessageIfActiveConversation(conversation.id, message);
             this._updateUsageDisplay(conversation);
 
             if (result.cancelled)
@@ -1522,7 +1739,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             const reason = error.userMessage ?? `Tool failed: ${error.message}`;
             this._appendAgentToolFailure(request, responseText, conversation, runtimeMessages, reason);
-            logError(error, 'Failed to run Agent Mode tool request');
+            logError(error, 'Failed to run Agent tool request');
             return false;
         }
     }
@@ -1546,7 +1763,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             },
         });
         this._conversations.appendMessage(conversation.id, message);
-        this._addMessage(message.content, message.role, message);
+        this._addMessageIfActiveConversation(conversation.id, message);
         this._updateUsageDisplay(conversation);
         runtimeMessages.push(
             { role: 'assistant', content: responseText },
@@ -1582,6 +1799,17 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return true;
     }
 
+    _isActiveConversationId(conversationId) {
+        return this._conversations.activeConversation?.id === conversationId;
+    }
+
+    _addMessageIfActiveConversation(conversationId, message) {
+        if (!this._isActiveConversationId(conversationId))
+            return null;
+
+        return this._addMessage(message.content, message.role, message);
+    }
+
     _appendStoppedMessage(conversationId, text) {
         const conversation = this._conversations.getConversation(conversationId);
 
@@ -1590,7 +1818,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         const message = createMessage('system', text);
         this._conversations.appendMessage(conversation.id, message);
-        this._addMessage(message.content, message.role, message);
+        this._addMessageIfActiveConversation(conversation.id, message);
         this._updateUsageDisplay(conversation);
         this._refreshConversationList();
         return message;
@@ -1611,7 +1839,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
 
         this._conversations.appendMessage(conversationId, message);
-        this._addMessage(message.content, message.role, message);
+        this._addMessageIfActiveConversation(conversationId, message);
         this._updateUsageDisplay(this._conversations.getConversation(conversationId));
         return message;
     }
@@ -1624,6 +1852,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         let currentUsage = null;
 
         const ensureView = () => {
+            if (!this._isActiveConversationId(conversation.id))
+                return null;
+
             if (!view)
                 view = this._addMessage('', 'assistant');
 
@@ -1644,7 +1875,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             const message = ensureMessage(currentText);
 
             this._conversations.updateMessageContent(conversation.id, message.id, currentText);
-            ensureView().set_label(displayText);
+            ensureView()?.set_label(displayText);
         };
 
         const updatePersistentReasoning = (reasoning) => {
@@ -1658,7 +1889,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 thinkingLevel: conversation.thinkingLevel,
                 createdAt: new Date().toISOString(),
             });
-            ensureView().set_reasoning(currentReasoning);
+            ensureView()?.set_reasoning(currentReasoning);
         };
 
         const updatePersistentUsage = (usage) => {
@@ -1681,8 +1912,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
             set_stream_text: updatePersistentText,
             set_reasoning: updatePersistentReasoning,
             set_usage: updatePersistentUsage,
-            set_status: (text) => ensureView().set_label(text),
+            set_loading: () => ensureView()?.set_loading(),
+            set_status: (text) => ensureView()?.set_status(text),
+            clear_status: () => view?.clear_loading?.(),
+            remove: () => view?.remove?.(),
             hasContent: () => currentText.length > 0 || currentReasoning.length > 0 || Boolean(currentUsage),
+            hasToolResults: () => view?.has_tool_results?.() ?? false,
         };
     }
 
@@ -1690,15 +1925,22 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._stopLongResponseNotification();
         this._longResponseNotificationId = `long-response-${GLib.uuid_string_random()}`;
         this._longResponseNotificationSent = false;
-        this._longResponseTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
-            const notification = new Gio.Notification();
-            notification.set_title('Cusco is still responding');
-            notification.set_body('The current response is taking longer than usual.');
-            this.get_application()?.send_notification(this._longResponseNotificationId, notification);
-            this._longResponseNotificationSent = true;
+        this._longResponseTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, LONG_RESPONSE_NOTIFICATION_DELAY_MS, () => {
+            if (this._shouldSendLongResponseNotification()) {
+                const notification = new Gio.Notification();
+                notification.set_title('Cusco is still responding');
+                notification.set_body('The current response is taking longer than usual.');
+                this.get_application()?.send_notification(this._longResponseNotificationId, notification);
+                this._longResponseNotificationSent = true;
+            }
+
             this._longResponseTimeoutId = 0;
             return GLib.SOURCE_REMOVE;
         });
+    }
+
+    _shouldSendLongResponseNotification() {
+        return !this.is_active();
     }
 
     _stopLongResponseNotification() {
@@ -1990,7 +2232,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._memoryToggleButton.connect('notify::active', () => this._handleMemoryToggleChanged());
 
         this._agentModeToggleButton = new Gtk.Switch({
-            tooltip_text: 'Agent mode',
+            tooltip_text: 'Agent',
             valign: Gtk.Align.CENTER,
         });
         this._agentModeToggleButton.connect('notify::active', () => this._handleAgentModeToggleChanged());
@@ -2003,7 +2245,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         content.append(createLabeledControlRow('Thinking', this._thinkingLevelPicker));
         content.append(createLabeledControlRow('Memory', this._memoryToggleButton));
-        content.append(createLabeledControlRow('Agent mode', this._agentModeToggleButton));
+        content.append(createLabeledControlRow('Agent', this._agentModeToggleButton));
         content.append(createLabeledControlRow('Skills', this._skillsToggleButton));
 
         popover.set_child(new Gtk.ScrolledWindow({
@@ -2427,7 +2669,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 ].filter(Boolean).join(' / ')
                 : [
                     conversation.archived ? 'Archived' : '',
-                    conversation.agentModeEnabled ? 'Agent Mode' : '',
+                    conversation.agentModeEnabled ? 'Agent' : '',
                     `${providerConfig.provider.name} / ${providerConfig.model?.name ?? 'No model'}`,
                     organizationLabel,
                 ].filter(Boolean).join(' / '),
@@ -2689,6 +2931,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._appendMessageBottomSpacer();
         this._lastAssistantMessageView = null;
         this._syncProviderControls(conversation);
+        this._syncEmptyConversationState(conversation);
 
         for (const message of conversation?.messages ?? [])
             this._addMessage(message.content, message.role, message);
@@ -2699,6 +2942,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _updateUsageDisplay(conversation = this._conversations.activeConversation, pendingAssistantText = '') {
         if (!this._windowTitle)
+            return;
+
+        if (conversation?.id && !this._isActiveConversationId(conversation.id))
             return;
 
         const messages = [...(conversation?.messages ?? [])];
@@ -2715,10 +2961,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._attachButton.set_sensitive(!isBusy);
         this._syncComposerHint(isBusy);
 
-        this._newChatButton.set_sensitive(!isBusy);
-        this._chatSearch.set_sensitive(!isBusy);
+        this._newChatButton.set_sensitive(true);
+        this._chatSearch.set_sensitive(true);
         this._promptMenuButton.set_sensitive(!isBusy);
-        this._conversationList.set_sensitive(!isBusy);
+        this._conversationList.set_sensitive(true);
         this._providerPicker.set_sensitive(!isBusy);
         this._providerConfigButton.set_sensitive(!isBusy);
         this._modelPicker.set_sensitive(!isBusy);
@@ -2740,21 +2986,261 @@ class CuscoWindow extends Adw.ApplicationWindow {
         };
     }
 
+    _createEmptyConversationState() {
+        const revealer = new Gtk.Revealer({
+            halign: Gtk.Align.START,
+            valign: Gtk.Align.START,
+            transition_type: Gtk.RevealerTransitionType.CROSSFADE,
+            transition_duration: EMPTY_STATE_FADE_DURATION_MS,
+            reveal_child: false,
+            visible: false,
+            can_target: false,
+        });
+        revealer.add_css_class('cusco-empty-conversation-state');
+
+        const container = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            hexpand: true,
+            vexpand: true,
+            can_target: false,
+        });
+
+        const frame = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            hexpand: true,
+            vexpand: true,
+        });
+        frame.add_css_class('cusco-empty-photo-frame');
+
+        const lip = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            hexpand: true,
+            vexpand: true,
+        });
+        lip.add_css_class('cusco-empty-photo-lip');
+
+        const mat = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            hexpand: true,
+            vexpand: true,
+        });
+        mat.add_css_class('cusco-empty-photo-mat');
+
+        this._emptyConversationPicture = new Gtk.Picture({
+            hexpand: true,
+            vexpand: true,
+            can_shrink: true,
+            content_fit: Gtk.ContentFit.COVER,
+        });
+        this._emptyConversationPicture.add_css_class('cusco-empty-photo');
+
+        mat.append(this._emptyConversationPicture);
+        lip.append(mat);
+        frame.append(lip);
+        container.append(frame);
+        revealer.set_child(container);
+
+        const styleManager = Adw.StyleManager.get_default();
+        this._emptyConversationThemeHandlerId = styleManager.connect('notify::dark', () => {
+            this._updateEmptyConversationImage();
+        });
+        this._updateEmptyConversationImage();
+
+        return revealer;
+    }
+
+    _syncEmptyConversationState(conversation = this._conversations.activeConversation) {
+        if (!this._emptyConversationState)
+            return;
+
+        const isEmpty = (conversation?.messages?.length ?? 0) === 0;
+
+        if (isEmpty)
+            this._showEmptyConversationState();
+        else
+            this._hideEmptyConversationState();
+    }
+
+    _showEmptyConversationState() {
+        if (!this._emptyConversationState)
+            return;
+
+        if (this._emptyConversationFadeTimeoutId) {
+            GLib.source_remove(this._emptyConversationFadeTimeoutId);
+            this._emptyConversationFadeTimeoutId = 0;
+        }
+
+        this._updateEmptyConversationImage();
+        this._emptyConversationState.set_visible(true);
+        this._emptyConversationState.set_reveal_child(true);
+    }
+
+    _hideEmptyConversationState() {
+        if (!this._emptyConversationState)
+            return;
+
+        if (this._emptyConversationFadeTimeoutId) {
+            GLib.source_remove(this._emptyConversationFadeTimeoutId);
+            this._emptyConversationFadeTimeoutId = 0;
+        }
+
+        if (!this._emptyConversationState.get_visible()) {
+            this._emptyConversationState.set_reveal_child(false);
+            return;
+        }
+
+        this._emptyConversationState.set_reveal_child(false);
+        this._emptyConversationFadeTimeoutId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT,
+            EMPTY_STATE_FADE_DURATION_MS,
+            () => {
+                this._emptyConversationFadeTimeoutId = 0;
+
+                if (!this._emptyConversationState?.get_reveal_child?.())
+                    this._emptyConversationState?.set_visible(false);
+
+                return GLib.SOURCE_REMOVE;
+            },
+        );
+    }
+
+    _updateEmptyConversationImage() {
+        if (!this._emptyConversationPicture)
+            return;
+
+        const styleManager = Adw.StyleManager.get_default();
+        const filename = styleManager.get_dark() ? EMPTY_STATE_IMAGE_DARK : EMPTY_STATE_IMAGE_LIGHT;
+        const path = getBundledImagePath(filename);
+
+        if (!path) {
+            this._emptyConversationPicture.set_visible(false);
+            return;
+        }
+
+        this._emptyConversationPicture.set_filename(path);
+        this._emptyConversationPicture.set_visible(true);
+    }
+
+    _createKnotIcon(options = {}) {
+        const {
+            width = 30,
+            height = 14,
+            animate = true,
+        } = options;
+        const shouldAnimate = animate && !this._appSettings.reducedMotionEnabled;
+        const startTime = GLib.get_monotonic_time();
+        const icon = new Gtk.DrawingArea({
+            halign: Gtk.Align.CENTER,
+            valign: Gtk.Align.CENTER,
+        });
+
+        icon.set_size_request(width, height);
+        icon.add_css_class('cusco-knot-icon');
+        icon.set_draw_func((widget, cr, drawWidth, drawHeight) => {
+            const color = widget.get_color();
+            const padding = 1;
+            const scale = Math.min(
+                (drawWidth - padding * 2) / KNOT_ICON_VIEWBOX_WIDTH,
+                (drawHeight - padding * 2) / KNOT_ICON_VIEWBOX_HEIGHT,
+            );
+
+            if (!Number.isFinite(scale) || scale <= 0)
+                return;
+
+            const elapsedSeconds = (GLib.get_monotonic_time() - startTime) / 1000000;
+            const progress = shouldAnimate
+                ? mirrorProgress(elapsedSeconds / KNOT_ICON_ANIMATION_SECONDS)
+                : 1;
+
+            cr.save();
+            cr.translate(
+                (drawWidth - KNOT_ICON_VIEWBOX_WIDTH * scale) / 2,
+                (drawHeight - KNOT_ICON_VIEWBOX_HEIGHT * scale) / 2,
+            );
+            cr.scale(scale, scale);
+            cr.setSourceRGBA(color.red, color.green, color.blue, color.alpha);
+            cr.setLineWidth(KNOT_ICON_STROKE_WIDTH);
+            cr.setLineCap(Cairo.LineCap.ROUND);
+            cr.setLineJoin(Cairo.LineJoin.ROUND);
+            drawKnotIconPath(cr, progress);
+            cr.restore();
+        });
+
+        if (shouldAnimate) {
+            icon.add_tick_callback((widget) => {
+                widget.queue_draw();
+                return GLib.SOURCE_CONTINUE;
+            });
+        }
+
+        return icon;
+    }
+
+    _createKnotStatusRow(text = '', options = {}) {
+        const row = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: options.compact ? 6 : 8,
+            halign: Gtk.Align.START,
+            valign: Gtk.Align.CENTER,
+        });
+        const label = new Gtk.Label({
+            label: String(text ?? ''),
+            xalign: 0,
+            valign: Gtk.Align.CENTER,
+            visible: Boolean(text),
+        });
+
+        row.add_css_class('cusco-knot-status');
+        row.append(this._createKnotIcon({
+            width: options.compact ? 22 : 32,
+            height: options.compact ? 10 : 15,
+            animate: options.animate !== false,
+        }));
+        row.append(label);
+        row.updateStatusText = (nextText) => {
+            const normalizedText = String(nextText ?? '');
+
+            label.set_label(normalizedText);
+            label.set_visible(Boolean(normalizedText));
+        };
+
+        return row;
+    }
+
+    _createThinkingLabelWidget(isActive) {
+        const row = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 6,
+            valign: Gtk.Align.CENTER,
+        });
+        const label = new Gtk.Label({
+            label: isActive ? 'Thinking' : 'Reasoning',
+            xalign: 0,
+            valign: Gtk.Align.CENTER,
+        });
+
+        if (isActive)
+            row.append(this._createKnotIcon({ width: 22, height: 10 }));
+
+        row.append(label);
+        return row;
+    }
+
     _createToolResultExpander(message, options = {}) {
         const statusLabel = message.toolCall.status === 'failed'
             ? 'failed'
             : message.toolCall.status === 'cancelled'
                 ? 'cancelled'
                 : 'result';
-        const expander = new Gtk.Expander({
-            label: `${message.toolCall.label} ${statusLabel}`,
-            expanded: false,
+        const container = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 4,
             hexpand: true,
         });
-        expander.add_css_class('cusco-tool-result');
+        container.add_css_class('cusco-tool-result');
 
         if (!options.embedded)
-            expander.set_size_request(460, -1);
+            container.set_size_request(460, -1);
 
         const bodyContent = createMessageContent(message.content, this._messageContentOptions({
             role: 'system',
@@ -2767,8 +3253,53 @@ class CuscoWindow extends Adw.ApplicationWindow {
             bodyContent.add_css_class('cusco-message-assistant');
         }
 
-        expander.set_child(bodyContent);
-        return expander;
+        const revealer = new Gtk.Revealer({
+            child: bodyContent,
+            reveal_child: false,
+            transition_type: Gtk.RevealerTransitionType.SLIDE_DOWN,
+        });
+        const headerButton = new Gtk.Button({
+            tooltip_text: `Expand ${message.toolCall.label} result`,
+            halign: Gtk.Align.START,
+        });
+        const header = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 6,
+            valign: Gtk.Align.CENTER,
+        });
+        const label = new Gtk.Label({
+            label: `${message.toolCall.label} ${statusLabel}`,
+            xalign: 0,
+            valign: Gtk.Align.CENTER,
+            ellipsize: Pango.EllipsizeMode.END,
+        });
+        const toggleIcon = createBundledIcon(TOOL_ICON_FILE, 'applications-engineering-symbolic');
+        toggleIcon.set_valign(Gtk.Align.CENTER);
+
+        headerButton.add_css_class('flat');
+        headerButton.add_css_class('cusco-tool-result-header');
+        toggleIcon.add_css_class('cusco-tool-result-toggle-icon');
+
+        header.append(toggleIcon);
+        header.append(label);
+        headerButton.set_child(header);
+        headerButton.connect('clicked', () => {
+            const expanded = !revealer.get_reveal_child();
+
+            revealer.set_reveal_child(expanded);
+            headerButton.set_tooltip_text(
+                `${expanded ? 'Collapse' : 'Expand'} ${message.toolCall.label} result`,
+            );
+
+            if (expanded)
+                toggleIcon.add_css_class('cusco-tool-result-toggle-icon-expanded');
+            else
+                toggleIcon.remove_css_class('cusco-tool-result-toggle-icon-expanded');
+        });
+
+        container.append(headerButton);
+        container.append(revealer);
+        return container;
     }
 
     _addMessage(body, kind, message = null) {
@@ -2793,16 +3324,17 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const reasoningText = kind === 'assistant'
             ? getMessageReasoningContent(message)
             : '';
+        const isStreamingAssistant = kind === 'assistant' && !message;
         let reasoningContent = null;
         let reasoningExpander = null;
 
         if (kind === 'assistant') {
             reasoningExpander = new Gtk.Expander({
-                label: 'Reasoning',
                 expanded: false,
                 visible: Boolean(reasoningText),
                 hexpand: true,
             });
+            reasoningExpander.set_label_widget(this._createThinkingLabelWidget(isStreamingAssistant));
             reasoningExpander.add_css_class('cusco-reasoning');
             reasoningContent = createMessageContent(reasoningText || ' ', this._messageContentOptions({
                 role: 'assistant',
@@ -2826,10 +3358,51 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const bodyContent = createMessageContent(body, this._messageContentOptions({
             role: kind,
         }));
+        let currentBodyText = String(body ?? '');
+        let loadingRow = null;
+        let hasToolResults = false;
+
+        if (isStreamingAssistant && !currentBodyText)
+            bodyContent.set_visible(false);
+
+        const clearLoading = () => {
+            if (!loadingRow)
+                return;
+
+            bubble.remove(loadingRow);
+            loadingRow = null;
+
+            if (!currentBodyText)
+                bodyContent.set_visible(false);
+        };
+        const showLoading = (text = '') => {
+            if (!loadingRow) {
+                loadingRow = this._createKnotStatusRow(text);
+                bubble.prepend(loadingRow);
+            } else {
+                loadingRow.updateStatusText?.(text);
+            }
+
+            bodyContent.set_visible(false);
+        };
+        const updateBodyContent = (text) => {
+            const nextText = String(text ?? '');
+
+            if (!nextText && loadingRow)
+                return;
+
+            currentBodyText = nextText;
+            clearLoading();
+            bodyContent.set_visible(true);
+            bodyContent.updateContent(nextText);
+        };
+
         bubble.append(bodyContent);
 
         let toolResultsBox = null;
         const appendToolResult = (toolMessage) => {
+            hasToolResults = true;
+
             if (!toolResultsBox) {
                 toolResultsBox = new Gtk.Box({
                     orientation: Gtk.Orientation.VERTICAL,
@@ -2850,8 +3423,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._appendMessageWidget(wrapper);
         this._scrollToBottom();
 
-        const messageView = {
-            set_label: (text) => bodyContent.updateContent(text),
+        let messageView = null;
+        messageView = {
+            set_label: updateBodyContent,
+            set_loading: showLoading,
+            set_status: showLoading,
+            clear_loading: clearLoading,
             set_reasoning: (text) => {
                 if (!reasoningContent || !reasoningExpander)
                     return;
@@ -2861,6 +3438,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 reasoningExpander.set_visible(Boolean(nextText));
             },
             append_tool_result: appendToolResult,
+            has_tool_results: () => hasToolResults,
+            remove: () => {
+                if (wrapper.get_parent())
+                    this._messages.remove(wrapper);
+
+                if (this._lastAssistantMessageView === messageView)
+                    this._lastAssistantMessageView = null;
+            },
         };
 
         if (kind === 'assistant')
@@ -3077,6 +3662,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _appendMessageWidget(widget) {
+        this._hideEmptyConversationState();
+
         if (this._messageBottomSpacer?.get_parent?.() === this._messages)
             this._messages.remove(this._messageBottomSpacer);
 

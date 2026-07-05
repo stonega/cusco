@@ -3,8 +3,11 @@
   <gresource prefix="/io/github/stonega/Cusco">
     <file>resources/attachment-symbolic.svg</file>
     <file>resources/git-branch-symbolic.svg</file>
+    <file alias="resources/machupicchu_dark.png">../assets/machupicchu_dark.png</file>
+    <file alias="resources/machupicchu_light.png">../assets/machupicchu_light.png</file>
     <file>resources/paper-plane-symbolic.svg</file>
     <file>resources/prompt-symbolic.svg</file>
+    <file>resources/tool-symbolic.svg</file>
     <file>resources/providers/provider-anthropic.svg</file>
     <file>resources/providers/provider-custom.svg</file>
     <file>resources/providers/provider-deepseek.svg</file>

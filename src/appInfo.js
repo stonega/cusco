@@ -4,3 +4,5 @@ export const APP_SUMMARY = 'Advanced AI chat for GNOME';
 export const APP_VERSION = '0.5.2';
 export const APP_AUTHOR = 'stonega';
 export const APP_LICENSE = 'GPL-3.0-or-later';
+export const APP_REPOSITORY_URL = 'https://github.com/stonega/cusco';
+export const APP_ICONS_URL = 'https://github.com/phosphor-icons/homepage#phosphor-icons';

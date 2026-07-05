@@ -35,6 +35,12 @@ install_subdir(
   install_dir: pkgdatadir,
 )
 
+install_data(
+  '../assets/machupicchu_dark.png',
+  '../assets/machupicchu_light.png',
+  install_dir: pkgdatadir / 'resources',
+)
+
 gnome.compile_resources(
   'cusco-resources',
   application_id + '.gresource.xml',

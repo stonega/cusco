@@ -19,7 +19,7 @@ if (DEFAULT_AGENT_MAX_ITERATIONS < 100
     throw new Error(`Agent Mode max iteration default is too low: ${DEFAULT_AGENT_MAX_ITERATIONS}`);
 }
 
-if (!prompt.includes('Agent Mode is enabled')
+if (!prompt.includes('Agent is enabled')
     || !prompt.includes('calc')
     || !prompt.includes('<cusco_tool_call>')
     || !prompt.includes('mcp__')

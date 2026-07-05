@@ -26,7 +26,7 @@ export function buildAgentModeSystemPrompt(tools, { maxIterations = DEFAULT_AGEN
     const toolList = (tools ?? []).map(formatToolForPrompt).join('\n\n') || 'No tools are available.';
 
     return [
-        'Agent Mode is enabled for this chat.',
+        'Agent is enabled for this chat.',
         'You may solve the user request normally, or request one available tool when a tool result would materially help.',
         'Do not invent tool results. Do not request a tool unless the tool is listed below.',
         'Tools whose names start with mcp__ are configured MCP server tools exposed through Cusco. If the user asks to use an MCP server such as Context7 and a matching mcp__ tool is listed, use that tool instead of saying the MCP server is not configured.',
@@ -63,7 +63,7 @@ export function parseAgentToolCall(text) {
         parsed = JSON.parse(match[1]);
     } catch (error) {
         const parseError = new Error(`Agent tool call JSON is invalid: ${error.message}`);
-        parseError.userMessage = 'Agent Mode produced an invalid tool request.';
+        parseError.userMessage = 'Agent produced an invalid tool request.';
         throw parseError;
     }
 
@@ -71,7 +71,7 @@ export function parseAgentToolCall(text) {
 
     if (!name) {
         const error = new Error('Agent tool call is missing a tool name.');
-        error.userMessage = 'Agent Mode produced a tool request without a tool name.';
+        error.userMessage = 'Agent produced a tool request without a tool name.';
         throw error;
     }
 
