@@ -14,7 +14,7 @@ Messages can be edited, retried, regenerated, or branched from the transcript. F
 
 The Custom API provider accepts an OpenAI-compatible base URL and comma-separated model IDs in Preferences. Its API key is stored through Secret Service like the built-in remote providers.
 
-Provider settings can refresh model lists from supported remote APIs after credentials are configured.
+Provider settings can refresh model lists from supported remote APIs after credentials are configured. Cusco keeps a supported built-in model matrix with per-model thinking levels in [Provider Models](provider-models.md).
 
 Memory is opt-in at write time. When a message looks like a useful long-term fact, Cusco asks before saving it. The Memory page in Preferences can search, edit, pin, disable, delete, import, and export memories. When memories are used in a chat, Cusco adds a visible transcript note and records an audit entry.
 

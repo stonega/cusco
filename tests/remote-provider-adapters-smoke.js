@@ -33,6 +33,10 @@ function assertEqual(actual, expected, label) {
         throw new Error(`${label}: expected ${expected}, got ${actual}`);
 }
 
+function hasOwn(object, key) {
+    return Object.prototype.hasOwnProperty.call(object, key);
+}
+
 const messages = [
     createMessage('assistant', 'This welcome message should not be sent.'),
     createMessage('system', 'Keep answers concise.'),
@@ -57,8 +61,16 @@ const mcpTool = {
         properties: {
             query: { type: 'string' },
             libraryName: { type: 'string' },
+            metadata: {
+                type: 'object',
+                properties: {
+                    source: { type: 'string' },
+                },
+                additionalProperties: false,
+            },
         },
         required: ['query', 'libraryName'],
+        additionalProperties: false,
     },
 };
 const openAiToolBody = buildOpenAiResponsesBody(messages, 'gpt-test', {
@@ -93,6 +105,96 @@ const chatToolBody = buildOpenAiCompatibleChatBody(messages, 'chat-test', {
 assertEqual(chatToolBody.tool_choice, 'auto', 'OpenAI-compatible tool choice');
 assertEqual(chatToolBody.tools[0].function.name, 'mcp__context7__resolve_library_id', 'OpenAI-compatible tool name');
 assertEqual(chatToolBody.tools[0].function.parameters.required.length, 2, 'OpenAI-compatible tool schema');
+const kimiThinkingBody = buildOpenAiCompatibleChatBody(messages, 'kimi-k2.6', {
+    model: {
+        thinking: {
+            api: 'kimi-thinking',
+            levels: ['off', 'auto'],
+            keep: 'all',
+        },
+    },
+    thinkingLevel: 'auto',
+});
+assertEqual(kimiThinkingBody.thinking.type, 'enabled', 'Kimi thinking enabled');
+assertEqual(kimiThinkingBody.thinking.keep, 'all', 'Kimi preserved thinking');
+const kimiThinkingOffBody = buildOpenAiCompatibleChatBody(messages, 'kimi-k2.6', {
+    model: {
+        thinking: {
+            api: 'kimi-thinking',
+            levels: ['off', 'auto'],
+            keep: 'all',
+        },
+    },
+    thinkingLevel: 'off',
+});
+assertEqual(kimiThinkingOffBody.thinking.type, 'disabled', 'Kimi thinking disabled');
+const deepseekThinkingBody = buildOpenAiCompatibleChatBody(messages, 'deepseek-v4-pro', {
+    model: {
+        thinking: {
+            api: 'deepseek-thinking',
+            levels: ['off', 'auto', 'high', 'max'],
+        },
+    },
+    thinkingLevel: 'high',
+});
+assertEqual(deepseekThinkingBody.thinking.type, 'enabled', 'DeepSeek thinking enabled');
+assertEqual(deepseekThinkingBody.thinking.reasoning_effort, 'high', 'DeepSeek reasoning effort');
+const deepseekMaxThinkingBody = buildOpenAiCompatibleChatBody(messages, 'deepseek-v4-pro', {
+    model: {
+        thinking: {
+            api: 'deepseek-thinking',
+            levels: ['off', 'auto', 'high', 'max'],
+        },
+    },
+    thinkingLevel: 'max',
+});
+assertEqual(deepseekMaxThinkingBody.thinking.type, 'enabled', 'DeepSeek max thinking enabled');
+assertEqual(deepseekMaxThinkingBody.thinking.reasoning_effort, 'max', 'DeepSeek max reasoning effort');
+const deepseekThinkingOffBody = buildOpenAiCompatibleChatBody(messages, 'deepseek-v4-pro', {
+    model: {
+        thinking: {
+            api: 'deepseek-thinking',
+            levels: ['off', 'auto', 'high', 'max'],
+        },
+    },
+    thinkingLevel: 'off',
+});
+assertEqual(deepseekThinkingOffBody.thinking.type, 'disabled', 'DeepSeek thinking disabled');
+const zaiThinkingBody = buildOpenAiCompatibleChatBody(messages, 'glm-5.2', {
+    model: {
+        thinking: {
+            api: 'zai-thinking',
+            levels: ['off', 'auto', 'high', 'max'],
+            supportsReasoningEffort: true,
+        },
+    },
+    thinkingLevel: 'max',
+});
+assertEqual(zaiThinkingBody.thinking.type, 'enabled', 'Z.ai thinking enabled');
+assertEqual(zaiThinkingBody.reasoning_effort, 'max', 'Z.ai reasoning effort');
+const zaiThinkingOffBody = buildOpenAiCompatibleChatBody(messages, 'glm-5.2', {
+    model: {
+        thinking: {
+            api: 'zai-thinking',
+            levels: ['off', 'auto', 'high', 'max'],
+            supportsReasoningEffort: true,
+        },
+    },
+    thinkingLevel: 'off',
+});
+assertEqual(zaiThinkingOffBody.thinking.type, 'disabled', 'Z.ai thinking disabled');
+assertEqual(hasOwn(zaiThinkingOffBody, 'reasoning_effort'), false, 'Z.ai disabled thinking omits reasoning effort');
+const zaiTurboThinkingBody = buildOpenAiCompatibleChatBody(messages, 'glm-5-turbo', {
+    model: {
+        thinking: {
+            api: 'zai-thinking',
+            levels: ['off', 'auto'],
+        },
+    },
+    thinkingLevel: 'auto',
+});
+assertEqual(zaiTurboThinkingBody.thinking.type, 'enabled', 'Z.ai GLM-5 Turbo thinking enabled');
+assertEqual(hasOwn(zaiTurboThinkingBody, 'reasoning_effort'), false, 'Z.ai GLM-5 Turbo omits unsupported reasoning effort');
 
 const anthropicBody = buildAnthropicMessagesBody(messages, 'claude-test');
 assertEqual(anthropicBody.model, 'claude-test', 'Anthropic model');
@@ -125,10 +227,31 @@ const geminiBody = buildGeminiGenerateContentBody(messages);
 assertEqual(geminiBody.systemInstruction.parts[0].text, 'Keep answers concise.', 'Gemini system instruction');
 assertEqual(geminiBody.contents[1].role, 'model', 'Gemini assistant role');
 assertEqual(geminiBody.generationConfig.maxOutputTokens, 8192, 'Gemini default max output tokens');
+const geminiThinkingLevelBody = buildGeminiGenerateContentBody(messages, {
+    model: {
+        thinking: {
+            api: 'gemini-thinking-level',
+            levels: ['minimal', 'auto', 'low', 'medium', 'high'],
+            includeThoughts: true,
+        },
+    },
+    thinkingLevel: 'minimal',
+});
+assertEqual(geminiThinkingLevelBody.generationConfig.thinkingConfig.thinkingLevel, 'minimal', 'Gemini thinking level');
+assertEqual(geminiThinkingLevelBody.generationConfig.thinkingConfig.includeThoughts, true, 'Gemini thought summaries');
 const geminiToolBody = buildGeminiGenerateContentBody(messages, {
     tools: [mcpTool],
 });
 assertEqual(geminiToolBody.tools[0].functionDeclarations[0].name, 'mcp__context7__resolve_library_id', 'Gemini tool name');
+const geminiToolParameters = geminiToolBody.tools[0].functionDeclarations[0].parameters;
+assertEqual(hasOwn(geminiToolParameters, 'additionalProperties'), false, 'Gemini top-level schema omits additionalProperties');
+assertEqual(hasOwn(geminiToolParameters.properties.metadata, 'additionalProperties'), false, 'Gemini nested schema omits additionalProperties');
+const geminiFallbackToolBody = buildGeminiGenerateContentBody(messages, {
+    tools: [{ name: 'calc', label: 'Calculator', description: 'Calculate.', inputDescription: 'Expression.' }],
+});
+const geminiFallbackParameters = geminiFallbackToolBody.tools[0].functionDeclarations[0].parameters;
+assertEqual(geminiFallbackParameters.properties.input.type, 'string', 'Gemini fallback schema keeps text input');
+assertEqual(hasOwn(geminiFallbackParameters, 'additionalProperties'), false, 'Gemini fallback schema omits additionalProperties');
 
 assertEqual(extractOpenAiText({ output_text: 'OpenAI text' }), 'OpenAI text', 'OpenAI output_text extraction');
 assertEqual(extractOpenAiReasoning({

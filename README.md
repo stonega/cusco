@@ -87,6 +87,7 @@ Some smoke tests skip automatically when the current environment has no display 
 - [Architecture](docs/design/architecture.md)
 - [Setup](docs/implementation/setup.md)
 - [User Getting Started](docs/user/getting-started.md)
+- [Provider Models](docs/user/provider-models.md)
 
 ## License
 

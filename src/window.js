@@ -31,6 +31,7 @@ import {
     normalizeThinkingLevel,
 } from './providers/thinking.js';
 import { normalizeTokenUsage } from './providers/usage.js';
+import { createBundledIcon, getBundledImagePath } from './bundledIcons.js';
 import { AppSettingsStore } from './settings/appSettings.js';
 import { presentProviderSettingsDialog } from './settings/providerSettings.js';
 import { ConversationFileStore } from './storage/conversationStore.js';
@@ -82,7 +83,6 @@ const BASE_RESPONSE_SYSTEM_PROMPT = [
 ].join(' ');
 
 let knotIconPath = null;
-let bundledIconThemePathsInstalled = false;
 
 function cubicPoint(curve, t) {
     const [x0, y0, x1, y1, x2, y2, x3, y3] = curve;
@@ -173,83 +173,6 @@ function isCancellableCancelled(cancellable) {
 
 function wasOperationCancelled(error, cancellable = null) {
     return isCancellableCancelled(cancellable) || isGioError(error, Gio.IOErrorEnum.CANCELLED);
-}
-
-function getBundledResourcePath(filename) {
-    const modulePath = Gio.File.new_for_uri(import.meta.url).get_path();
-
-    if (!modulePath)
-        return null;
-
-    const moduleDir = GLib.path_get_dirname(modulePath);
-    const candidates = getBundledResourceDirs(moduleDir)
-        .map((directory) => GLib.build_filenamev([directory, filename]));
-
-    return candidates.find((path) => GLib.file_test(path, GLib.FileTest.EXISTS)) ?? null;
-}
-
-function getBundledImagePath(filename) {
-    const modulePath = Gio.File.new_for_uri(import.meta.url).get_path();
-
-    if (!modulePath)
-        return null;
-
-    const moduleDir = GLib.path_get_dirname(modulePath);
-    const candidates = [
-        ...getBundledResourceDirs(moduleDir),
-        GLib.build_filenamev([moduleDir, '..', 'assets']),
-    ].map((directory) => GLib.build_filenamev([directory, filename]));
-
-    return candidates.find((path) => GLib.file_test(path, GLib.FileTest.EXISTS)) ?? null;
-}
-
-function getBundledResourceDirs(moduleDir) {
-    return [
-        GLib.build_filenamev([moduleDir, 'resources']),
-        GLib.build_filenamev([moduleDir, '..', 'data', 'resources']),
-    ];
-}
-
-function bundledIconName(filename) {
-    return String(filename ?? '').replace(/\.svg$/i, '');
-}
-
-function installBundledIconThemePaths() {
-    const display = Gdk.Display.get_default();
-
-    if (!display)
-        return null;
-
-    const iconTheme = Gtk.IconTheme.get_for_display(display);
-
-    if (bundledIconThemePathsInstalled)
-        return iconTheme;
-
-    const modulePath = Gio.File.new_for_uri(import.meta.url).get_path();
-
-    if (!modulePath)
-        return null;
-
-    const moduleDir = GLib.path_get_dirname(modulePath);
-
-    for (const directory of getBundledResourceDirs(moduleDir)) {
-        if (GLib.file_test(directory, GLib.FileTest.IS_DIR))
-            iconTheme.add_search_path(directory);
-    }
-
-    bundledIconThemePathsInstalled = true;
-    return iconTheme;
-}
-
-function createBundledIcon(filename, fallbackIconName) {
-    const iconTheme = installBundledIconThemePaths();
-    const iconName = bundledIconName(filename);
-    const image = iconTheme?.has_icon(iconName)
-        ? new Gtk.Image({ icon_name: iconName })
-        : new Gtk.Image({ icon_name: fallbackIconName });
-
-    image.set_pixel_size(16);
-    return image;
 }
 
 function createLabeledControlRow(label, control) {
@@ -551,9 +474,15 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._providerPicker = this._createProviderPicker();
         this._providerConfigButton = this._createProviderConfigButton();
         this._modelPicker = new Gtk.ComboBoxText();
+        this._thinkingLevelPicker = new Gtk.ComboBoxText({
+            tooltip_text: 'Thinking level',
+            valign: Gtk.Align.CENTER,
+            visible: false,
+        });
         this._populateProviderPicker();
         this._providerPicker.connect('changed', () => this._handleProviderChanged());
         this._modelPicker.connect('changed', () => this._handleModelChanged());
+        this._thinkingLevelPicker.connect('changed', () => this._handleThinkingLevelChanged());
         this._chatOptionsMenuButton = this._createChatOptionsMenuButton();
 
         this._messages = new Gtk.Box({
@@ -637,6 +566,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         composerMetaRow.append(this._providerPicker);
         composerMetaRow.append(this._providerConfigButton);
         composerMetaRow.append(this._modelPicker);
+        composerMetaRow.append(this._thinkingLevelPicker);
         composerMetaRow.append(this._attachButton);
         composerMetaRow.append(this._promptMenuButton);
         composerMetaRow.append(this._chatOptionsMenuButton);
@@ -2122,6 +2052,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
     _syncProviderSelectorVisibility(hasEnabledProviders) {
         this._providerPicker?.set_visible(hasEnabledProviders);
         this._modelPicker?.set_visible(hasEnabledProviders);
+        if (!hasEnabledProviders)
+            this._thinkingLevelPicker?.set_visible(false);
         this._providerConfigButton?.set_visible(!hasEnabledProviders);
     }
 
@@ -2143,8 +2075,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._thinkingLevelPicker.remove_all();
 
         if (!conversation) {
-            this._thinkingLevelPicker.append(DEFAULT_THINKING_LEVEL, getThinkingLevelLabel(DEFAULT_THINKING_LEVEL));
-            this._thinkingLevelPicker.set_active_id(DEFAULT_THINKING_LEVEL);
+            this._thinkingLevelPicker.set_visible(false);
             this._thinkingLevelPicker.set_sensitive(false);
             return;
         }
@@ -2152,8 +2083,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const levels = this._providerConfigs.getThinkingLevels(conversation.providerId, conversation.modelId);
 
         if (levels.length === 0) {
-            this._thinkingLevelPicker.append('off', getThinkingLevelLabel('off'));
-            this._thinkingLevelPicker.set_active_id('off');
+            this._thinkingLevelPicker.set_visible(false);
             this._thinkingLevelPicker.set_tooltip_text('Thinking is not supported by this provider and model.');
             this._thinkingLevelPicker.set_sensitive(false);
             return;
@@ -2171,6 +2101,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         this._thinkingLevelPicker.set_active_id(selectedLevel);
         this._thinkingLevelPicker.set_tooltip_text('Thinking level for this chat');
+        this._thinkingLevelPicker.set_visible(true);
         this._thinkingLevelPicker.set_sensitive(true);
     }
 
@@ -2207,8 +2138,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _createChatOptionsMenuButton() {
         const menuButton = new Gtk.MenuButton({
-            label: 'Chat Options',
             tooltip_text: 'Chat options',
+            valign: Gtk.Align.CENTER,
+            icon_name: 'pan-down-symbolic',
         });
         const popover = new Gtk.Popover();
         const content = new Gtk.Box({
@@ -2219,11 +2151,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
             margin_start: 10,
             margin_end: 10,
         });
-
-        this._thinkingLevelPicker = new Gtk.ComboBoxText({
-            tooltip_text: 'Thinking level',
-        });
-        this._thinkingLevelPicker.connect('changed', () => this._handleThinkingLevelChanged());
 
         this._memoryToggleButton = new Gtk.Switch({
             tooltip_text: 'Use memories for this chat',
@@ -2243,7 +2170,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         this._skillsToggleButton.connect('notify::active', () => this._handleSkillsToggleChanged());
 
-        content.append(createLabeledControlRow('Thinking', this._thinkingLevelPicker));
         content.append(createLabeledControlRow('Memory', this._memoryToggleButton));
         content.append(createLabeledControlRow('Agent', this._agentModeToggleButton));
         content.append(createLabeledControlRow('Skills', this._skillsToggleButton));
@@ -2451,8 +2377,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _syncProviderControls(conversation) {
-        if (!conversation)
+        if (!conversation) {
+            this._populateThinkingLevelPicker(null);
             return;
+        }
 
         this._isUpdatingProviderControls = true;
         this._providerPicker.set_active_id(conversation.providerId);

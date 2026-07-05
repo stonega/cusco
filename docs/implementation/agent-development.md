@@ -47,7 +47,7 @@ Keep this path boring and explicit. Most agent features should attach around it,
 | Area | Current home | Development direction |
 |---|---|---|
 | Agent loop | `src/window.js` | Move orchestration toward a chat engine module when tool calling, retries, compaction, and background tasks grow beyond UI concerns. |
-| Providers | `src/providers/` | Keep a single async iterator contract. Add true streaming, tool-call response support, and provider capability metadata here. |
+| Providers | `src/providers/` | Keep a single async iterator contract and provider/model capability metadata. Add true streaming and tool-call response support here. |
 | Tools | `src/tools/tools.js` | Replace slash-only parsing with provider-visible tool definitions when model tool calling is implemented. Keep slash commands as a deterministic user shortcut. |
 | Permissions | `src/window.js`, `src/tools/tools.js` | Centralize permission policy before adding file, shell, browser, or MCP tools. Deny destructive actions by default; ask for external or risky actions. |
 | Skills | `src/skills/skills.js`, `src/workspace/workspace.js` | Keep progressive disclosure: list available skills, then inject selected SKILL.md content only when relevant or user-selected. |
@@ -129,7 +129,7 @@ Compaction must preserve user instructions, current goal, decisions, pending tas
 
 - Move response orchestration out of `CuscoWindow` into a chat engine service.
 - Add true provider streaming for remote APIs.
-- Add provider capability metadata: streaming, tool calls, vision, system prompt support, max context.
+- Extend provider capability metadata beyond model/thinking support: streaming, tool calls, vision, system prompt support, max context.
 - Centralize permission checks and audit records.
 - Improve tool result size limits and summaries.
 
@@ -169,7 +169,7 @@ Compaction must preserve user instructions, current goal, decisions, pending tas
 - Merge built-in, plugin, and MCP tools into one Agent Mode tool pool.
 - Apply the same permission pipeline to external tools.
 - Track connection status and surface failures in settings and transcripts.
-- Future work: map this tool pool to provider-native tool-call APIs once provider capability metadata exists.
+- Future work: map this tool pool to provider-native tool-call APIs once provider capability metadata covers tool-call support.
 
 ### Stage 7: Multi-Agent Workflows
 

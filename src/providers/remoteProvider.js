@@ -29,7 +29,35 @@ const ANTHROPIC_DEFAULT_THINKING_BUDGETS = {
     medium: 2048,
     high: 3072,
 };
+const SUPPORTED_GEMINI_MODEL_IDS = new Set([
+    'gemini-3.5-flash',
+    'gemini-3.1-pro-preview',
+]);
 const MAX_NATIVE_TOOL_DESCRIPTION_CHARS = 1024;
+const GEMINI_SCHEMA_FIELDS = new Set([
+    'type',
+    'format',
+    'title',
+    'description',
+    'nullable',
+    'enum',
+    'maxItems',
+    'minItems',
+    'properties',
+    'required',
+    'minProperties',
+    'maxProperties',
+    'minLength',
+    'maxLength',
+    'pattern',
+    'example',
+    'anyOf',
+    'propertyOrdering',
+    'default',
+    'items',
+    'minimum',
+    'maximum',
+]);
 
 function createUserVisibleError(message, userMessage = message) {
     const error = new Error(message);
@@ -370,6 +398,109 @@ function normalizeToolParameters(tool) {
     return fallbackToolParameters(tool);
 }
 
+function normalizeGeminiSchemaType(value) {
+    if (Array.isArray(value)) {
+        const nonNullTypes = value.filter((item) => item !== 'null');
+
+        return {
+            type: nonNullTypes.length > 0 ? String(nonNullTypes[0]) : null,
+            nullable: value.includes('null'),
+        };
+    }
+
+    return {
+        type: value ? String(value) : null,
+        nullable: false,
+    };
+}
+
+function sanitizeGeminiSchema(schema) {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema))
+        return {};
+
+    const sanitized = {};
+
+    for (const [key, value] of Object.entries(schema)) {
+        if (!GEMINI_SCHEMA_FIELDS.has(key))
+            continue;
+
+        if (key === 'type') {
+            const normalized = normalizeGeminiSchemaType(value);
+
+            if (normalized.type)
+                sanitized.type = normalized.type;
+
+            if (normalized.nullable)
+                sanitized.nullable = true;
+
+            continue;
+        }
+
+        if (key === 'properties') {
+            if (!value || typeof value !== 'object' || Array.isArray(value))
+                continue;
+
+            const properties = {};
+
+            for (const [name, propertySchema] of Object.entries(value)) {
+                const sanitizedProperty = sanitizeGeminiSchema(propertySchema);
+
+                if (Object.keys(sanitizedProperty).length > 0)
+                    properties[name] = sanitizedProperty;
+            }
+
+            if (Object.keys(properties).length > 0)
+                sanitized.properties = properties;
+
+            continue;
+        }
+
+        if (key === 'items') {
+            const items = sanitizeGeminiSchema(value);
+
+            if (Object.keys(items).length > 0)
+                sanitized.items = items;
+
+            continue;
+        }
+
+        if (key === 'anyOf') {
+            if (!Array.isArray(value))
+                continue;
+
+            const anyOf = value
+                .map((item) => sanitizeGeminiSchema(item))
+                .filter((item) => Object.keys(item).length > 0);
+
+            if (anyOf.length > 0)
+                sanitized.anyOf = anyOf;
+
+            continue;
+        }
+
+        if (key === 'enum' || key === 'required' || key === 'propertyOrdering') {
+            if (Array.isArray(value))
+                sanitized[key] = value.map((item) => String(item));
+
+            continue;
+        }
+
+        sanitized[key] = value;
+    }
+
+    if (!sanitized.type && sanitized.properties)
+        sanitized.type = 'object';
+
+    if (!sanitized.type && sanitized.items)
+        sanitized.type = 'array';
+
+    return sanitized;
+}
+
+function normalizeGeminiToolParameters(tool) {
+    return sanitizeGeminiSchema(normalizeToolParameters(tool));
+}
+
 function openAiCompatibleToolDefinitions(tools = []) {
     return (tools ?? [])
         .filter((tool) => /^[A-Za-z0-9_-]{1,64}$/.test(String(tool?.name ?? '')))
@@ -408,7 +539,7 @@ function geminiToolDefinitions(tools = []) {
         .map((tool) => ({
             name: tool.name,
             description: compactToolDescription(tool) || `Run ${tool.name}.`,
-            parameters: normalizeToolParameters(tool),
+            parameters: normalizeGeminiToolParameters(tool),
         }));
 
     return declarations.length > 0
@@ -639,6 +770,74 @@ function buildAnthropicThinkingConfig(config, model, level) {
     return null;
 }
 
+function buildGeminiThinkingConfig(config, model, level) {
+    const thinking = getRequestedThinkingConfig(config, model, level);
+
+    if (!thinking)
+        return null;
+
+    const request = {};
+
+    if (thinking.includeThoughts !== false && thinking.level !== 'off')
+        request.includeThoughts = true;
+
+    if (thinking.api === 'gemini-thinking-level') {
+        if (thinking.level !== 'auto')
+            request.thinkingLevel = thinking.level;
+
+        return Object.keys(request).length > 0 ? request : null;
+    }
+
+    return null;
+}
+
+function buildOpenAiCompatibleThinkingConfig(config, model, level) {
+    const thinking = getRequestedThinkingConfig(config, model, level);
+
+    if (!thinking)
+        return null;
+
+    if (thinking.api === 'kimi-thinking') {
+        if (thinking.level === 'off')
+            return { thinking: { type: 'disabled' } };
+
+        return {
+            thinking: {
+                type: 'enabled',
+                keep: thinking.keep ?? 'all',
+            },
+        };
+    }
+
+    if (thinking.api === 'deepseek-thinking') {
+        if (thinking.level === 'off')
+            return { thinking: { type: 'disabled' } };
+
+        const request = { type: 'enabled' };
+
+        if (thinking.level === 'high' || thinking.level === 'max')
+            request.reasoning_effort = thinking.level;
+
+        return { thinking: request };
+    }
+
+    if (thinking.api === 'zai-thinking') {
+        if (thinking.level === 'off')
+            return { thinking: { type: 'disabled' } };
+
+        const request = {
+            thinking: { type: 'enabled' },
+        };
+
+        if (thinking.supportsReasoningEffort && (thinking.level === 'high' || thinking.level === 'max'))
+            request.reasoning_effort = thinking.level;
+
+        return request;
+    }
+
+    return null;
+}
+
 export function buildOpenAiResponsesBody(messages, modelId, options = {}) {
     const body = {
         model: modelId,
@@ -668,7 +867,11 @@ export function buildOpenAiCompatibleChatBody(messages, modelId, options = {}) {
         max_tokens: normalizeMaxOutputTokens(options.maxOutputTokens),
         stream: false,
     };
+    const thinking = buildOpenAiCompatibleThinkingConfig(options.provider ?? options.config, options.model, options.thinkingLevel);
     const tools = openAiCompatibleToolDefinitions(options.tools);
+
+    if (thinking)
+        Object.assign(body, thinking);
 
     if (tools.length > 0) {
         body.tools = tools;
@@ -707,10 +910,15 @@ export function buildAnthropicMessagesBody(messages, modelId, options = {}) {
 
 export function buildGeminiGenerateContentBody(messages, options = {}) {
     const payload = geminiPayload(messages);
+    const thinking = buildGeminiThinkingConfig(options.provider ?? options.config, options.model, options.thinkingLevel);
 
     payload.generationConfig = {
         maxOutputTokens: normalizeMaxOutputTokens(options.maxOutputTokens),
     };
+
+    if (thinking)
+        payload.generationConfig.thinkingConfig = thinking;
+
     const tools = geminiToolDefinitions(options.tools);
 
     if (tools.length > 0)
@@ -934,6 +1142,31 @@ export async function discoverAnthropicModels(config, options = {}) {
     return extractDiscoveredModels(response);
 }
 
+function geminiDiscoveredThinkingCapability(modelId) {
+    const id = String(modelId ?? '').toLowerCase();
+
+    if (!id.startsWith('gemini-'))
+        return null;
+
+    if (id.startsWith('gemini-3.1-pro') || id.startsWith('gemini-3-pro')) {
+        return {
+            api: 'gemini-thinking-level',
+            levels: ['auto', 'low', 'medium', 'high'],
+            includeThoughts: true,
+        };
+    }
+
+    if (id.startsWith('gemini-3.')) {
+        return {
+            api: 'gemini-thinking-level',
+            levels: ['minimal', 'auto', 'low', 'medium', 'high'],
+            includeThoughts: true,
+        };
+    }
+
+    return null;
+}
+
 export async function discoverGeminiModels(config, options = {}) {
     const url = `${normalizeUrl(config.baseUrl, '/models')}?key=${encodeURIComponent(getApiKey(config))}`;
     const response = await getJson(url, {}, {
@@ -942,7 +1175,13 @@ export async function discoverGeminiModels(config, options = {}) {
         timeoutSeconds: options.timeoutSeconds,
     });
 
-    return extractDiscoveredModels(response);
+    return extractDiscoveredModels(response)
+        .filter((model) => SUPPORTED_GEMINI_MODEL_IDS.has(model.id))
+        .map((model) => {
+            const thinking = geminiDiscoveredThinkingCapability(model.id);
+
+            return thinking ? { ...model, thinking } : model;
+        });
 }
 
 class RemoteProvider extends ChatProvider {
@@ -1037,7 +1276,10 @@ export class OpenAiCompatibleChatProvider extends RemoteProvider {
             normalizeUrl(this._config.baseUrl, this._config.chatPath ?? '/chat/completions'),
             { Authorization: `Bearer ${getApiKey(this._config)}` },
             buildOpenAiCompatibleChatBody(messages, modelId, {
+                provider: this._config,
+                model: options.model,
                 tools: options.tools,
+                thinkingLevel: options.thinkingLevel,
                 maxOutputTokens: options.maxOutputTokens,
             }),
             {
@@ -1081,7 +1323,10 @@ export class GeminiGenerateContentProvider extends RemoteProvider {
     async _complete(messages, modelId, options = {}) {
         const url = `${normalizeUrl(this._config.baseUrl, `/models/${modelId}:generateContent`)}?key=${encodeURIComponent(getApiKey(this._config))}`;
         const response = await postJson(url, {}, buildGeminiGenerateContentBody(messages, {
+            provider: this._config,
+            model: options.model,
             tools: options.tools,
+            thinkingLevel: options.thinkingLevel,
             maxOutputTokens: options.maxOutputTokens,
         }), {
             cancellable: options.cancellable ?? null,

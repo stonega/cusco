@@ -2,6 +2,7 @@ cusco_sources = files(
   'main.js',
   'appInfo.js',
   'application.js',
+  'bundledIcons.js',
   'searchProvider.js',
   'window.js',
 )

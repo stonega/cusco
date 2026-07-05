@@ -1,11 +1,13 @@
 export const DEFAULT_THINKING_LEVEL = 'auto';
-export const THINKING_LEVELS = ['off', 'auto', 'low', 'medium', 'high'];
+export const THINKING_LEVELS = ['off', 'minimal', 'auto', 'low', 'medium', 'high', 'max'];
 export const THINKING_LEVEL_LABELS = {
     off: 'Off',
+    minimal: 'Minimal',
     auto: 'Auto',
     low: 'Low',
     medium: 'Medium',
     high: 'High',
+    max: 'Max',
 };
 
 export function normalizeThinkingLevel(value, fallback = DEFAULT_THINKING_LEVEL) {

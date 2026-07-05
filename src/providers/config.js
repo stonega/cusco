@@ -208,7 +208,151 @@ function normalizeCustomModels(models) {
         }));
 }
 
-function normalizeStoredModels(models) {
+const PROVIDER_MODEL_ID_ALIASES = {
+    gemini: {
+        'gemini-3.1-pro': 'gemini-3.1-pro-preview',
+    },
+    zai: {
+        'glm5.2': 'glm-5.2',
+        'glm5-turbo': 'glm-5-turbo',
+    },
+};
+const PROVIDER_SUPPORTED_MODEL_IDS = {
+    gemini: new Set([
+        'gemini-3.5-flash',
+        'gemini-3.1-pro-preview',
+    ]),
+    kimi: new Set([
+        'kimi-k2.7-code',
+        'kimi-k2.7-code-highspeed',
+        'kimi-k2.6',
+    ]),
+    deepseek: new Set([
+        'deepseek-v4-pro',
+        'deepseek-v4-flash',
+    ]),
+    zai: new Set([
+        'glm-5.2',
+        'glm-5-turbo',
+    ]),
+};
+
+function normalizeProviderModelId(providerId, modelId) {
+    const id = String(modelId ?? '').trim();
+
+    return PROVIDER_MODEL_ID_ALIASES[providerId]?.[id] ?? id;
+}
+
+function isProviderModelSupported(providerId, modelId) {
+    const supportedModelIds = PROVIDER_SUPPORTED_MODEL_IDS[providerId];
+
+    return !supportedModelIds || supportedModelIds.has(modelId);
+}
+
+const KIMI_MODEL_METADATA = {
+    'kimi-k2.7-code': {
+        id: 'kimi-k2.7-code',
+        name: 'Kimi K2.7 Code',
+        description: 'Kimi coding model with stronger long-context instruction following and higher coding task success. Context 256k.',
+        thinking: {
+            api: 'kimi-thinking',
+            levels: ['auto'],
+            keep: 'all',
+            alwaysOn: true,
+        },
+    },
+    'kimi-k2.7-code-highspeed': {
+        id: 'kimi-k2.7-code-highspeed',
+        name: 'Kimi K2.7 Code High-Speed',
+        description: 'High-speed Kimi K2.7 Code variant, around 180 tokens/s and up to 260 tokens/s in short contexts. Context 256k.',
+        thinking: {
+            api: 'kimi-thinking',
+            levels: ['auto'],
+            keep: 'all',
+            alwaysOn: true,
+        },
+    },
+    'kimi-k2.6': {
+        id: 'kimi-k2.6',
+        name: 'Kimi K2.6',
+        description: 'Kimi intelligent multimodal model for agent, code, visual understanding, and general tasks with thinking and non-thinking modes. Context 256k.',
+        thinking: {
+            api: 'kimi-thinking',
+            levels: ['off', 'auto'],
+            keep: 'all',
+        },
+    },
+};
+const DEEPSEEK_MODEL_METADATA = {
+    'deepseek-v4-pro': {
+        id: 'deepseek-v4-pro',
+        name: 'DeepSeek V4 Pro',
+        description: 'DeepSeek reasoning-capable model.',
+        thinking: {
+            api: 'deepseek-thinking',
+            levels: ['off', 'auto', 'high', 'max'],
+        },
+    },
+    'deepseek-v4-flash': {
+        id: 'deepseek-v4-flash',
+        name: 'DeepSeek V4 Flash',
+        description: 'DeepSeek lower-latency model.',
+        thinking: {
+            api: 'deepseek-thinking',
+            levels: ['off', 'auto', 'high', 'max'],
+        },
+    },
+};
+const ZAI_MODEL_METADATA = {
+    'glm-5.2': {
+        id: 'glm-5.2',
+        name: 'GLM-5.2',
+        description: 'Z.ai flagship model for coding and agent applications.',
+        thinking: {
+            api: 'zai-thinking',
+            levels: ['off', 'auto', 'high', 'max'],
+            supportsReasoningEffort: true,
+        },
+    },
+    'glm-5-turbo': {
+        id: 'glm-5-turbo',
+        name: 'GLM-5 Turbo',
+        description: 'Z.ai faster GLM-5 series model optimized for agent workflows.',
+        thinking: {
+            api: 'zai-thinking',
+            levels: ['off', 'auto'],
+        },
+    },
+};
+const PROVIDER_MODEL_METADATA = {
+    kimi: KIMI_MODEL_METADATA,
+    deepseek: DEEPSEEK_MODEL_METADATA,
+    zai: ZAI_MODEL_METADATA,
+};
+
+function getProviderModelMetadata(providerId, modelId) {
+    return PROVIDER_MODEL_METADATA[providerId]?.[modelId] ?? null;
+}
+
+function normalizeStoredThinkingCapability(value) {
+    if (value === false)
+        return false;
+
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return undefined;
+
+    const capability = { ...value };
+
+    if (Array.isArray(value.levels))
+        capability.levels = value.levels.map(String);
+
+    if (value.budgets && typeof value.budgets === 'object' && !Array.isArray(value.budgets))
+        capability.budgets = { ...value.budgets };
+
+    return capability;
+}
+
+function normalizeStoredModels(models, providerId = '') {
     if (!Array.isArray(models))
         return [];
 
@@ -216,21 +360,47 @@ function normalizeStoredModels(models) {
     const normalizedModels = [];
 
     for (const model of models) {
-        const id = String(model?.id ?? model).trim();
+        const rawId = String(model?.id ?? model).trim();
+        const id = normalizeProviderModelId(providerId, rawId);
 
-        if (!id || seenIds.has(id))
+        if (!id || seenIds.has(id) || !isProviderModelSupported(providerId, id))
             continue;
 
-        seenIds.add(id);
-        normalizedModels.push({
+        const metadata = getProviderModelMetadata(providerId, id);
+        const normalizedModel = {
             id,
-            name: String(model?.name ?? id),
-            description: String(model?.description ?? 'Discovered model.'),
-        });
+            name: metadata?.name ?? String(model?.name ?? id).replace(rawId, id),
+            description: metadata?.description ?? String(model?.description ?? 'Discovered model.'),
+        };
+        const thinking = normalizeStoredThinkingCapability(model?.thinking ?? metadata?.thinking);
+
+        if (thinking !== undefined)
+            normalizedModel.thinking = thinking;
+
+        seenIds.add(id);
+        normalizedModels.push(normalizedModel);
+    }
+
+    const supportedModelIds = PROVIDER_SUPPORTED_MODEL_IDS[providerId];
+
+    if (supportedModelIds) {
+        const modelOrder = [...supportedModelIds];
+        normalizedModels.sort((left, right) => modelOrder.indexOf(left.id) - modelOrder.indexOf(right.id));
     }
 
     return normalizedModels;
 }
+
+const GEMINI_3_LEVEL_THINKING = {
+    api: 'gemini-thinking-level',
+    levels: ['minimal', 'auto', 'low', 'medium', 'high'],
+    includeThoughts: true,
+};
+const GEMINI_3_PRO_LEVEL_THINKING = {
+    api: 'gemini-thinking-level',
+    levels: ['auto', 'low', 'medium', 'high'],
+    includeThoughts: true,
+};
 
 function parseDiscoveredModelSettings(value) {
     try {
@@ -348,21 +518,13 @@ export const DEFAULT_PROVIDER_CONFIGS = [
                 id: 'gemini-3.5-flash',
                 name: 'Gemini 3.5 Flash',
                 description: 'Stable Gemini 3 model for sustained frontier performance.',
+                thinking: GEMINI_3_LEVEL_THINKING,
             },
             {
-                id: 'gemini-3.1-pro',
-                name: 'Gemini 3.1 Pro',
+                id: 'gemini-3.1-pro-preview',
+                name: 'Gemini 3.1 Pro Preview',
                 description: 'Advanced intelligence and agentic coding model.',
-            },
-            {
-                id: 'gemini-2.5-pro',
-                name: 'Gemini 2.5 Pro',
-                description: 'Advanced model for complex tasks and deep reasoning.',
-            },
-            {
-                id: 'gemini-2.5-flash',
-                name: 'Gemini 2.5 Flash',
-                description: 'Price-performance model for low-latency reasoning tasks.',
+                thinking: GEMINI_3_PRO_LEVEL_THINKING,
             },
         ],
     },
@@ -379,23 +541,11 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         apiKeyEnvVar: 'MOONSHOT_API_KEY',
         baseUrl: 'https://api.moonshot.ai/v1',
         chatPath: '/chat/completions',
-        defaultModelId: 'kimi-k2.6',
+        defaultModelId: 'kimi-k2.7-code',
         models: [
-            {
-                id: 'kimi-k2.6',
-                name: 'Kimi K2.6',
-                description: 'Latest Kimi multimodal model with 256k context.',
-            },
-            {
-                id: 'kimi-k2.5',
-                name: 'Kimi K2.5',
-                description: 'Kimi multimodal model with 256k context.',
-            },
-            {
-                id: 'moonshot-v1-128k',
-                name: 'Moonshot V1 128k',
-                description: 'Moonshot V1 generation model with 128k context.',
-            },
+            { ...KIMI_MODEL_METADATA['kimi-k2.7-code'] },
+            { ...KIMI_MODEL_METADATA['kimi-k2.7-code-highspeed'] },
+            { ...KIMI_MODEL_METADATA['kimi-k2.6'] },
         ],
     },
     {
@@ -413,16 +563,8 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         chatPath: '/chat/completions',
         defaultModelId: 'deepseek-v4-pro',
         models: [
-            {
-                id: 'deepseek-v4-pro',
-                name: 'DeepSeek V4 Pro',
-                description: 'DeepSeek reasoning-capable model.',
-            },
-            {
-                id: 'deepseek-v4-flash',
-                name: 'DeepSeek V4 Flash',
-                description: 'DeepSeek lower-latency model.',
-            },
+            { ...DEEPSEEK_MODEL_METADATA['deepseek-v4-pro'] },
+            { ...DEEPSEEK_MODEL_METADATA['deepseek-v4-flash'] },
         ],
     },
     {
@@ -498,76 +640,8 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         chatPath: '/chat/completions',
         defaultModelId: 'glm-5.2',
         models: [
-            {
-                id: 'glm-5.2',
-                name: 'GLM-5.2',
-                description: 'Latest Z.ai flagship model for coding and agent applications.',
-            },
-            {
-                id: 'glm-5.1',
-                name: 'GLM-5.1',
-                description: 'Z.ai flagship GLM-5 model.',
-            },
-            {
-                id: 'glm-5-turbo',
-                name: 'GLM-5 Turbo',
-                description: 'Faster GLM-5 series model.',
-            },
-            {
-                id: 'glm-5',
-                name: 'GLM-5',
-                description: 'GLM-5 foundation model.',
-            },
-            {
-                id: 'glm-4.7',
-                name: 'GLM-4.7',
-                description: 'GLM-4.7 model for text generation.',
-            },
-            {
-                id: 'glm-4.7-flash',
-                name: 'GLM-4.7 Flash',
-                description: 'Lower-latency GLM-4.7 variant.',
-            },
-            {
-                id: 'glm-4.7-flashx',
-                name: 'GLM-4.7 FlashX',
-                description: 'High-speed GLM-4.7 variant.',
-            },
-            {
-                id: 'glm-4.6',
-                name: 'GLM-4.6',
-                description: 'GLM-4.6 model for agentic, reasoning, and coding tasks.',
-            },
-            {
-                id: 'glm-4.5',
-                name: 'GLM-4.5',
-                description: 'GLM-4.5 reasoning, coding, and agent model.',
-            },
-            {
-                id: 'glm-4.5-air',
-                name: 'GLM-4.5 Air',
-                description: 'Lightweight GLM-4.5 variant.',
-            },
-            {
-                id: 'glm-4.5-x',
-                name: 'GLM-4.5 X',
-                description: 'High-performance GLM-4.5 variant.',
-            },
-            {
-                id: 'glm-4.5-airx',
-                name: 'GLM-4.5 AirX',
-                description: 'Lightweight high-speed GLM-4.5 variant.',
-            },
-            {
-                id: 'glm-4.5-flash',
-                name: 'GLM-4.5 Flash',
-                description: 'Free fast GLM-4.5 variant.',
-            },
-            {
-                id: 'glm-4-32b-0414-128k',
-                name: 'GLM-4 32B 128K',
-                description: 'GLM-4 32B model with 128k context.',
-            },
+            { ...ZAI_MODEL_METADATA['glm-5.2'] },
+            { ...ZAI_MODEL_METADATA['glm-5-turbo'] },
         ],
     },
     {
@@ -737,7 +811,7 @@ export class ProviderConfigStore {
         const models = normalizeStoredModels(await discoverer(providerConfig, {
             cancellable: options.cancellable ?? null,
             timeoutSeconds: options.timeoutSeconds,
-        }));
+        }), provider.id);
 
         if (models.length === 0)
             throw new Error(`${provider.name} did not return any models`);
@@ -802,8 +876,9 @@ export class ProviderConfigStore {
 
     resolve(providerId, modelId) {
         const provider = this.getProvider(providerId) ?? this.getDefaultProvider();
+        const normalizedModelId = normalizeProviderModelId(provider?.id, modelId);
         const model = provider
-            ? provider.models.find((item) => item.id === modelId) ?? this.getDefaultModel(provider.id)
+            ? provider.models.find((item) => item.id === normalizedModelId) ?? this.getDefaultModel(provider.id)
             : null;
 
         return { provider, model };
@@ -845,12 +920,14 @@ export class ProviderConfigStore {
         if (!provider)
             throw new Error(`Provider does not exist: ${providerId}`);
 
-        if (!provider.models.some((model) => model.id === modelId))
+        const normalizedModelId = normalizeProviderModelId(provider.id, modelId);
+
+        if (!provider.models.some((model) => model.id === normalizedModelId))
             throw new Error(`Model does not exist for ${providerId}: ${modelId}`);
 
-        provider.defaultModelId = modelId;
+        provider.defaultModelId = normalizedModelId;
         this._persistDefaultModels();
-        return this.resolve(provider.id, modelId);
+        return this.resolve(provider.id, normalizedModelId);
     }
 
     setActiveSelection(providerId, modelId) {
@@ -1004,14 +1081,14 @@ export class ProviderConfigStore {
         const defaultModels = parseDefaultModelSettings(this._settings.get_string('provider-default-models'));
 
         for (const provider of this._configs) {
-            const defaultModelId = defaultModels[provider.id];
+            const defaultModelId = normalizeProviderModelId(provider.id, defaultModels[provider.id]);
 
             if (provider.models.some((model) => model.id === defaultModelId))
                 provider.defaultModelId = defaultModelId;
         }
 
         const activeProviderId = this._settings.get_string('active-provider');
-        const activeModelId = this._settings.get_string('active-model');
+        const activeModelId = normalizeProviderModelId(activeProviderId, this._settings.get_string('active-model'));
 
         if (this.getProvider(activeProviderId))
             this._activeProviderId = activeProviderId;
@@ -1029,7 +1106,7 @@ export class ProviderConfigStore {
             if (!provider)
                 continue;
 
-            const normalizedModels = normalizeStoredModels(models);
+            const normalizedModels = normalizeStoredModels(models, providerId);
 
             if (normalizedModels.length > 0)
                 provider.models = normalizedModels;
@@ -1079,6 +1156,7 @@ export class ProviderConfigStore {
                 id: model.id,
                 name: model.name,
                 description: model.description,
+                ...(model.thinking === undefined ? {} : { thinking: model.thinking }),
             }));
         }
 

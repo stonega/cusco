@@ -12,6 +12,9 @@ import {
     APP_SUMMARY,
     APP_VERSION,
 } from '../appInfo.js';
+import { createBundledIcon } from '../bundledIcons.js';
+
+const EXTERNAL_LINK_ICON_FILE = 'external-link-symbolic.svg';
 
 function createInfoRow(title, value) {
     return new Adw.ActionRow({
@@ -28,10 +31,9 @@ function createLinkRow(title, uri) {
         activatable: true,
     });
 
-    row.add_suffix(new Gtk.Image({
-        icon_name: 'insert-link-symbolic',
-        valign: Gtk.Align.CENTER,
-    }));
+    const icon = createBundledIcon(EXTERNAL_LINK_ICON_FILE, 'insert-link-symbolic');
+    icon.set_valign(Gtk.Align.CENTER);
+    row.add_suffix(icon);
     row.connect('activated', () => {
         Gio.AppInfo.launch_default_for_uri(uri, null);
     });

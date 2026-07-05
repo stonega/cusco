@@ -30,10 +30,10 @@ if (conversations.activeConversation.id !== firstChat.id)
 
 conversations.updateProviderConfig(firstChat.id, {
     providerId: defaultProvider.id,
-    modelId: 'glm-5.1',
+    modelId: 'glm-5-turbo',
 });
 
-if (firstChat.modelId !== 'glm-5.1')
+if (firstChat.modelId !== 'glm-5-turbo')
     throw new Error(`Conversation model was not updated: ${firstChat.modelId}`);
 
 conversations.setMemoryEnabled(firstChat.id, false);
@@ -91,7 +91,8 @@ for (const providerId of expectedProviderIds) {
 
 const zaiProvider = providers.getProvider('zai');
 
-if (zaiProvider.defaultModelId !== 'glm-5.2' || !zaiProvider.models.some((model) => model.id === 'glm-4.5-flash'))
+if (zaiProvider.defaultModelId !== 'glm-5.2'
+    || zaiProvider.models.map((model) => model.id).join(',') !== 'glm-5.2,glm-5-turbo')
     throw new Error('Z.ai GLM models were not configured');
 
 const minimaxProvider = providers.getProvider('minimax');
@@ -101,9 +102,9 @@ if (minimaxProvider.baseUrl !== 'https://api.minimax.io/v1'
     || !minimaxProvider.models.some((model) => model.id === 'MiniMax-M2.7-highspeed'))
     throw new Error('MiniMax M-series models were not configured');
 
-providers.setDefaultModel(defaultProvider.id, 'glm-5.1');
+providers.setDefaultModel(defaultProvider.id, 'glm-5-turbo');
 
-if (providers.getDefaultModel(defaultProvider.id).id !== 'glm-5.1')
+if (providers.getDefaultModel(defaultProvider.id).id !== 'glm-5-turbo')
     throw new Error('Provider default model was not updated');
 
 print('Cusco chat management smoke passed');
