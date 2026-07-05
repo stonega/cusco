@@ -16,7 +16,6 @@ if [ -n "$missing_sources" ]; then
 fi
 
 gjs -m tests/import-smoke.js
-gjs -m tests/mock-provider-smoke.js
 gjs -m tests/markdown-smoke.js
 gjs -m tests/usage-smoke.js
 gjs -m tests/memory-smoke.js

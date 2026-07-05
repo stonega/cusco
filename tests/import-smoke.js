@@ -18,7 +18,6 @@ import { McpClient } from '../src/mcp/client.js';
 import { McpManager } from '../src/mcp/manager.js';
 import { ProviderConfigStore } from '../src/providers/config.js';
 import { createProviderIcon, getProviderGIcon } from '../src/providers/icons.js';
-import { MockProvider } from '../src/providers/mockProvider.js';
 import {
     AnthropicMessagesProvider,
     GeminiGenerateContentProvider,
@@ -59,11 +58,6 @@ if (APP_NAME !== 'Cusco' || APP_VERSION.length === 0 || APP_AUTHOR.length === 0)
 
 if (typeof CuscoApplication !== 'function')
     throw new Error('CuscoApplication did not import as a class');
-
-const provider = new MockProvider();
-
-if (provider.id !== 'mock')
-    throw new Error(`Unexpected provider id: ${provider.id}`);
 
 if (typeof ProviderConfigStore !== 'function')
     throw new Error('ProviderConfigStore did not import as a class');

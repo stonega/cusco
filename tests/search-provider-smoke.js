@@ -12,8 +12,8 @@ const path = GLib.build_filenamev([
 ]);
 const store = new ConversationFileStore({ path });
 const conversations = new ConversationManager({
-    providerId: 'mock',
-    modelId: 'mock-balanced',
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
     store,
 });
 const conversation = conversations.createConversation({ title: 'Searchable chat' });

@@ -1,8 +1,14 @@
 import { ConversationManager } from '../src/chat/conversation.js';
 import { ProviderConfigStore } from '../src/providers/config.js';
 import { createMessage } from '../src/providers/provider.js';
+import { MemoryApiKeyStore } from '../src/secrets/apiKeyStore.js';
 
-const providers = new ProviderConfigStore(undefined, { settings: null });
+const providers = new ProviderConfigStore(undefined, {
+    settings: null,
+    apiKeyStore: new MemoryApiKeyStore({ zai: 'zai-key' }),
+    envLookup: () => '',
+});
+providers.setProviderEnabled('zai', true);
 const defaultProvider = providers.getDefaultProvider();
 const defaultModel = providers.getDefaultModel(defaultProvider.id);
 const conversations = new ConversationManager({
@@ -24,10 +30,10 @@ if (conversations.activeConversation.id !== firstChat.id)
 
 conversations.updateProviderConfig(firstChat.id, {
     providerId: defaultProvider.id,
-    modelId: 'mock-fast',
+    modelId: 'glm-5.1',
 });
 
-if (firstChat.modelId !== 'mock-fast')
+if (firstChat.modelId !== 'glm-5.1')
     throw new Error(`Conversation model was not updated: ${firstChat.modelId}`);
 
 conversations.setMemoryEnabled(firstChat.id, false);
@@ -75,11 +81,6 @@ conversations.deleteConversation(branch.id);
 if (conversations.archivedConversations.length !== 0)
     throw new Error('Archived conversation was not deleted');
 
-providers.setDefaultModel(defaultProvider.id, 'mock-fast');
-
-if (providers.getDefaultModel(defaultProvider.id).id !== 'mock-fast')
-    throw new Error('Provider default model was not updated');
-
 const providerIds = providers.listProviders().map((provider) => provider.id);
 const expectedProviderIds = ['openai', 'anthropic', 'gemini', 'kimi', 'deepseek', 'minimax', 'zai'];
 
@@ -99,5 +100,10 @@ if (minimaxProvider.baseUrl !== 'https://api.minimax.io/v1'
     || minimaxProvider.defaultModelId !== 'MiniMax-M3'
     || !minimaxProvider.models.some((model) => model.id === 'MiniMax-M2.7-highspeed'))
     throw new Error('MiniMax M-series models were not configured');
+
+providers.setDefaultModel(defaultProvider.id, 'glm-5.1');
+
+if (providers.getDefaultModel(defaultProvider.id).id !== 'glm-5.1')
+    throw new Error('Provider default model was not updated');
 
 print('Cusco chat management smoke passed');

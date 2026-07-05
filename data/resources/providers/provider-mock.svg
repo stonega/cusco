@@ -1,5 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-  <title>Mock Provider</title>
-  <rect width="32" height="32" rx="8" fill="#687076"/>
-  <path fill="#ffffff" d="M8 22V10h2.45l3.58 6.76L17.62 10H20v12h-2.28v-7.3l-2.78 5.22h-1.86l-2.8-5.2V22H8zm14.4 0V10H25v12h-2.6z"/>
-</svg>

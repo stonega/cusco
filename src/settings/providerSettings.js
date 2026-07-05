@@ -22,11 +22,7 @@ function getDefaultModelIndex(provider) {
 }
 
 function canDisableProvider(providerConfigs, provider) {
-    const providerIsUsable = provider.implemented && (!provider.apiKeyRequired || provider.apiKeyConfigured);
-
-    return !provider.enabled
-        || !providerIsUsable
-        || providerConfigs.listProviders({ enabledOnly: true }).length > 1;
+    return !provider.enabled || provider.implemented;
 }
 
 function getEnabledRowSubtitle(provider, canEnableProvider) {
@@ -332,6 +328,7 @@ export function presentProviderSettingsDialog(
     workspaceManagerOrOnChanged = null,
     mcpManagerOrOnChanged = null,
     maybeOnChanged = null,
+    options = {},
 ) {
     const appSettings = typeof appSettingsOrOnChanged === 'function'
         ? null
@@ -372,6 +369,9 @@ export function presentProviderSettingsDialog(
     const page = createProviderSettingsPage(providerConfigs, onChanged);
     dialog.add(page);
     dialog.add(createAppInfoSettingsPage());
+
+    if (options.initialPage === 'providers')
+        dialog.set_visible_page(page);
 
     dialog.present(parent);
 }

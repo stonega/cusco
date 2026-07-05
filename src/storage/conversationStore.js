@@ -80,7 +80,7 @@ function normalizeConversation(conversation) {
     return {
         id: normalizeString(conversation?.id, GLib.uuid_string_random()),
         title: normalizeString(conversation?.title, 'New chat'),
-        providerId: normalizeString(conversation?.providerId, 'mock'),
+        providerId: normalizeString(conversation?.providerId),
         modelId: normalizeString(conversation?.modelId),
         thinkingLevel: normalizeThinkingLevel(conversation?.thinkingLevel, DEFAULT_THINKING_LEVEL),
         messages: Array.isArray(conversation?.messages)

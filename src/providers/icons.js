@@ -3,7 +3,6 @@ import GLib from 'gi://GLib?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
 
 const PROVIDER_ICON_FILES = {
-    mock: 'provider-mock.svg',
     openai: 'provider-openai.svg',
     anthropic: 'provider-anthropic.svg',
     gemini: 'provider-gemini.svg',

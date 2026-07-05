@@ -14,8 +14,8 @@ const memories = new MemoryManager({
     store: new MemoryFileStore({ path }),
 });
 const conversations = new ConversationManager({
-    providerId: 'mock',
-    modelId: 'mock-balanced',
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
 });
 const conversation = conversations.createConversation();
 const userMessage = createMessage('user', 'Remember that I prefer concise answers.');

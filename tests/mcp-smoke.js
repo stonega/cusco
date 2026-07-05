@@ -198,8 +198,22 @@ try {
 }
 
 try {
-    if (!manager.listServers().find((server) => server.source === 'file' && server.name === 'file-mcp'))
+    let fileServer = manager.listServers().find((server) => server.source === 'file' && server.name === 'file-mcp');
+
+    if (!fileServer)
         throw new Error('MCP config file server was not loaded');
+
+    manager.setServerEnabled(fileServer.key, true);
+    fileServer = manager.listServers().find((server) => server.source === 'file' && server.name === 'file-mcp');
+
+    if (!fileServer?.enabled)
+        throw new Error('MCP config file server was not enabled through manager');
+
+    manager.setServerEnabled(fileServer.key, false);
+    fileServer = manager.listServers().find((server) => server.source === 'file' && server.name === 'file-mcp');
+
+    if (fileServer?.enabled)
+        throw new Error('MCP config file server was not disabled through manager');
 
     if (httpListening) {
         workspace.addMcpServer({

@@ -131,3 +131,72 @@ export function loadMcpConfigFile(path = defaultMcpConfigFilePath()) {
     const [, contents] = GLib.file_get_contents(path);
     return parseMcpConfigFile(new TextDecoder().decode(contents), { sourcePath: path });
 }
+
+function getMcpServerContainer(config) {
+    if (config?.mcpServers !== undefined)
+        return config.mcpServers;
+
+    if (config?.servers !== undefined)
+        return config.servers;
+
+    return config;
+}
+
+function normalizeFileServerEntry(server, keyOrIndex, sourcePath) {
+    if (typeof keyOrIndex === 'number') {
+        return normalizeMcpServerConfig(server, {
+            source: 'file',
+            sourcePath,
+            id: server?.id ?? sanitizeMcpName(server?.name ?? `server-${keyOrIndex + 1}`, 'mcp-server'),
+        });
+    }
+
+    return normalizeMcpServerConfig({
+        ...server,
+        name: server?.name ?? keyOrIndex,
+        id: server?.id ?? sanitizeMcpName(keyOrIndex, 'mcp-server'),
+    }, {
+        source: 'file',
+        sourcePath,
+        name: keyOrIndex,
+        id: sanitizeMcpName(keyOrIndex, 'mcp-server'),
+    });
+}
+
+function setServerEnabledValue(server, enabled) {
+    server.enabled = Boolean(enabled);
+    delete server.disabled;
+}
+
+export function setMcpConfigFileServerEnabled(path, targetServer, enabled) {
+    if (!GLib.file_test(path, GLib.FileTest.EXISTS))
+        throw new Error(`MCP config file does not exist: ${path}`);
+
+    const [, contents] = GLib.file_get_contents(path);
+    const config = JSON.parse(new TextDecoder().decode(contents));
+    const container = getMcpServerContainer(config);
+
+    if (Array.isArray(container)) {
+        const index = container.findIndex((server, itemIndex) => (
+            normalizeFileServerEntry(server, itemIndex, path)?.id === targetServer.id
+        ));
+
+        if (index < 0)
+            throw new Error(`MCP server does not exist in config file: ${targetServer.name}`);
+
+        setServerEnabledValue(container[index], enabled);
+    } else if (container && typeof container === 'object') {
+        const entry = Object.entries(container).find(([name, server]) => (
+            normalizeFileServerEntry(server, name, path)?.id === targetServer.id
+        ));
+
+        if (!entry)
+            throw new Error(`MCP server does not exist in config file: ${targetServer.name}`);
+
+        setServerEnabledValue(entry[1], enabled);
+    } else {
+        throw new Error('MCP config file does not contain a server list.');
+    }
+
+    GLib.file_set_contents(path, `${JSON.stringify(config, null, 2)}\n`);
+}

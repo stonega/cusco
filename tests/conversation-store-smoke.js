@@ -11,8 +11,8 @@ const path = GLib.build_filenamev([
 ]);
 const store = new ConversationFileStore({ path });
 const conversations = new ConversationManager({
-    providerId: 'mock',
-    modelId: 'mock-balanced',
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
     thinkingLevel: 'auto',
     store,
 });
@@ -22,8 +22,8 @@ conversations.appendMessage(chat.id, createMessage('user', 'Persist this chat'))
 const assistantMessage = createMessage('assistant', 'Stored answer', {
     reasoning: {
         content: 'Stored reasoning summary',
-        providerId: 'mock',
-        modelId: 'mock-balanced',
+        providerId: 'openai',
+        modelId: 'gpt-5.5',
         thinkingLevel: 'high',
     },
     usage: {
@@ -31,8 +31,8 @@ const assistantMessage = createMessage('assistant', 'Stored answer', {
         outputTokens: 8,
         reasoningTokens: 4,
         totalTokens: 18,
-        providerId: 'mock',
-        modelId: 'mock-balanced',
+        providerId: 'openai',
+        modelId: 'gpt-5.5',
         thinkingLevel: 'high',
     },
 });
@@ -52,8 +52,8 @@ conversations.setThinkingLevel(chat.id, 'high');
 conversations.setSkillIds(chat.id, ['review']);
 
 const reloaded = new ConversationManager({
-    providerId: 'mock',
-    modelId: 'mock-balanced',
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
     store,
 });
 const reloadedChat = reloaded.activeConversation;
@@ -116,8 +116,8 @@ reloaded.setCronMetadata(cronChat.id, {
 });
 
 const reloadedCron = new ConversationManager({
-    providerId: 'mock',
-    modelId: 'mock-balanced',
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
     store,
 }).getConversation(cronChat.id);
 

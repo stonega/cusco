@@ -1,7 +1,6 @@
 import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 
-import { MockProvider } from './mockProvider.js';
 import {
     AnthropicMessagesProvider,
     discoverAnthropicModels,
@@ -33,7 +32,7 @@ const FALLBACK_STRING_DEFAULTS = {
     'custom-openai-compatible-base-url': '',
 };
 const FALLBACK_STRV_DEFAULTS = {
-    'enabled-providers': ['mock'],
+    'enabled-providers': [],
     'custom-openai-compatible-models': [],
 };
 
@@ -247,33 +246,6 @@ function parseDiscoveredModelSettings(value) {
 }
 
 export const DEFAULT_PROVIDER_CONFIGS = [
-    {
-        id: 'mock',
-        name: 'Mock Provider',
-        description: 'Local streaming provider for development.',
-        themeColor: '#687076',
-        implemented: true,
-        enabled: true,
-        apiKeyRequired: false,
-        apiKeyConfigured: false,
-        defaultModelId: 'mock-balanced',
-        thinking: {
-            api: 'mock',
-            levels: ['off', 'auto', 'low', 'medium', 'high'],
-        },
-        models: [
-            {
-                id: 'mock-balanced',
-                name: 'Mock Balanced',
-                description: 'Streams a realistic local test response.',
-            },
-            {
-                id: 'mock-fast',
-                name: 'Mock Fast',
-                description: 'Uses the same local provider with a fast profile label.',
-            },
-        ],
-    },
     {
         id: 'openai',
         name: 'OpenAI',
@@ -789,16 +761,15 @@ export class ProviderConfigStore {
         if (activeProvider?.enabled && this._isProviderUsable(activeProvider))
             return activeProvider;
 
-        const provider = this._configs.find((config) => config.enabled && this._isProviderUsable(config));
-
-        if (!provider)
-            throw new Error('No enabled providers are configured');
-
-        return provider;
+        return this._configs.find((config) => config.enabled && this._isProviderUsable(config)) ?? null;
     }
 
     getDefaultModel(providerId) {
         const provider = providerId ? this.getProvider(providerId) : this.getDefaultProvider();
+
+        if (!provider)
+            return null;
+
         const activeModel = provider?.id === this._activeProviderId
             ? provider.models.find((model) => model.id === this._activeModelId)
             : null;
@@ -811,7 +782,7 @@ export class ProviderConfigStore {
 
     getActiveSelection() {
         const provider = this.getDefaultProvider();
-        const model = this.getDefaultModel(provider.id);
+        const model = provider ? this.getDefaultModel(provider.id) : null;
 
         return { provider, model };
     }
@@ -831,13 +802,19 @@ export class ProviderConfigStore {
 
     resolve(providerId, modelId) {
         const provider = this.getProvider(providerId) ?? this.getDefaultProvider();
-        const model = provider.models.find((item) => item.id === modelId) ?? this.getDefaultModel(provider.id);
+        const model = provider
+            ? provider.models.find((item) => item.id === modelId) ?? this.getDefaultModel(provider.id)
+            : null;
 
         return { provider, model };
     }
 
     getThinkingLevels(providerId, modelId = '') {
         const { provider, model } = this.resolve(providerId, modelId);
+
+        if (!provider)
+            return [];
+
         return getSupportedThinkingLevels(provider, model);
     }
 
@@ -856,9 +833,6 @@ export class ProviderConfigStore {
 
         if (enabled && provider.apiKeyRequired && !provider.apiKeyConfigured)
             throw new Error(`${provider.name} requires ${provider.apiKeyEnvVar}`);
-
-        if (!enabled && this._isProviderUsable(provider) && this.listProviders({ enabledOnly: true }).length <= 1)
-            throw new Error('At least one provider must stay enabled');
 
         provider.enabled = enabled;
         this._persistEnabledProviders();
@@ -882,7 +856,7 @@ export class ProviderConfigStore {
     setActiveSelection(providerId, modelId) {
         const { provider, model } = this.resolve(providerId, modelId);
 
-        this._activeProviderId = provider.id;
+        this._activeProviderId = provider?.id ?? '';
         this._activeModelId = model?.id ?? '';
         this._settings?.set_string('active-provider', this._activeProviderId);
         this._settings?.set_string('active-model', this._activeModelId);
@@ -896,9 +870,6 @@ export class ProviderConfigStore {
 
         if (!provider)
             throw new Error(`Provider does not exist: ${providerId}`);
-
-        if (providerId === 'mock')
-            return new MockProvider();
 
         if (!provider.implemented || !this._isProviderConfigured(provider))
             throw new Error(`Provider is not available: ${provider.name}`);

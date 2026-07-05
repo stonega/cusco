@@ -3,6 +3,7 @@ import {
     loadMcpConfigFile,
     normalizeMcpServerConfig,
     sanitizeMcpName,
+    setMcpConfigFileServerEnabled,
 } from './config.js';
 import { McpClient } from './client.js';
 import {
@@ -338,10 +339,16 @@ export class McpManager {
         if (!server)
             throw createUserVisibleError(`Unknown MCP server: ${key}`);
 
-        if (server.source !== 'workspace')
-            throw createUserVisibleError('Config-file MCP servers must be enabled or disabled in the config file.');
+        if (server.source === 'workspace')
+            this._workspaceManager.setMcpServerEnabled(server.id, enabled);
+        else if (server.source === 'file')
+            setMcpConfigFileServerEnabled(server.sourcePath || this._configPath, server, enabled);
+        else
+            throw createUserVisibleError(`Unsupported MCP server source: ${server.source}`);
 
-        this._workspaceManager.setMcpServerEnabled(server.id, enabled);
+        if (!enabled)
+            this.disconnectServer(server.key);
+
         this.reloadConfig();
     }
 

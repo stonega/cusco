@@ -184,7 +184,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const { provider: defaultProvider, model: defaultModel } = this._providerConfigs.getActiveSelection();
 
         this._conversations = new ConversationManager({
-            providerId: defaultProvider.id,
+            providerId: defaultProvider?.id ?? '',
             modelId: defaultModel?.id ?? '',
             thinkingLevel: this._appSettings.thinkingLevel,
             store: new ConversationFileStore(),
@@ -381,6 +381,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         composerMetaRow.add_css_class('cusco-composer-meta');
 
         this._providerPicker = this._createProviderPicker();
+        this._providerConfigButton = this._createProviderConfigButton();
         this._modelPicker = new Gtk.ComboBoxText();
         this._populateProviderPicker();
         this._providerPicker.connect('changed', () => this._handleProviderChanged());
@@ -446,6 +447,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._promptMenuButton.set_valign(Gtk.Align.CENTER);
 
         composerMetaRow.append(this._providerPicker);
+        composerMetaRow.append(this._providerConfigButton);
         composerMetaRow.append(this._modelPicker);
         composerMetaRow.append(this._attachButton);
         composerMetaRow.append(this._promptMenuButton);
@@ -665,7 +667,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
     }
 
-    _showSettingsDialog() {
+    _showSettingsDialog(options = {}) {
         presentProviderSettingsDialog(
             this,
             this._providerConfigs,
@@ -674,6 +676,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._workspace,
             this._mcp,
             (change) => this._handleProviderSettingsChanged(change),
+            options,
         );
     }
 
@@ -855,12 +858,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         if (conversation && !this._providerConfigs.isProviderAvailable(conversation.providerId)) {
             const defaultProvider = this._providerConfigs.getDefaultProvider();
-            const defaultModel = this._providerConfigs.getDefaultModel(defaultProvider.id);
+            const defaultModel = defaultProvider ? this._providerConfigs.getDefaultModel(defaultProvider.id) : null;
             this._conversations.updateProviderConfig(conversation.id, {
-                providerId: defaultProvider.id,
+                providerId: defaultProvider?.id ?? '',
                 modelId: defaultModel?.id ?? '',
             });
-            this._providerConfigs.setActiveSelection(defaultProvider.id, defaultModel?.id ?? '');
+
+            if (defaultProvider)
+                this._providerConfigs.setActiveSelection(defaultProvider.id, defaultModel?.id ?? '');
+            else
+                this._providerConfigs.setActiveSelection('', '');
         }
 
         this._populateProviderPicker();
@@ -875,12 +882,31 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     async _sendMessage(text) {
+        const conversation = this._conversations.activeConversation ?? this._conversations.createConversation();
+
+        if (!this._providerConfigs.isProviderAvailable(conversation.providerId)) {
+            const defaultProvider = this._providerConfigs.getDefaultProvider();
+            const defaultModel = defaultProvider ? this._providerConfigs.getDefaultModel(defaultProvider.id) : null;
+
+            if (!defaultProvider) {
+                this._appendSystemError('Configure an AI provider in Settings before sending.');
+                this._showSettingsDialog({ initialPage: 'providers' });
+                return;
+            }
+
+            this._conversations.updateProviderConfig(conversation.id, {
+                providerId: defaultProvider.id,
+                modelId: defaultModel?.id ?? '',
+            });
+            this._providerConfigs.setActiveSelection(defaultProvider.id, defaultModel?.id ?? '');
+            this._syncProviderControls(conversation);
+        }
+
         const cancellable = this._beginActiveTurn();
 
         if (!cancellable)
             return;
 
-        const conversation = this._conversations.activeConversation ?? this._conversations.createConversation();
         const attachments = this._consumePendingAttachments();
         const userMessage = createMessage(
             'user',
@@ -1824,6 +1850,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _populateProviderPicker() {
         const providerStore = new Gtk.ListStore();
+        let providerCount = 0;
 
         providerStore.set_column_types([
             GObject.TYPE_STRING,
@@ -1833,6 +1860,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         for (const provider of this._providerConfigs.listProviders({ enabledOnly: true, usableOnly: false })) {
             const iter = providerStore.append();
+            providerCount++;
             providerStore.set(iter, [
                 PROVIDER_PICKER_ID_COLUMN,
                 PROVIDER_PICKER_NAME_COLUMN,
@@ -1846,6 +1874,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         this._providerPicker.set_model(providerStore);
         this._providerPicker.set_id_column(PROVIDER_PICKER_ID_COLUMN);
+        this._syncProviderSelectorVisibility(providerCount > 0);
+    }
+
+    _syncProviderSelectorVisibility(hasEnabledProviders) {
+        this._providerPicker?.set_visible(hasEnabledProviders);
+        this._modelPicker?.set_visible(hasEnabledProviders);
+        this._providerConfigButton?.set_visible(!hasEnabledProviders);
     }
 
     _populateModelPicker(providerId, selectedModelId = null) {
@@ -1914,6 +1949,18 @@ class CuscoWindow extends Adw.ApplicationWindow {
         picker.add_attribute(textRenderer, 'text', PROVIDER_PICKER_NAME_COLUMN);
 
         return picker;
+    }
+
+    _createProviderConfigButton() {
+        const button = new Gtk.Button({
+            label: 'Configure Provider',
+            tooltip_text: 'Configure an AI provider',
+            valign: Gtk.Align.CENTER,
+            visible: false,
+        });
+        button.add_css_class('suggested-action');
+        button.connect('clicked', () => this._showSettingsDialog({ initialPage: 'providers' }));
+        return button;
     }
 
     _createChatOptionsMenuButton() {
@@ -2673,6 +2720,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._promptMenuButton.set_sensitive(!isBusy);
         this._conversationList.set_sensitive(!isBusy);
         this._providerPicker.set_sensitive(!isBusy);
+        this._providerConfigButton.set_sensitive(!isBusy);
         this._modelPicker.set_sensitive(!isBusy);
         this._thinkingLevelPicker.set_sensitive(!isBusy && this._providerConfigs.supportsThinking(
             this._conversations.activeConversation?.providerId,

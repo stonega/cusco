@@ -36,7 +36,7 @@ const mcpServer = workspace.addMcpServer({
     args: ['server.js'],
 });
 
-workspace.setCache('models:mock', ['mock-balanced'], { ttlSeconds: 60 });
+workspace.setCache('models:openai', ['gpt-5.5'], { ttlSeconds: 60 });
 
 if (workspace.searchPrompts('clearly')[0].id !== prompt.id)
     throw new Error('Prompt library search failed');
@@ -44,7 +44,7 @@ if (workspace.searchPrompts('clearly')[0].id !== prompt.id)
 if (!profile.id || !folder.id || !pluginTool.id || !mcpServer.id)
     throw new Error('Workspace records were not created');
 
-if (workspace.getCache('models:mock')[0] !== 'mock-balanced')
+if (workspace.getCache('models:openai')[0] !== 'gpt-5.5')
     throw new Error('Offline cache lookup failed');
 
 const reloaded = new WorkspaceManager({
@@ -55,8 +55,8 @@ if (reloaded.prompts.length !== 1 || reloaded.pluginTools.length !== 1 || reload
     throw new Error('Workspace data was not persisted');
 
 const conversations = new ConversationManager({
-    providerId: 'mock',
-    modelId: 'mock-balanced',
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
 });
 const conversation = conversations.createConversation({
     title: 'Exportable',

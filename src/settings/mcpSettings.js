@@ -226,13 +226,8 @@ export function createMcpConfigGroup(parent, mcpManager, onChanged = () => {}) {
                     server.enabled,
                     server.source === 'workspace'
                         ? `Enable ${server.name}`
-                        : 'Edit mcp.json to enable or disable this server.',
+                        : `Enable ${server.name} in mcp.json`,
                     (enabled) => {
-                        if (server.source !== 'workspace') {
-                            toggle.set_active(server.enabled);
-                            return;
-                        }
-
                         try {
                             mcpManager.setServerEnabled(server.key, enabled);
                             renderConfig();
@@ -261,7 +256,6 @@ export function createMcpConfigGroup(parent, mcpManager, onChanged = () => {}) {
                     actions.append(authButton);
                 }
 
-                toggle.set_sensitive(server.source === 'workspace');
                 actions.append(refreshButton);
                 actions.append(toggle);
                 content.append(textColumn);

@@ -12,7 +12,7 @@
       <description>The model identifier selected for new conversations.</description>
     </key>
     <key name="enabled-providers" type="as">
-      <default>['mock']</default>
+      <default>[]</default>
       <summary>Enabled AI providers</summary>
       <description>Provider identifiers available in chat provider pickers.</description>
     </key>

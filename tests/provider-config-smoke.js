@@ -33,25 +33,11 @@ class MemorySettings {
 
 const configs = [
     {
-        id: 'mock',
-        name: 'Mock Provider',
-        description: 'Local provider.',
-        implemented: true,
-        enabled: true,
-        apiKeyRequired: false,
-        apiKeyConfigured: false,
-        defaultModelId: 'mock-balanced',
-        models: [
-            { id: 'mock-balanced', name: 'Mock Balanced' },
-            { id: 'mock-fast', name: 'Mock Fast' },
-        ],
-    },
-    {
         id: 'test-remote',
         name: 'Test Remote',
         description: 'Remote provider with no credentials for tests.',
         implemented: true,
-        enabled: false,
+        enabled: true,
         apiFormat: 'openai-chat-completions',
         apiKeyRequired: false,
         apiKeyConfigured: false,
@@ -71,7 +57,7 @@ const settings = new MemorySettings({
         'provider-default-models': '{"test-remote":"remote-large"}',
     },
     strv: {
-        'enabled-providers': ['mock', 'test-remote'],
+        'enabled-providers': ['test-remote'],
     },
 });
 const store = new ProviderConfigStore(configs, { settings });
@@ -88,14 +74,17 @@ store.setProviderEnabled('test-remote', false);
 if (settings.get_strv('enabled-providers').includes('test-remote'))
     throw new Error('Disabled provider was not persisted');
 
-store.setDefaultModel('mock', 'mock-fast');
+if (store.getActiveSelection().provider !== null)
+    throw new Error('Provider store should allow no active provider');
 
-if (!settings.get_string('provider-default-models').includes('"mock":"mock-fast"'))
+store.setDefaultModel('test-remote', 'remote-small');
+
+if (!settings.get_string('provider-default-models').includes('"test-remote":"remote-small"'))
     throw new Error('Provider default model was not persisted');
 
-store.setActiveSelection('mock', 'mock-fast');
+store.setActiveSelection('test-remote', 'remote-small');
 
-if (settings.get_string('active-provider') !== 'mock' || settings.get_string('active-model') !== 'mock-fast')
+if (settings.get_string('active-provider') !== 'test-remote' || settings.get_string('active-model') !== 'remote-small')
     throw new Error('Active selection was not persisted');
 
 const defaultStore = new ProviderConfigStore(undefined, {
@@ -178,7 +167,7 @@ credentialStore.setProviderEnabled('secure-remote', true);
 if (!credentialStore.isProviderAvailable('secure-remote'))
     throw new Error('Provider with stored credentials was not available');
 
-if (credentialStore.getFallbackSelection('secure-remote').provider.id !== 'mock')
+if (credentialStore.getFallbackSelection('secure-remote').provider.id !== 'test-remote')
     throw new Error('Fallback provider was not selected from enabled providers');
 
 if (credentialStore.createProvider('secure-remote').name !== 'Secure Remote')
@@ -199,7 +188,7 @@ try {
 
 const staleEnabledSettings = new MemorySettings({
     strv: {
-        'enabled-providers': ['mock', 'secure-remote'],
+        'enabled-providers': ['test-remote', 'secure-remote'],
     },
 });
 const staleEnabledStore = new ProviderConfigStore(credentialConfigs, {
