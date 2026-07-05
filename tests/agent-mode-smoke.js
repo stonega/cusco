@@ -2,6 +2,7 @@ import {
     buildAgentModeSystemPrompt,
     createAgentToolFailurePrompt,
     createAgentToolResultPrompt,
+    DEFAULT_AGENT_MAX_ITERATIONS,
     formatAgentToolCall,
     isPartialAgentToolCall,
     parseAgentToolCall,
@@ -11,6 +12,12 @@ import { ToolManager } from '../src/tools/tools.js';
 
 const tools = new ToolManager();
 const prompt = buildAgentModeSystemPrompt(tools.listTools(), { maxIterations: 2 });
+const defaultPrompt = buildAgentModeSystemPrompt(tools.listTools());
+
+if (DEFAULT_AGENT_MAX_ITERATIONS < 100
+    || !defaultPrompt.includes(`at most ${DEFAULT_AGENT_MAX_ITERATIONS} tool-use iterations`)) {
+    throw new Error(`Agent Mode max iteration default is too low: ${DEFAULT_AGENT_MAX_ITERATIONS}`);
+}
 
 if (!prompt.includes('Agent Mode is enabled')
     || !prompt.includes('calc')

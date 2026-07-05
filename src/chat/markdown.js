@@ -17,6 +17,132 @@ function trimBlankLines(lines) {
     return lines.slice(start, end);
 }
 
+function hasUnescapedTrailingPipe(text) {
+    if (!text.endsWith('|'))
+        return false;
+
+    let backslashCount = 0;
+
+    for (let index = text.length - 2; index >= 0 && text[index] === '\\'; index--)
+        backslashCount++;
+
+    return backslashCount % 2 === 0;
+}
+
+function splitTableRow(line) {
+    let text = String(line ?? '').trim();
+
+    if (!text.includes('|'))
+        return null;
+
+    if (text.startsWith('|'))
+        text = text.slice(1);
+
+    if (hasUnescapedTrailingPipe(text))
+        text = text.slice(0, -1);
+
+    const cells = [];
+    let cell = '';
+
+    for (let index = 0; index < text.length; index++) {
+        const char = text[index];
+
+        if (char === '\\' && text[index + 1] === '|') {
+            cell += '|';
+            index++;
+            continue;
+        }
+
+        if (char === '|') {
+            cells.push(cell.trim());
+            cell = '';
+            continue;
+        }
+
+        cell += char;
+    }
+
+    cells.push(cell.trim());
+
+    if (cells.length < 2)
+        return null;
+
+    return cells;
+}
+
+function parseTableAlignment(cell) {
+    const marker = cell.replace(/\s+/g, '');
+
+    if (!/^:?-{3,}:?$/.test(marker))
+        return null;
+
+    if (marker.startsWith(':') && marker.endsWith(':'))
+        return 'center';
+
+    if (marker.endsWith(':'))
+        return 'right';
+
+    return 'left';
+}
+
+function parseTableSeparator(line) {
+    const cells = splitTableRow(line);
+
+    if (!cells)
+        return null;
+
+    const alignments = cells.map(parseTableAlignment);
+
+    if (alignments.some((alignment) => alignment === null))
+        return null;
+
+    return alignments;
+}
+
+function normalizeTableCells(cells, columnCount) {
+    const normalized = [];
+
+    for (let index = 0; index < columnCount; index++)
+        normalized.push(cells[index] ?? '');
+
+    return normalized;
+}
+
+function parseMarkdownTable(lines, startIndex) {
+    const headers = splitTableRow(lines[startIndex]);
+    const alignments = parseTableSeparator(lines[startIndex + 1]);
+
+    if (!headers || !alignments || headers.length !== alignments.length)
+        return null;
+
+    const rows = [];
+    let index = startIndex + 2;
+
+    while (index < lines.length) {
+        const cells = splitTableRow(lines[index]);
+
+        if (!cells)
+            break;
+
+        rows.push(normalizeTableCells(cells, headers.length));
+        index++;
+    }
+
+    return {
+        block: {
+            type: 'table',
+            headers: normalizeTableCells(headers, headers.length),
+            alignments,
+            rows,
+        },
+        nextIndex: index,
+    };
+}
+
+function isMarkdownDivider(line) {
+    return /^ {0,3}([*_-])(?:[ \t]*\1){2,}[ \t]*$/.test(String(line ?? ''));
+}
+
 function consumeWrapped(text, index, delimiter, openTag, closeTag) {
     const closeIndex = text.indexOf(delimiter, index + delimiter.length);
 
@@ -74,7 +200,8 @@ export function parseMarkdownBlocks(markdown) {
         paragraphLines = [];
     };
 
-    for (const line of lines) {
+    for (let index = 0; index < lines.length; index++) {
+        const line = lines[index];
         const openingFence = line.match(/^```([\w#+.-]*)\s*$/);
 
         if (openingFence && !inCodeBlock) {
@@ -99,8 +226,24 @@ export function parseMarkdownBlocks(markdown) {
 
         if (inCodeBlock)
             codeLines.push(line);
-        else
+        else {
+            const table = parseMarkdownTable(lines, index);
+
+            if (table) {
+                flushParagraph();
+                blocks.push(table.block);
+                index = table.nextIndex - 1;
+                continue;
+            }
+
+            if (isMarkdownDivider(line)) {
+                flushParagraph();
+                blocks.push({ type: 'divider' });
+                continue;
+            }
+
             paragraphLines.push(line);
+        }
     }
 
     if (inCodeBlock) {
@@ -186,6 +329,19 @@ function headingSize(level) {
     return 'medium';
 }
 
+function headingLineHeight(level) {
+    if (level <= 1)
+        return '1.05';
+
+    if (level === 2)
+        return '1.08';
+
+    if (level === 3)
+        return '1.12';
+
+    return null;
+}
+
 function headingText(text) {
     return text.trim().replace(/\s+#+\s*$/, '').trimEnd();
 }
@@ -197,7 +353,11 @@ function lineToPangoMarkup(line) {
     const heading = line.match(/^(#{1,6})\s+(.+)$/);
 
     if (heading) {
-        return `<span weight="bold" size="${headingSize(heading[1].length)}">${inlineMarkdownToPangoMarkup(headingText(heading[2]))}</span>`;
+        const level = heading[1].length;
+        const lineHeight = headingLineHeight(level);
+        const lineHeightAttribute = lineHeight ? ` line_height="${lineHeight}"` : '';
+
+        return `<span weight="bold" size="${headingSize(level)}"${lineHeightAttribute}>${inlineMarkdownToPangoMarkup(headingText(heading[2]))}</span>`;
     }
 
     const bullet = line.match(/^\s*[-*]\s+(.+)$/);

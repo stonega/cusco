@@ -64,7 +64,7 @@
 .cusco-floating-composer .cusco-composer-meta button {
     background-color: @view_bg_color;
     background-image: none;
-    box-shadow: none;
+    box-shadow: 0 1px 3px alpha(@window_fg_color, 0.14);
 }
 
 .cusco-floating-composer .cusco-composer-meta button:hover,
@@ -179,6 +179,30 @@
     line-height: 1.35;
 }
 
+.cusco-markdown-table {
+    background-color: alpha(@window_fg_color, 0.04);
+    border: 1px solid alpha(@window_fg_color, 0.12);
+    border-radius: 8px;
+}
+
+.cusco-table-cell {
+    padding: 6px 8px;
+    border-right: 1px solid alpha(@window_fg_color, 0.10);
+    border-bottom: 1px solid alpha(@window_fg_color, 0.10);
+    line-height: 1.3;
+}
+
+.cusco-table-header-cell {
+    background-color: alpha(@window_fg_color, 0.06);
+}
+
+.cusco-markdown-divider {
+    margin-top: 4px;
+    margin-bottom: 4px;
+    min-height: 1px;
+    background-color: alpha(@window_fg_color, 0.18);
+}
+
 .cusco-code-block {
     background-color: alpha(@window_fg_color, 0.06);
     border: 1px solid alpha(@window_fg_color, 0.12);
@@ -186,8 +210,40 @@
     color: @window_fg_color;
 }
 
+.cusco-code-block-light {
+    background-color: #f8f8f8;
+    border-color: alpha(#000000, 0.12);
+    color: #2e3436;
+}
+
+.cusco-code-block-dark {
+    background-color: #1e1e1e;
+    border-color: alpha(#ffffff, 0.16);
+    color: #eeeeec;
+}
+
 .cusco-code-header {
     border-bottom: 1px solid alpha(@window_fg_color, 0.10);
+}
+
+.cusco-code-block-light .cusco-code-header {
+    border-bottom-color: alpha(#000000, 0.10);
+}
+
+.cusco-code-block-dark .cusco-code-header {
+    border-bottom-color: alpha(#ffffff, 0.14);
+}
+
+.cusco-code-block-light .dim-label {
+    color: alpha(#000000, 0.58);
+}
+
+.cusco-code-block-dark .dim-label {
+    color: alpha(#ffffff, 0.70);
+}
+
+.cusco-code-block-dark button {
+    color: alpha(#ffffff, 0.82);
 }
 
 .cusco-code-view {
@@ -199,4 +255,45 @@
     background-color: alpha(@accent_fg_color, 0.14);
     border-color: alpha(@accent_fg_color, 0.22);
     color: @accent_fg_color;
+}
+
+.cusco-message-user .cusco-code-block-light {
+    background-color: #f8f8f8;
+    border-color: alpha(#000000, 0.12);
+    color: #2e3436;
+}
+
+.cusco-message-user .cusco-code-block-dark {
+    background-color: #1e1e1e;
+    border-color: alpha(#ffffff, 0.16);
+    color: #eeeeec;
+}
+
+.cusco-high-contrast .cusco-code-block-light {
+    border: 1px solid #000000;
+}
+
+.cusco-high-contrast .cusco-code-block-dark {
+    border: 1px solid #ffffff;
+}
+
+.cusco-message-user .cusco-markdown-table {
+    background-color: alpha(@accent_fg_color, 0.10);
+    border-color: alpha(@accent_fg_color, 0.22);
+}
+
+.cusco-message-user .cusco-table-cell {
+    border-color: alpha(@accent_fg_color, 0.18);
+}
+
+.cusco-message-user .cusco-table-header-cell {
+    background-color: alpha(@accent_fg_color, 0.12);
+}
+
+.cusco-message-user .cusco-markdown-divider {
+    background-color: alpha(@accent_fg_color, 0.32);
+}
+
+.cusco-high-contrast .cusco-markdown-table {
+    border: 1px solid @window_fg_color;
 }

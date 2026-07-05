@@ -16,7 +16,7 @@ import {
     parseAgentToolCall,
 } from './chat/agentMode.js';
 import { ConversationManager } from './chat/conversation.js';
-import { createMessageContent } from './chat/messageView.js';
+import { copyTextToClipboard, createMessageContent } from './chat/messageView.js';
 import { estimateConversationUsage } from './chat/usage.js';
 import { createCronCreateTool, CronJobManager } from './cron/manager.js';
 import { MemoryManager } from './memory/memory.js';
@@ -370,7 +370,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             hexpand: true,
             margin_start: 18,
             margin_end: 18,
-            margin_bottom: 18,
+            margin_bottom: 10,
         });
         composerShell.add_css_class('cusco-floating-composer');
 
@@ -673,7 +673,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._memories,
             this._workspace,
             this._mcp,
-            () => this._handleProviderSettingsChanged(),
+            (change) => this._handleProviderSettingsChanged(change),
         );
     }
 
@@ -849,7 +849,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         ].join('\n');
     }
 
-    _handleProviderSettingsChanged() {
+    _handleProviderSettingsChanged(change = {}) {
         this._mcp.reloadConfig();
         const conversation = this._conversations.activeConversation;
 
@@ -869,6 +869,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._syncComposerHint();
         this._applyAccessibilityPreferences();
         this._refreshConversationList();
+
+        if (change?.codeThemeChanged)
+            this._renderActiveConversation();
     }
 
     async _sendMessage(text) {
@@ -2682,6 +2685,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._settingsButton.set_sensitive(!isBusy);
     }
 
+    _messageContentOptions(options = {}) {
+        return {
+            codeTheme: this._appSettings.codeTheme,
+            ...options,
+        };
+    }
+
     _createToolResultExpander(message, options = {}) {
         const statusLabel = message.toolCall.status === 'failed'
             ? 'failed'
@@ -2698,11 +2708,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (!options.embedded)
             expander.set_size_request(460, -1);
 
-        const bodyContent = createMessageContent(message.content, {
+        const bodyContent = createMessageContent(message.content, this._messageContentOptions({
             role: 'system',
             hexpand: true,
             codeMinWidth: 380,
-        });
+        }));
 
         if (!options.embedded) {
             bodyContent.add_css_class('cusco-message-bubble');
@@ -2746,11 +2756,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 hexpand: true,
             });
             reasoningExpander.add_css_class('cusco-reasoning');
-            reasoningContent = createMessageContent(reasoningText || ' ', {
+            reasoningContent = createMessageContent(reasoningText || ' ', this._messageContentOptions({
                 role: 'assistant',
                 hexpand: true,
                 codeMinWidth: 380,
-            });
+            }));
             reasoningContent.add_css_class('cusco-message-bubble');
             reasoningContent.add_css_class('cusco-message-assistant');
             reasoningExpander.set_child(reasoningContent);
@@ -2765,9 +2775,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         bubble.add_css_class('cusco-message-bubble');
         bubble.add_css_class(kind === 'user' ? 'cusco-message-user' : 'cusco-message-assistant');
 
-        const bodyContent = createMessageContent(body, {
+        const bodyContent = createMessageContent(body, this._messageContentOptions({
             role: kind,
-        });
+        }));
         bubble.append(bodyContent);
 
         let toolResultsBox = null;
@@ -2851,6 +2861,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 this._regenerateFromMessage(message);
             }));
         }
+
+        actions.append(this._createMessageActionButton('edit-copy-symbolic', 'Copy message', () => {
+            copyTextToClipboard(message.content);
+        }));
 
         actions.append(this._createMessageActionButton('tab-new-symbolic', 'Branch from message', () => {
             this._branchFromMessage(message);

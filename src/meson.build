@@ -8,6 +8,7 @@ cusco_sources = files(
 
 chat_sources = files(
   'chat/agentMode.js',
+  'chat/codeThemes.js',
   'chat/conversation.js',
   'chat/markdown.js',
   'chat/messageView.js',

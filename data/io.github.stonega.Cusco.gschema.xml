@@ -56,6 +56,11 @@
       <summary>Default thinking level</summary>
       <description>The reasoning effort to use by default when a provider and model support thinking.</description>
     </key>
+    <key name="code-theme" type="s">
+      <default>'Adwaita'</default>
+      <summary>Code block color scheme</summary>
+      <description>The GtkSourceView style scheme used for markdown code blocks.</description>
+    </key>
     <key name="high-contrast-enabled" type="b">
       <default>false</default>
       <summary>High contrast enabled</summary>

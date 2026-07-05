@@ -3,7 +3,15 @@ import Gtk from 'gi://Gtk?version=4.0';
 import GtkSource from 'gi://GtkSource?version=5';
 import Pango from 'gi://Pango?version=1.0';
 
-import { markdownToPangoMarkup, parseMarkdownBlocks } from './markdown.js';
+import {
+    inlineMarkdownToPangoMarkup,
+    markdownToPangoMarkup,
+    parseMarkdownBlocks,
+} from './markdown.js';
+import {
+    getCodeThemeStyleScheme,
+    getCodeThemeVariant,
+} from './codeThemes.js';
 
 const LANGUAGE_ALIASES = {
     bash: 'sh',
@@ -17,6 +25,16 @@ const LANGUAGE_ALIASES = {
     yml: 'yaml',
 };
 const DEFAULT_CODE_MIN_WIDTH = 360;
+
+function tableAlignmentXalign(alignment) {
+    if (alignment === 'right')
+        return 1;
+
+    if (alignment === 'center')
+        return 0.5;
+
+    return 0;
+}
 
 function clearBox(box) {
     let child = box.get_first_child();
@@ -51,7 +69,72 @@ function createMarkdownLabel(content, role) {
     return label;
 }
 
-function copyTextToClipboard(text) {
+function createTableCell(content, options = {}) {
+    const columnCount = Math.max(1, options.columnCount ?? 1);
+    const maxWidthChars = options.role === 'user'
+        ? Math.max(14, Math.floor(36 / columnCount))
+        : Math.max(16, Math.min(36, Math.floor(82 / columnCount) + 8));
+    const label = new Gtk.Label({
+        wrap: true,
+        selectable: true,
+        xalign: tableAlignmentXalign(options.alignment),
+        max_width_chars: maxWidthChars,
+        hexpand: true,
+    });
+    const markup = inlineMarkdownToPangoMarkup(content) || ' ';
+
+    label.set_wrap_mode(Pango.WrapMode.WORD_CHAR);
+    label.set_use_markup(true);
+    label.set_markup(options.header ? `<b>${markup}</b>` : markup);
+    label.add_css_class('cusco-table-cell');
+
+    if (options.header)
+        label.add_css_class('cusco-table-header-cell');
+
+    return label;
+}
+
+function createMarkdownTable(block, options = {}) {
+    const columnCount = block.headers.length;
+    const grid = new Gtk.Grid({
+        column_spacing: 0,
+        row_spacing: 0,
+        hexpand: true,
+    });
+    grid.add_css_class('cusco-markdown-table');
+
+    block.headers.forEach((header, column) => {
+        grid.attach(createTableCell(header, {
+            alignment: block.alignments[column],
+            columnCount,
+            header: true,
+            role: options.role,
+        }), column, 0, 1, 1);
+    });
+
+    block.rows.forEach((row, rowIndex) => {
+        row.forEach((cell, column) => {
+            grid.attach(createTableCell(cell, {
+                alignment: block.alignments[column],
+                columnCount,
+                role: options.role,
+            }), column, rowIndex + 1, 1, 1);
+        });
+    });
+
+    return grid;
+}
+
+function createMarkdownDivider() {
+    const separator = new Gtk.Separator({
+        orientation: Gtk.Orientation.HORIZONTAL,
+        hexpand: true,
+    });
+    separator.add_css_class('cusco-markdown-divider');
+    return separator;
+}
+
+export function copyTextToClipboard(text) {
     const display = Gdk.Display.get_default();
     const clipboard = display?.get_clipboard();
 
@@ -65,6 +148,7 @@ function createCodeBlock(block, options) {
         hexpand: true,
     });
     outer.add_css_class('cusco-code-block');
+    outer.add_css_class(`cusco-code-block-${getCodeThemeVariant(options.codeTheme)}`);
 
     const header = new Gtk.Box({
         orientation: Gtk.Orientation.HORIZONTAL,
@@ -105,6 +189,11 @@ function createCodeBlock(block, options) {
     if (language)
         buffer.set_language(language);
 
+    const styleScheme = getCodeThemeStyleScheme(options.codeTheme);
+
+    if (styleScheme)
+        buffer.set_style_scheme(styleScheme);
+
     buffer.set_highlight_syntax(Boolean(language));
     buffer.set_text(block.content, -1);
 
@@ -139,6 +228,10 @@ export function renderMessageContent(container, body, options = {}) {
     for (const block of parseMarkdownBlocks(body)) {
         if (block.type === 'code')
             container.append(createCodeBlock(block, options));
+        else if (block.type === 'divider')
+            container.append(createMarkdownDivider());
+        else if (block.type === 'table')
+            container.append(createMarkdownTable(block, options));
         else
             container.append(createMarkdownLabel(block.content, options.role));
     }

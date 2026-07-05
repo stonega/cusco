@@ -14,6 +14,11 @@ import {
     MIN_MAX_OUTPUT_TOKENS,
     normalizeMaxOutputTokens,
 } from '../providers/outputLimits.js';
+import {
+    DEFAULT_CODE_THEME_ID,
+    getCodeThemeOptions,
+    normalizeCodeTheme,
+} from '../chat/codeThemes.js';
 
 const SETTINGS_SCHEMA_ID = 'io.github.stonega.Cusco';
 const REQUIRED_SETTINGS_KEYS = [
@@ -23,6 +28,7 @@ const REQUIRED_SETTINGS_KEYS = [
     'max-output-tokens',
     'provider-fallback-enabled',
     'thinking-level',
+    'code-theme',
     'high-contrast-enabled',
     'reduced-motion-enabled',
 ];
@@ -60,6 +66,7 @@ export class AppSettingsStore {
         this._maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS;
         this._providerFallbackEnabled = DEFAULT_PROVIDER_FALLBACK_ENABLED;
         this._thinkingLevel = DEFAULT_THINKING_LEVEL;
+        this._codeTheme = DEFAULT_CODE_THEME_ID;
         this._highContrastEnabled = DEFAULT_HIGH_CONTRAST_ENABLED;
         this._reducedMotionEnabled = DEFAULT_REDUCED_MOTION_ENABLED;
         this._loadPersistentState();
@@ -125,6 +132,16 @@ export class AppSettingsStore {
         return this._thinkingLevel;
     }
 
+    get codeTheme() {
+        return this._codeTheme;
+    }
+
+    setCodeTheme(value) {
+        this._codeTheme = normalizeCodeTheme(value);
+        this._settings?.set_string?.('code-theme', this._codeTheme);
+        return this._codeTheme;
+    }
+
     get highContrastEnabled() {
         return this._highContrastEnabled;
     }
@@ -155,6 +172,7 @@ export class AppSettingsStore {
         this._maxOutputTokens = normalizeMaxOutputTokens(this._settings.get_uint('max-output-tokens'));
         this._providerFallbackEnabled = this._settings.get_boolean('provider-fallback-enabled');
         this._thinkingLevel = normalizeThinkingLevel(this._settings.get_string?.('thinking-level'));
+        this._codeTheme = normalizeCodeTheme(this._settings.get_string?.('code-theme'));
         this._highContrastEnabled = this._settings.get_boolean('high-contrast-enabled');
         this._reducedMotionEnabled = this._settings.get_boolean('reduced-motion-enabled');
     }
@@ -165,6 +183,15 @@ function createThinkingLevelList() {
 
     for (const level of THINKING_LEVELS)
         list.append(getThinkingLevelLabel(level));
+
+    return list;
+}
+
+function createCodeThemeList(options) {
+    const list = new Gtk.StringList();
+
+    for (const option of options)
+        list.append(option.label);
 
     return list;
 }
@@ -273,6 +300,32 @@ export function createApplicationSettingsPage(appSettings, onChanged) {
     });
     providerGroup.add(thinkingLevelRow);
 
+    const appearanceGroup = new Adw.PreferencesGroup({
+        title: 'Code Blocks',
+    });
+    const codeThemeOptions = getCodeThemeOptions();
+    const selectedCodeTheme = normalizeCodeTheme(appSettings.codeTheme);
+    const selectedCodeThemeIndex = Math.max(
+        0,
+        codeThemeOptions.findIndex((option) => option.id === selectedCodeTheme),
+    );
+    const codeThemeRow = new Adw.ComboRow({
+        title: 'Color scheme',
+        subtitle: 'Syntax highlighting theme for markdown code blocks.',
+        model: createCodeThemeList(codeThemeOptions),
+        selected: selectedCodeThemeIndex,
+    });
+    codeThemeRow.connect('notify::selected', () => {
+        const option = codeThemeOptions[codeThemeRow.get_selected()];
+
+        if (!option)
+            return;
+
+        appSettings.setCodeTheme(option.id);
+        onChanged?.({ codeThemeChanged: true });
+    });
+    appearanceGroup.add(codeThemeRow);
+
     const accessibilityGroup = new Adw.PreferencesGroup({
         title: 'Accessibility',
     });
@@ -302,6 +355,7 @@ export function createApplicationSettingsPage(appSettings, onChanged) {
     page.add(composerGroup);
     page.add(automationGroup);
     page.add(providerGroup);
+    page.add(appearanceGroup);
     page.add(accessibilityGroup);
     return page;
 }

@@ -1,4 +1,4 @@
-export const DEFAULT_AGENT_MAX_ITERATIONS = 6;
+export const DEFAULT_AGENT_MAX_ITERATIONS = 100;
 
 const TOOL_CALL_OPEN_TAG = '<cusco_tool_call>';
 const TOOL_CALL_CLOSE_TAG = '</cusco_tool_call>';
