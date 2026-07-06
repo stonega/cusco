@@ -21,6 +21,12 @@ function getDefaultModelIndex(provider) {
     return Math.max(index, 0);
 }
 
+function getDefaultImageModelIndex(provider) {
+    const imageModels = provider.imageModels ?? [];
+    const index = imageModels.findIndex((model) => model.id === provider.defaultImageModelId);
+    return Math.max(index, 0);
+}
+
 function canDisableProvider(providerConfigs, provider) {
     return !provider.enabled || provider.implemented;
 }
@@ -61,6 +67,17 @@ function canDiscoverModels(provider) {
         && provider.supportsModelDiscovery !== false
         && (!provider.apiKeyRequired || provider.apiKeyConfigured)
         && (!provider.customizable || Boolean(provider.baseUrl));
+}
+
+function canDiscoverImageModels(provider) {
+    return Boolean(provider.imageApiFormat)
+        && provider.supportsImageModelDiscovery !== false
+        && (!provider.customizable || Boolean(provider.baseUrl))
+        && (
+            provider.imageModelDiscoveryRequiresApiKey === false
+            || !provider.apiKeyRequired
+            || provider.apiKeyConfigured
+        );
 }
 
 function createProviderEnabledSwitch() {
@@ -159,6 +176,52 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows) 
         }));
     }
 
+    if (provider.imageApiFormat) {
+        const customImageModelsEntryRow = new Adw.EntryRow({
+            title: 'Custom image model IDs',
+            text: (provider.customImageModels ?? []).map((model) => model.id).join(', '),
+        });
+        customImageModelsEntryRow.set_show_apply_button(true);
+        customImageModelsEntryRow.connect('apply', () => {
+            try {
+                providerConfigs.setCustomImageModels(providerId, customImageModelsEntryRow.get_text());
+                syncAllRows();
+                onChanged();
+            } catch (error) {
+                syncAllRows();
+                logError(error, 'Failed to update custom image generation models');
+            }
+        });
+        row.add_row(customImageModelsEntryRow);
+        row._customImageModelsEntryRow = customImageModelsEntryRow;
+    }
+
+    if (provider.imageModels?.length > 0 || provider.imageApiFormat) {
+        const imageModelNames = createStringList((provider.imageModels ?? []).map((model) => model.name));
+        const imageModelRow = new Adw.ComboRow({
+            title: 'Default image generation model',
+            subtitle: 'Used by the image generation tool when this provider is selected.',
+            model: imageModelNames,
+            sensitive: (provider.imageModels ?? []).length > 0,
+        });
+        imageModelRow.connect('notify::selected', () => {
+            if (imageModelRow._syncing)
+                return;
+
+            const currentProvider = providerConfigs.getProvider(providerId);
+            const selectedModel = currentProvider.imageModels?.[imageModelRow.get_selected()];
+
+            if (!selectedModel)
+                return;
+
+            providerConfigs.setDefaultImageModel(providerId, selectedModel.id);
+            syncAllRows();
+            onChanged();
+        });
+        row.add_row(imageModelRow);
+        row._imageModelRow = imageModelRow;
+    }
+
     if (provider.baseUrl && !provider.customizable) {
         row.add_row(new Adw.ActionRow({
             title: 'Endpoint',
@@ -194,6 +257,36 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows) 
         discoveryRow.add_suffix(discoverButton);
         row.add_row(discoveryRow);
         row._discoverButton = discoverButton;
+    }
+
+    if (provider.imageApiFormat && provider.supportsImageModelDiscovery !== false) {
+        const imageDiscoveryRow = new Adw.ActionRow({
+            title: 'Image model discovery',
+            subtitle: 'Refresh the image generation model list from this provider.',
+        });
+        const imageDiscoverButton = new Gtk.Button({
+            icon_name: 'view-refresh-symbolic',
+            tooltip_text: 'Refresh image models',
+            valign: Gtk.Align.CENTER,
+        });
+        imageDiscoverButton.add_css_class('flat');
+        imageDiscoverButton.connect('clicked', async () => {
+            imageDiscoverButton.set_sensitive(false);
+
+            try {
+                await providerConfigs.discoverImageModels(providerId);
+                syncAllRows();
+                onChanged();
+            } catch (error) {
+                syncAllRows();
+                logError(error, 'Failed to discover provider image models');
+            } finally {
+                imageDiscoverButton.set_sensitive(canDiscoverImageModels(providerConfigs.getProvider(providerId)));
+            }
+        });
+        imageDiscoveryRow.add_suffix(imageDiscoverButton);
+        row.add_row(imageDiscoveryRow);
+        row._imageDiscoverButton = imageDiscoverButton;
     }
 
     if (provider.apiKeyRequired) {
@@ -271,6 +364,9 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows) 
         if (row._modelsEntryRow)
             row._modelsEntryRow.set_text(currentProvider.models.map((model) => model.id).join(', '));
 
+        if (row._customImageModelsEntryRow)
+            row._customImageModelsEntryRow.set_text((currentProvider.customImageModels ?? []).map((model) => model.id).join(', '));
+
         if (row._modelRow) {
             row._modelRow._syncing = true;
             row._modelRow.set_model(createStringList(currentProvider.models.map((model) => model.name)));
@@ -279,9 +375,19 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows) 
             row._modelRow._syncing = false;
         }
 
+        if (row._imageModelRow) {
+            row._imageModelRow._syncing = true;
+            row._imageModelRow.set_model(createStringList((currentProvider.imageModels ?? []).map((model) => model.name)));
+            row._imageModelRow.set_sensitive((currentProvider.imageModels ?? []).length > 0);
+            row._imageModelRow.set_selected(getDefaultImageModelIndex(currentProvider));
+            row._imageModelRow.set_visible((currentProvider.imageModels ?? []).length > 0);
+            row._imageModelRow._syncing = false;
+        }
+
         row._apiKeyStatusRow?.set_subtitle(getApiKeySubtitle(providerConfigs, currentProvider));
         row._clearKeyButton?.set_sensitive(providerConfigs.getApiKeyStatus(providerId).source === 'secret');
         row._discoverButton?.set_sensitive(canDiscoverModels(currentProvider));
+        row._imageDiscoverButton?.set_sensitive(canDiscoverImageModels(currentProvider));
     };
 
     sync();

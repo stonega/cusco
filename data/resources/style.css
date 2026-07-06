@@ -198,6 +198,12 @@
     outline: 2px solid alpha(@accent_fg_color, 0.8);
 }
 
+.cusco-high-contrast .cusco-tool-output-preview,
+.cusco-high-contrast .cusco-tool-image-preview,
+.cusco-high-contrast .cusco-tool-result-status {
+    border: 1px solid @window_fg_color;
+}
+
 .cusco-reduced-motion * {
     transition-duration: 0ms;
     animation-duration: 0ms;
@@ -213,7 +219,72 @@
 }
 
 .cusco-tool-result-header {
-    padding: 2px 4px;
+    padding: 4px 6px;
+}
+
+.cusco-tool-result-action {
+    font-weight: 600;
+}
+
+.cusco-tool-result-target {
+    color: alpha(@window_fg_color, 0.72);
+    font-family: monospace;
+    font-size: 0.92em;
+}
+
+.cusco-tool-result-status {
+    border-radius: 999px;
+    padding: 1px 7px;
+    font-size: 0.78em;
+    font-weight: 600;
+}
+
+.cusco-tool-result-status-running {
+    background-color: alpha(@accent_color, 0.18);
+    color: @accent_color;
+}
+
+.cusco-tool-result-status-completed {
+    background-color: alpha(@success_color, 0.18);
+    color: @success_color;
+}
+
+.cusco-tool-result-status-failed {
+    background-color: alpha(@error_color, 0.18);
+    color: @error_color;
+}
+
+.cusco-tool-result-status-cancelled {
+    background-color: alpha(@warning_color, 0.18);
+    color: @warning_color;
+}
+
+.cusco-tool-output-preview {
+    border-radius: 6px;
+    background-color: alpha(@window_fg_color, 0.06);
+    margin: 2px 6px 4px 30px;
+    padding: 4px 6px;
+}
+
+.cusco-tool-output-preview-text {
+    background: transparent;
+    color: alpha(@window_fg_color, 0.82);
+    font-size: 0.88em;
+}
+
+.cusco-tool-output-preview-text text {
+    background: transparent;
+}
+
+.cusco-tool-image-preview {
+    margin: 4px 6px 6px 30px;
+    border-radius: 8px;
+    background-color: alpha(@window_fg_color, 0.06);
+    padding: 6px;
+}
+
+.cusco-tool-image-preview-picture {
+    border-radius: 6px;
 }
 
 .cusco-tool-result-toggle-icon {

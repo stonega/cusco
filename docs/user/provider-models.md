@@ -37,12 +37,28 @@ level. Models without thinking support keep the chat picker disabled.
 | Z.ai | `glm-5.2` | `glm-5-turbo` | `Off`, `Auto` |
 | Custom API | None | User configured | None |
 
+## Image Generation Models
+
+Image generation models are configured separately from chat models. The
+`image_gen` chat tool uses the active conversation's provider and that
+provider's default image generation model. Custom API image models are entered
+by the user and use an OpenAI-compatible image generation endpoint.
+
+| Provider | Default image model | Supported image models |
+|---|---|---|
+| OpenAI | `gpt-image-2` | `gpt-image-2` |
+| Google Gemini | `gemini-3.1-flash-image` | `gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`, `gemini-3-pro-image` |
+| Z.ai | `glm-image` | `glm-image` |
+| Custom API | None | User configured |
+
 ## Provider Notes
 
 - Gemini is intentionally limited to `gemini-3.5-flash` and
   `gemini-3.1-pro-preview`. Persisted or discovered Gemini 2.x models are
   ignored, and the stale `gemini-3.1-pro` ID is migrated to
-  `gemini-3.1-pro-preview`.
+  `gemini-3.1-pro-preview`. Gemini image generation excludes
+  `gemini-2.5-flash-image`; only the Gemini 3 image models listed above are
+  supported.
 - Kimi is intentionally limited to `kimi-k2.7-code`,
   `kimi-k2.7-code-highspeed`, and `kimi-k2.6`. Persisted or discovered
   Moonshot V1 and older Kimi models are ignored. Kimi K2.7 Code variants use
@@ -53,9 +69,13 @@ level. Models without thinking support keep the chat picker disabled.
   `High` and `Max` send the matching `reasoning_effort`.
 - Z.ai is intentionally limited to `glm-5.2` and `glm-5-turbo`, and model
   discovery is disabled. `glm-5.2` supports explicit `High` and `Max`
-  reasoning effort; `glm-5-turbo` supports only thinking on/off.
+  reasoning effort; `glm-5-turbo` supports only thinking on/off. Z.ai image
+  generation supports only `glm-image`; `cogview-4-250304` is intentionally
+  excluded.
 - Custom API models are entered by the user and use the generic
   OpenAI-compatible chat completions adapter without built-in thinking metadata.
+  Custom API image models are also entered by the user and use the configured
+  base URL with an OpenAI-compatible image generation request.
 
 ## Constrained Provider Details
 
@@ -73,5 +93,9 @@ level. Models without thinking support keep the chat picker disabled.
 
 ## References
 
+- Gemini image generation guide: https://ai.google.dev/gemini-api/docs/image-generation
+- OpenAI image generation guide: https://developers.openai.com/api/docs/guides/images-vision
+- Z.ai GLM-Image guide: https://docs.z.ai/guides/image/glm-image
+- Z.ai image generation API: https://docs.z.ai/api-reference/image/generate-image
 - Z.ai GLM-5-Turbo guide: https://docs.z.ai/guides/llm/glm-5-turbo
 - Z.ai thinking parameter overview: https://docs.z.ai/guides/overview/concept-param

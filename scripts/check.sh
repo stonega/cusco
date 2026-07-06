@@ -19,6 +19,7 @@ gjs -m tests/import-smoke.js
 gjs -m tests/markdown-smoke.js
 gjs -m tests/usage-smoke.js
 gjs -m tests/memory-smoke.js
+gjs -m tests/image-generation-smoke.js
 gjs -m tests/tools-smoke.js
 gjs -m tests/cron-smoke.js
 gjs -m tests/agent-mode-smoke.js

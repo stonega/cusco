@@ -23,6 +23,7 @@ import { createCronCreateTool, CronJobManager } from './cron/manager.js';
 import { MemoryManager } from './memory/memory.js';
 import { McpManager } from './mcp/manager.js';
 import { ProviderConfigStore } from './providers/config.js';
+import { createImageGenerationTool } from './providers/imageGeneration.js';
 import { getProviderGIcon } from './providers/icons.js';
 import { createMessage } from './providers/provider.js';
 import {
@@ -39,6 +40,14 @@ import { MemoryFileStore } from './storage/memoryStore.js';
 import { WorkspaceFileStore } from './storage/workspaceStore.js';
 import { buildSkillContext } from './skills/skills.js';
 import { createToolPermissionDecision } from './tools/permissions.js';
+import {
+    appendToolOutputPreview,
+    createToolCallFromFailure,
+    createToolCallFromRequest,
+    createToolCallFromResult,
+    latestOutputLines,
+    normalizeToolCallDisplay,
+} from './tools/display.js';
 import { formatToolResultForTranscript, ToolManager } from './tools/tools.js';
 import { exportConversation } from './workspace/exports.js';
 import { extractPromptVariables, formatPromptVariables, renderPromptTemplate } from './workspace/promptVariables.js';
@@ -47,7 +56,7 @@ import { WorkspaceManager } from './workspace/workspace.js';
 const GIT_BRANCH_ICON_FILE = 'git-branch-symbolic.svg';
 const ATTACHMENT_ICON_FILE = 'attachment-symbolic.svg';
 const PROMPT_ICON_FILE = 'prompt-symbolic.svg';
-const TOOL_ICON_FILE = 'tool-symbolic.svg';
+const MORE_VERTICAL_ICON_FILE = 'more-vertical-symbolic.svg';
 const EMPTY_STATE_IMAGE_DARK = 'machupicchu_dark.png';
 const EMPTY_STATE_IMAGE_LIGHT = 'machupicchu_light.png';
 const EMPTY_STATE_FRAME_WIDTH_RATIO = 1 / 3;
@@ -273,6 +282,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             thinkingLevel: this._appSettings.thinkingLevel,
             store: new ConversationFileStore(),
         });
+        this._tools.registerTool(createImageGenerationTool(this._providerConfigs));
         this._tools.registerTool(createCronCreateTool(this._cron, {
             onJobCreated: async (job) => this._handleCronJobChanged(job),
         }));
@@ -1088,39 +1098,113 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return 'denied';
         }
 
+        const runningTool = this._appendRunningToolMessage(conversationId, request);
+        const conversation = this._conversations.getConversation(conversationId);
+
         try {
             const result = await this._tools.runRequest(request, {
+                providerId: conversation?.providerId ?? '',
                 timeoutSeconds: this._appSettings.responseTimeoutSeconds,
                 cancellable,
+                onOutput: (chunk) => this._appendToolOutputChunk(runningTool, chunk),
             });
             const status = result.cancelled ? 'cancelled' : 'completed';
-            const message = createMessage('system', formatToolResultForTranscript(result), {
-                toolCall: {
-                    name: result.name,
-                    label: result.label,
-                    input: result.input,
-                    output: result.output ?? '',
-                    results: result.results ?? [],
-                    status,
-                    createdAt: new Date().toISOString(),
-                },
-            });
-            this._conversations.appendMessage(conversationId, message);
-            this._addMessageIfActiveConversation(conversationId, message);
-            this._updateUsageDisplay(this._conversations.getConversation(conversationId));
+            this._completeRunningToolMessage(conversationId, runningTool, result, status);
             return status;
         } catch (error) {
             if (wasOperationCancelled(error, cancellable)) {
-                this._appendToolCancellation(conversationId, request);
+                this._completeRunningToolFailure(
+                    conversationId,
+                    runningTool,
+                    request,
+                    `${request.label} was stopped before it finished.`,
+                    'cancelled',
+                );
                 return 'cancelled';
             }
 
-            const message = createMessage('system', error.userMessage ?? `Tool failed: ${error.message}`);
-            this._conversations.appendMessage(conversationId, message);
-            this._addMessageIfActiveConversation(conversationId, message);
+            this._completeRunningToolFailure(
+                conversationId,
+                runningTool,
+                request,
+                error.userMessage ?? `Tool failed: ${error.message}`,
+                'failed',
+            );
             logError(error, 'Failed to run tool request');
             return 'failed';
         }
+    }
+
+    _appendRunningToolMessage(conversationId, request, options = {}) {
+        const message = createMessage('system', '', {
+            toolCall: createToolCallFromRequest(request, {
+                status: 'running',
+                agentMode: Boolean(options.agentMode),
+            }),
+        });
+
+        this._conversations.appendMessage(conversationId, message);
+        const view = this._addMessageIfActiveConversation(conversationId, message);
+        this._updateUsageDisplay(this._conversations.getConversation(conversationId));
+        return { message, view };
+    }
+
+    _appendToolOutputChunk(runningTool, chunk) {
+        const message = runningTool?.message;
+        const toolCall = message?.toolCall;
+
+        if (!toolCall || toolCall.name !== 'bash')
+            return;
+
+        const text = typeof chunk === 'object' ? chunk.text : chunk;
+        if (!text)
+            return;
+
+        toolCall.outputPreview = appendToolOutputPreview(toolCall.outputPreview, text);
+        runningTool?.view?.append_tool_output?.(toolCall.outputPreview);
+    }
+
+    _updateRunningToolMessage(conversationId, runningTool, content, toolCall) {
+        const message = runningTool?.message;
+
+        if (!message)
+            return null;
+
+        message.content = content;
+        message.toolCall = toolCall;
+        const storedMessage = this._conversations.updateMessageToolCall(
+            conversationId,
+            message.id,
+            toolCall,
+            content,
+        );
+
+        runningTool?.view?.update_tool_message?.(message);
+        this._updateUsageDisplay(this._conversations.getConversation(conversationId));
+        return storedMessage;
+    }
+
+    _completeRunningToolMessage(conversationId, runningTool, result, status, options = {}) {
+        const content = formatToolResultForTranscript(result);
+        const toolCall = createToolCallFromResult(result, {
+            status,
+            agentMode: Boolean(options.agentMode),
+            createdAt: runningTool?.message?.toolCall?.createdAt,
+            outputPreview: runningTool?.message?.toolCall?.outputPreview,
+        });
+
+        return this._updateRunningToolMessage(conversationId, runningTool, content, toolCall);
+    }
+
+    _completeRunningToolFailure(conversationId, runningTool, request, reason, status = 'failed', options = {}) {
+        const toolCall = createToolCallFromFailure(request, reason, {
+            status,
+            agentMode: Boolean(options.agentMode),
+            createdAt: runningTool?.message?.toolCall?.createdAt,
+            outputPreview: runningTool?.message?.toolCall?.outputPreview,
+        });
+
+        return this._updateRunningToolMessage(conversationId, runningTool, String(reason ?? ''), toolCall);
     }
 
     _confirmToolPermission(request, cancellable = null) {
@@ -1134,6 +1218,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 heading: `Run ${request.label}?`,
                 body: request.name === 'search'
                     ? `Cusco will send this query to DuckDuckGo:\n${request.input}`
+                    : request.name === 'image_gen'
+                        ? `Cusco will send this image prompt to the selected provider:\n${request.input}`
                     : request.input,
             });
             dialog.add_response('deny', 'Deny');
@@ -1448,12 +1534,21 @@ class CuscoWindow extends Adw.ApplicationWindow {
             else
                 assistantView.set_label(text);
         };
+        const clearAssistantStatus = () => {
+            if (typeof assistantView.clear_status === 'function')
+                assistantView.clear_status();
+            else if (typeof assistantView.clear_loading === 'function')
+                assistantView.clear_loading();
+        };
 
         for (let iteration = 0; iteration < DEFAULT_AGENT_MAX_ITERATIONS; iteration++) {
             if (isCancellableCancelled(cancellable))
                 return '';
 
-            setAssistantStatus(iteration === 0 ? 'Agent is thinking...' : 'Agent is continuing...');
+            if (iteration === 0)
+                setAssistantStatus('Agent is thinking...');
+            else
+                clearAssistantStatus();
             const responseState = await this._collectProviderResponseWithFallback(
                 conversation,
                 runtimeMessages,
@@ -1493,7 +1588,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     if (!request)
                         continue;
 
-                    setAssistantStatus(`Agent requested ${request.label}...`);
+                    clearAssistantStatus();
                     ranAnyTool = await this._runAgentToolRequest(
                         request,
                         runtimeToolCallText,
@@ -1520,7 +1615,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (!request)
                 continue;
 
-            setAssistantStatus(`Agent requested ${request.label}...`);
+            clearAssistantStatus();
             const ranTool = await this._runAgentToolRequest(
                 request,
                 responseText,
@@ -1631,27 +1726,25 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return false;
         }
 
+        const runningTool = this._appendRunningToolMessage(conversation.id, request, {
+            agentMode: true,
+        });
+
         try {
             const result = await this._tools.runRequest(request, {
+                providerId: conversation.providerId,
                 timeoutSeconds: this._appSettings.responseTimeoutSeconds,
                 cancellable,
+                onOutput: (chunk) => this._appendToolOutputChunk(runningTool, chunk),
             });
             const transcriptText = formatToolResultForTranscript(result);
-            const message = createMessage('system', transcriptText, {
-                toolCall: {
-                    name: result.name,
-                    label: result.label,
-                    input: result.input,
-                    output: result.output ?? '',
-                    results: result.results ?? [],
-                    status: result.cancelled ? 'cancelled' : 'completed',
-                    agentMode: true,
-                    createdAt: new Date().toISOString(),
-                },
-            });
-            this._conversations.appendMessage(conversation.id, message);
-            this._addMessageIfActiveConversation(conversation.id, message);
-            this._updateUsageDisplay(conversation);
+            this._completeRunningToolMessage(
+                conversation.id,
+                runningTool,
+                result,
+                result.cancelled ? 'cancelled' : 'completed',
+                { agentMode: true },
+            );
 
             if (result.cancelled)
                 return false;
@@ -1663,12 +1756,35 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return true;
         } catch (error) {
             if (wasOperationCancelled(error, cancellable)) {
-                this._appendAgentToolCancellation(request, responseText, conversation, runtimeMessages);
+                const reason = `${request.label} was stopped before it finished.`;
+                this._completeRunningToolFailure(
+                    conversation.id,
+                    runningTool,
+                    request,
+                    reason,
+                    'cancelled',
+                    { agentMode: true },
+                );
+                runtimeMessages.push(
+                    { role: 'assistant', content: responseText },
+                    { role: 'user', content: createAgentToolFailurePrompt(request, reason) },
+                );
                 return false;
             }
 
             const reason = error.userMessage ?? `Tool failed: ${error.message}`;
-            this._appendAgentToolFailure(request, responseText, conversation, runtimeMessages, reason);
+            this._completeRunningToolFailure(
+                conversation.id,
+                runningTool,
+                request,
+                reason,
+                'failed',
+                { agentMode: true },
+            );
+            runtimeMessages.push(
+                { role: 'assistant', content: responseText },
+                { role: 'user', content: createAgentToolFailurePrompt(request, reason) },
+            );
             logError(error, 'Failed to run Agent tool request');
             return false;
         }
@@ -2619,10 +2735,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _createConversationMenuButton(conversation, hoverTarget) {
         const menuButton = new Gtk.MenuButton({
-            icon_name: 'open-menu-symbolic',
             tooltip_text: 'Chat actions',
             valign: Gtk.Align.CENTER,
         });
+        menuButton.set_child(createBundledIcon(MORE_VERTICAL_ICON_FILE, 'view-more-symbolic'));
         menuButton.add_css_class('flat');
         menuButton.add_css_class('cusco-conversation-menu-button');
 
@@ -3154,89 +3270,255 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return row;
     }
 
+    _createBashOutputPreview(initialOutput = '') {
+        const buffer = new Gtk.TextBuffer();
+        const view = new Gtk.TextView({
+            buffer,
+            editable: false,
+            cursor_visible: false,
+            monospace: true,
+            hexpand: true,
+        });
+        view.set_wrap_mode(Gtk.WrapMode.NONE);
+        view.add_css_class('cusco-tool-output-preview-text');
+
+        const scroller = new Gtk.ScrolledWindow({
+            child: view,
+            hexpand: true,
+            hscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+            vscrollbar_policy: Gtk.PolicyType.NEVER,
+            min_content_height: 58,
+            max_content_height: 58,
+            propagate_natural_height: false,
+        });
+        let autoScroll = true;
+        let updatingScroll = false;
+
+        scroller.add_css_class('cusco-tool-output-preview');
+        scroller.get_vadjustment().connect('value-changed', (adjustment) => {
+            if (updatingScroll)
+                return;
+
+            autoScroll = adjustment.get_value() >= adjustment.get_upper() - adjustment.get_page_size() - 2;
+        });
+
+        scroller.updateOutputPreview = (output) => {
+            const text = latestOutputLines(output);
+            const adjustment = scroller.get_vadjustment();
+            const shouldScroll = autoScroll
+                || adjustment.get_value() >= adjustment.get_upper() - adjustment.get_page_size() - 2;
+
+            buffer.set_text(text, -1);
+
+            if (!shouldScroll)
+                return;
+
+            GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                updatingScroll = true;
+                adjustment.set_value(Math.max(adjustment.get_lower(), adjustment.get_upper() - adjustment.get_page_size()));
+                updatingScroll = false;
+                return GLib.SOURCE_REMOVE;
+            });
+        };
+        scroller.updateOutputPreview(initialOutput);
+        return scroller;
+    }
+
+    _createToolImagePreview() {
+        const picture = new Gtk.Picture({
+            can_shrink: true,
+            keep_aspect_ratio: true,
+            hexpand: false,
+            vexpand: false,
+        });
+        picture.set_content_fit(Gtk.ContentFit.CONTAIN);
+        picture.set_size_request(320, 240);
+        picture.add_css_class('cusco-tool-image-preview-picture');
+
+        const frame = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 0,
+            halign: Gtk.Align.START,
+        });
+        frame.add_css_class('cusco-tool-image-preview');
+        frame.append(picture);
+        frame.set_visible(false);
+
+        frame.updateImage = (toolCall = {}) => {
+            const imagePath = String(toolCall.imagePath ?? '').trim();
+
+            if (!imagePath || !GLib.file_test(imagePath, GLib.FileTest.EXISTS)) {
+                frame.set_visible(false);
+                return;
+            }
+
+            picture.set_file(Gio.File.new_for_path(imagePath));
+            frame.set_visible(true);
+        };
+
+        return frame;
+    }
+
     _createToolResultExpander(message, options = {}) {
-        const statusLabel = message.toolCall.status === 'failed'
-            ? 'failed'
-            : message.toolCall.status === 'cancelled'
-                ? 'cancelled'
-                : 'result';
+        let currentMessage = message;
+        let previousStatus = '';
         const container = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
             spacing: 4,
             hexpand: true,
         });
-        container.add_css_class('cusco-tool-result');
-
-        if (!options.embedded)
-            container.set_size_request(460, -1);
-
-        const bodyContent = createMessageContent(message.content, this._messageContentOptions({
+        const textBox = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 1,
+            hexpand: true,
+            valign: Gtk.Align.CENTER,
+        });
+        const titleRow = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 6,
+            hexpand: true,
+        });
+        const actionLabel = new Gtk.Label({
+            xalign: 0,
+            valign: Gtk.Align.CENTER,
+            ellipsize: Pango.EllipsizeMode.END,
+        });
+        const statusPill = new Gtk.Label({
+            xalign: 0.5,
+            valign: Gtk.Align.CENTER,
+        });
+        const targetLabel = new Gtk.Label({
+            xalign: 0,
+            valign: Gtk.Align.CENTER,
+            ellipsize: Pango.EllipsizeMode.END,
+            hexpand: true,
+            max_width_chars: 76,
+        });
+        const detailLabel = new Gtk.Label({
+            xalign: 0,
+            valign: Gtk.Align.CENTER,
+            ellipsize: Pango.EllipsizeMode.END,
+        });
+        const bodyContent = createMessageContent(message.content || ' ', this._messageContentOptions({
             role: 'system',
             hexpand: true,
             codeMinWidth: 380,
         }));
-
-        if (!options.embedded) {
-            bodyContent.add_css_class('cusco-message-bubble');
-            bodyContent.add_css_class('cusco-message-assistant');
-        }
-
         const revealer = new Gtk.Revealer({
             child: bodyContent,
             reveal_child: false,
             transition_type: Gtk.RevealerTransitionType.SLIDE_DOWN,
         });
         const headerButton = new Gtk.Button({
-            tooltip_text: `Expand ${message.toolCall.label} result`,
             halign: Gtk.Align.START,
         });
         const header = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
-            spacing: 6,
+            spacing: 8,
+            valign: Gtk.Align.CENTER,
+            hexpand: true,
+        });
+        const chevron = new Gtk.Image({
+            icon_name: 'pan-end-symbolic',
+            pixel_size: 14,
             valign: Gtk.Align.CENTER,
         });
-        const label = new Gtk.Label({
-            label: `${message.toolCall.label} ${statusLabel}`,
-            xalign: 0,
-            valign: Gtk.Align.CENTER,
-            ellipsize: Pango.EllipsizeMode.END,
-        });
-        const toggleIcon = createBundledIcon(TOOL_ICON_FILE, 'applications-engineering-symbolic');
-        toggleIcon.set_valign(Gtk.Align.CENTER);
+        const outputPreview = this._createBashOutputPreview('');
+        const imagePreview = this._createToolImagePreview();
+
+        container.add_css_class('cusco-tool-result');
+        actionLabel.add_css_class('cusco-tool-result-action');
+        targetLabel.add_css_class('cusco-tool-result-target');
+        detailLabel.add_css_class('caption');
+        detailLabel.add_css_class('dim-label');
+        statusPill.add_css_class('cusco-tool-result-status');
+        chevron.add_css_class('cusco-tool-result-toggle-icon');
+        outputPreview.set_visible(false);
+
+        if (!options.embedded) {
+            container.set_size_request(460, -1);
+            bodyContent.add_css_class('cusco-message-bubble');
+            bodyContent.add_css_class('cusco-message-assistant');
+        }
 
         headerButton.add_css_class('flat');
         headerButton.add_css_class('cusco-tool-result-header');
-        toggleIcon.add_css_class('cusco-tool-result-toggle-icon');
 
-        header.append(toggleIcon);
-        header.append(label);
+        titleRow.append(actionLabel);
+        titleRow.append(statusPill);
+        textBox.append(titleRow);
+        textBox.append(targetLabel);
+        textBox.append(detailLabel);
+        header.append(textBox);
+        header.append(chevron);
         headerButton.set_child(header);
         headerButton.connect('clicked', () => {
             const expanded = !revealer.get_reveal_child();
 
             revealer.set_reveal_child(expanded);
             headerButton.set_tooltip_text(
-                `${expanded ? 'Collapse' : 'Expand'} ${message.toolCall.label} result`,
+                `${expanded ? 'Collapse' : 'Expand'} ${currentMessage.toolCall?.label ?? 'tool'} result`,
             );
 
             if (expanded)
-                toggleIcon.add_css_class('cusco-tool-result-toggle-icon-expanded');
+                chevron.add_css_class('cusco-tool-result-toggle-icon-expanded');
             else
-                toggleIcon.remove_css_class('cusco-tool-result-toggle-icon-expanded');
+                chevron.remove_css_class('cusco-tool-result-toggle-icon-expanded');
         });
 
+        const setStatusClass = (status) => {
+            if (previousStatus)
+                statusPill.remove_css_class(`cusco-tool-result-status-${previousStatus}`);
+
+            previousStatus = status;
+            statusPill.add_css_class(`cusco-tool-result-status-${status}`);
+        };
+        const updateFromMessage = () => {
+            const display = normalizeToolCallDisplay(currentMessage.toolCall);
+            const target = display.target || display.label;
+            const detail = display.detail;
+
+            setStatusClass(display.status);
+            actionLabel.set_label(display.action);
+            statusPill.set_label(display.statusLabel);
+            targetLabel.set_label(target);
+            targetLabel.set_visible(Boolean(target));
+            detailLabel.set_label(detail);
+            detailLabel.set_visible(Boolean(detail));
+            bodyContent.updateContent(currentMessage.content || ' ');
+            outputPreview.updateOutputPreview(display.outputPreview);
+            outputPreview.set_visible(display.isBash && Boolean(display.outputPreview));
+            imagePreview.updateImage(currentMessage.toolCall);
+            headerButton.set_tooltip_text(
+                `${revealer.get_reveal_child() ? 'Collapse' : 'Expand'} ${display.label} result`,
+            );
+        };
+
         container.append(headerButton);
+        container.append(outputPreview);
+        container.append(imagePreview);
         container.append(revealer);
+        container.updateToolMessage = (nextMessage) => {
+            currentMessage = nextMessage;
+            updateFromMessage();
+        };
+        container.appendToolOutput = (output) => {
+            if (currentMessage.toolCall)
+                currentMessage.toolCall.outputPreview = output;
+
+            outputPreview.updateOutputPreview(output);
+            outputPreview.set_visible(Boolean(output));
+        };
+
+        updateFromMessage();
         return container;
     }
 
     _addMessage(body, kind, message = null) {
         if (message?.toolCall?.agentMode && this._lastAssistantMessageView?.append_tool_result) {
-            this._lastAssistantMessageView.append_tool_result(message);
+            const toolView = this._lastAssistantMessageView.append_tool_result(message);
             this._scrollToBottom();
-            return {
-                set_label: () => {},
-            };
+            return toolView ?? { set_label: () => {} };
         }
 
         if (message?.toolCall)
@@ -3325,8 +3607,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
             bodyContent.updateContent(nextText);
         };
 
-        bubble.append(bodyContent);
-
         let toolResultsBox = null;
         const appendToolResult = (toolMessage) => {
             hasToolResults = true;
@@ -3337,11 +3617,18 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     spacing: 4,
                     hexpand: true,
                 });
-                bubble.append(toolResultsBox);
+                bubble.prepend(toolResultsBox);
             }
 
-            toolResultsBox.append(this._createToolResultExpander(toolMessage, { embedded: true }));
+            const toolWidget = this._createToolResultExpander(toolMessage, { embedded: true });
+            toolResultsBox.append(toolWidget);
+            return {
+                update_tool_message: (nextMessage) => toolWidget.updateToolMessage?.(nextMessage),
+                append_tool_output: (output) => toolWidget.appendToolOutput?.(output),
+            };
         };
+
+        bubble.append(bodyContent);
 
         wrapper.append(bubble);
 
@@ -3392,13 +3679,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
             hexpand: true,
             halign: Gtk.Align.START,
         });
-        wrapper.append(this._createToolResultExpander(message));
+        const toolWidget = this._createToolResultExpander(message);
+        wrapper.append(toolWidget);
         this._appendMessageWidget(wrapper);
         this._lastAssistantMessageView = null;
         this._scrollToBottom();
 
         return {
             set_label: () => {},
+            update_tool_message: (nextMessage) => toolWidget.updateToolMessage?.(nextMessage),
+            append_tool_output: (output) => toolWidget.appendToolOutput?.(output),
         };
     }
 

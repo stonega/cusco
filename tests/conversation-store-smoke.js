@@ -43,8 +43,16 @@ conversations.appendMessage(chat.id, createMessage('system', 'Calculator result'
         label: 'Calculator',
         input: '1+1',
         output: '2',
+        status: 'running',
     },
 }));
+conversations.updateMessageToolCall(chat.id, chat.messages[2].id, {
+    name: 'calc',
+    label: 'Calculator',
+    input: '1+1',
+    output: '2',
+    status: 'completed',
+}, 'Calculator result\n\n1+1 = 2');
 conversations.renameConversation(chat.id, 'Persistent chat');
 conversations.setMemoryEnabled(chat.id, false);
 conversations.setAgentModeEnabled(chat.id, true);
@@ -66,6 +74,9 @@ if (reloadedChat.messages[0].content !== 'Persist this chat')
 
 if (reloadedChat.messages[2].toolCall?.name !== 'calc')
     throw new Error('Persisted tool call metadata was not loaded');
+
+if (reloadedChat.messages[2].toolCall?.status !== 'completed')
+    throw new Error('Persisted tool call update was not loaded');
 
 if (reloadedChat.messages[1].reasoning?.content !== 'Stored reasoning summary')
     throw new Error('Persisted reasoning metadata was not loaded');

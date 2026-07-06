@@ -17,6 +17,7 @@ import { parseWwwAuthenticate, SecretServiceMcpTokenStore } from '../src/mcp/aut
 import { McpClient } from '../src/mcp/client.js';
 import { McpManager } from '../src/mcp/manager.js';
 import { ProviderConfigStore } from '../src/providers/config.js';
+import { createImageGenerationTool, generateImageForProvider } from '../src/providers/imageGeneration.js';
 import { createProviderIcon, getProviderGIcon } from '../src/providers/icons.js';
 import {
     AnthropicMessagesProvider,
@@ -61,6 +62,9 @@ if (typeof CuscoApplication !== 'function')
 
 if (typeof ProviderConfigStore !== 'function')
     throw new Error('ProviderConfigStore did not import as a class');
+
+if (typeof createImageGenerationTool !== 'function' || typeof generateImageForProvider !== 'function')
+    throw new Error('Image generation helpers did not import as functions');
 
 if (typeof getProviderGIcon !== 'function' || typeof createProviderIcon !== 'function')
     throw new Error('Provider icon helpers did not import as functions');

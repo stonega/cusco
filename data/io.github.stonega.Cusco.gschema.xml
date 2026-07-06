@@ -26,6 +26,21 @@
       <summary>Provider discovered models</summary>
       <description>JSON object mapping provider identifiers to discovered model metadata.</description>
     </key>
+    <key name="provider-default-image-models" type="s">
+      <default>'{}'</default>
+      <summary>Provider default image generation models</summary>
+      <description>JSON object mapping provider identifiers to their default image generation model identifiers.</description>
+    </key>
+    <key name="provider-custom-image-models" type="s">
+      <default>'{}'</default>
+      <summary>Provider custom image generation models</summary>
+      <description>JSON object mapping provider identifiers to custom image generation model metadata.</description>
+    </key>
+    <key name="provider-discovered-image-models" type="s">
+      <default>'{}'</default>
+      <summary>Provider discovered image generation models</summary>
+      <description>JSON object mapping provider identifiers to discovered image generation model metadata.</description>
+    </key>
     <key name="send-with-enter" type="b">
       <default>true</default>
       <summary>Send messages with Enter</summary>

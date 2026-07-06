@@ -101,9 +101,16 @@ if (defaultStore.getDefaultModel('zai').id !== 'glm-5.2')
     throw new Error('Z.ai default GLM model was not configured');
 
 const zaiModelIds = zaiProvider.models.map((model) => model.id);
+const zaiImageModelIds = zaiProvider.imageModels.map((model) => model.id);
 
 if (zaiModelIds.join(',') !== 'glm-5.2,glm-5-turbo')
     throw new Error(`Z.ai model list was not limited to supported GLM models: ${zaiModelIds.join(', ')}`);
+
+if (zaiImageModelIds.join(',') !== 'glm-image')
+    throw new Error(`Z.ai image model list should only include GLM-Image: ${zaiImageModelIds.join(', ')}`);
+
+if (defaultStore.getDefaultImageModel('zai').id !== 'glm-image')
+    throw new Error('Z.ai default image model should be GLM-Image');
 
 if (defaultStore.getThinkingLevels('zai', 'glm-5.2').join(',') !== 'off,auto,high,max')
     throw new Error('Z.ai GLM-5.2 should expose thinking effort controls');
@@ -138,6 +145,23 @@ if (staleZaiStore.getActiveSelection().model.id !== 'glm-5.2')
 if (staleZaiModelIds.join(',') !== 'glm-5.2,glm-5-turbo')
     throw new Error(`Unsupported Z.ai models were loaded from persisted settings: ${staleZaiModelIds.join(', ')}`);
 
+const staleZaiImageSettings = new MemorySettings({
+    strings: {
+        'provider-default-image-models': '{"zai":"cogview-4-250304"}',
+        'provider-discovered-image-models': '{"zai":[{"id":"cogview-4-250304"},{"id":"glm-image"}]}',
+        'provider-custom-image-models': '{"zai":[{"id":"cogview-4-250304"}]}',
+    },
+});
+const staleZaiImageStore = new ProviderConfigStore(undefined, {
+    settings: staleZaiImageSettings,
+    apiKeyStore: new MemoryApiKeyStore({ zai: 'zai-key' }),
+    envLookup: () => '',
+});
+const staleZaiImageModelIds = staleZaiImageStore.getProvider('zai').imageModels.map((model) => model.id);
+
+if (staleZaiImageModelIds.join(',') !== 'glm-image')
+    throw new Error(`Unsupported Z.ai image model was loaded: ${staleZaiImageModelIds.join(', ')}`);
+
 const geminiProvider = defaultStore.getProvider('gemini');
 
 if (geminiProvider.models.some((model) => model.id === 'gemini-3.1-pro'))
@@ -148,6 +172,15 @@ if (!geminiProvider.models.some((model) => model.id === 'gemini-3.1-pro-preview'
 
 if (geminiProvider.models.length !== 2 || geminiProvider.models.some((model) => model.id.startsWith('gemini-2.')))
     throw new Error(`Gemini model list should only include supported Gemini 3 models: ${geminiProvider.models.map((model) => model.id).join(', ')}`);
+
+const geminiImageModelIds = geminiProvider.imageModels.map((model) => model.id);
+const expectedGeminiImageModelIds = ['gemini-3.1-flash-image', 'gemini-3.1-flash-lite-image', 'gemini-3-pro-image'];
+
+if (geminiImageModelIds.join(',') !== expectedGeminiImageModelIds.join(','))
+    throw new Error(`Gemini image model list should only include supported Gemini image models: ${geminiImageModelIds.join(', ')}`);
+
+if (defaultStore.getDefaultImageModel('gemini').id !== 'gemini-3.1-flash-image')
+    throw new Error('Gemini default image model should be Gemini 3.1 Flash Image');
 
 if (!defaultStore.getThinkingLevels('gemini', 'gemini-3.5-flash').includes('minimal'))
     throw new Error('Gemini 3.5 Flash minimal thinking level was not configured');
@@ -180,6 +213,26 @@ if (staleGeminiStore.getActiveSelection().model.id !== 'gemini-3.1-pro-preview')
 
 if (staleGeminiStore.getProvider('gemini').models.some((model) => model.id.startsWith('gemini-2.')))
     throw new Error('Unsupported Gemini 2.x model was loaded from persisted settings');
+
+const staleGeminiImageSettings = new MemorySettings({
+    strings: {
+        'provider-default-image-models': '{"gemini":"gemini-2.5-flash-image"}',
+        'provider-discovered-image-models': '{"gemini":[{"id":"gemini-2.5-flash-image"},{"id":"gemini-3-pro-image"}]}',
+        'provider-custom-image-models': '{"gemini":[{"id":"gemini-2.5-flash-image"}]}',
+    },
+});
+const staleGeminiImageStore = new ProviderConfigStore(undefined, {
+    settings: staleGeminiImageSettings,
+    apiKeyStore: new MemoryApiKeyStore({ gemini: 'gemini-key' }),
+    envLookup: () => '',
+});
+const staleGeminiImageModelIds = staleGeminiImageStore.getProvider('gemini').imageModels.map((model) => model.id);
+
+if (staleGeminiImageModelIds.includes('gemini-2.5-flash-image'))
+    throw new Error('Unsupported Gemini 2.5 image model was loaded from persisted settings');
+
+if (staleGeminiImageStore.getDefaultImageModel('gemini').id !== 'gemini-3-pro-image')
+    throw new Error('Stale Gemini image default should fall back to supported discovered image model');
 
 const kimiProvider = defaultStore.getProvider('kimi');
 const kimiModelIds = kimiProvider.models.map((model) => model.id);
@@ -290,6 +343,11 @@ try {
     if (!error.message.includes('does not support model discovery'))
         throw error;
 }
+
+await defaultStore.discoverImageModels('zai');
+
+if (defaultStore.getProvider('zai').imageModels.map((model) => model.id).join(',') !== 'glm-image')
+    throw new Error('Z.ai image discovery should only return GLM-Image');
 
 const fallbackSettingsPath = GLib.build_filenamev([
     GLib.get_tmp_dir(),
@@ -408,12 +466,16 @@ customStore.setCustomProviderConfig('openai-compatible', {
     baseUrl: 'https://custom.example/v1',
     models: 'custom-small, custom-large, custom-small',
 });
+customStore.setCustomImageModels('openai-compatible', 'custom-image, custom-image-fast, custom-image');
 
 if (customSettings.get_string('custom-openai-compatible-base-url') !== 'https://custom.example/v1')
     throw new Error('Custom provider endpoint was not persisted');
 
 if (customSettings.get_strv('custom-openai-compatible-models').length !== 2)
     throw new Error('Custom provider models were not normalized and persisted');
+
+if (!customSettings.get_string('provider-custom-image-models').includes('custom-image-fast'))
+    throw new Error('Custom provider image models were not normalized and persisted');
 
 if (!customStore.canEnableProvider('openai-compatible'))
     throw new Error('Configured custom provider should be enableable');
@@ -423,6 +485,11 @@ customStore.setDefaultModel('openai-compatible', 'custom-large');
 
 if (customStore.getDefaultModel('openai-compatible').id !== 'custom-large')
     throw new Error('Custom provider default model was not updated');
+
+customStore.setDefaultImageModel('openai-compatible', 'custom-image-fast');
+
+if (customStore.getDefaultImageModel('openai-compatible').id !== 'custom-image-fast')
+    throw new Error('Custom provider default image model was not updated');
 
 if (customStore.createProvider('openai-compatible').name !== 'Custom API')
     throw new Error('Custom provider client was not created');

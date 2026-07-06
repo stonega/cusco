@@ -10,6 +10,11 @@ import {
     OpenAiCompatibleChatProvider,
     OpenAiResponsesProvider,
 } from './remoteProvider.js';
+import {
+    discoverGeminiImageModels,
+    discoverOpenAiImageModels,
+    discoverZaiImageModels,
+} from './imageGeneration.js';
 import { getSupportedThinkingLevels } from './thinking.js';
 import { createDefaultApiKeyStore } from '../secrets/apiKeyStore.js';
 
@@ -20,6 +25,9 @@ const REQUIRED_SETTINGS_KEYS = [
     'enabled-providers',
     'provider-default-models',
     'provider-discovered-models',
+    'provider-default-image-models',
+    'provider-custom-image-models',
+    'provider-discovered-image-models',
     'custom-openai-compatible-base-url',
     'custom-openai-compatible-models',
 ];
@@ -29,6 +37,9 @@ const FALLBACK_STRING_DEFAULTS = {
     'active-model': '',
     'provider-default-models': '{}',
     'provider-discovered-models': '{}',
+    'provider-default-image-models': '{}',
+    'provider-custom-image-models': '{}',
+    'provider-discovered-image-models': '{}',
     'custom-openai-compatible-base-url': '',
 };
 const FALLBACK_STRV_DEFAULTS = {
@@ -208,6 +219,23 @@ function normalizeCustomModels(models) {
         }));
 }
 
+function normalizeCustomImageModels(models, providerId = '') {
+    const modelItems = Array.isArray(models)
+        ? models
+        : String(models ?? '').split(',');
+
+    return modelItems
+        .map((model) => String(model?.id ?? model).trim())
+        .filter((model, index, allModels) => model && allModels.indexOf(model) === index)
+        .filter((model) => isProviderImageModelSupported(providerId, model, { custom: true }))
+        .map((model) => ({
+            id: model,
+            name: model,
+            description: 'Custom image generation model.',
+            custom: true,
+        }));
+}
+
 const PROVIDER_MODEL_ID_ALIASES = {
     gemini: {
         'gemini-3.1-pro': 'gemini-3.1-pro-preview',
@@ -237,6 +265,59 @@ const PROVIDER_SUPPORTED_MODEL_IDS = {
     ]),
 };
 
+const PROVIDER_SUPPORTED_IMAGE_MODEL_IDS = {
+    gemini: new Set([
+        'gemini-3.1-flash-image',
+        'gemini-3.1-flash-lite-image',
+        'gemini-3-pro-image',
+    ]),
+    zai: new Set([
+        'glm-image',
+    ]),
+};
+const PROVIDER_UNSUPPORTED_IMAGE_MODEL_IDS = {
+    gemini: new Set([
+        'gemini-2.5-flash-image',
+    ]),
+    zai: new Set([
+        'cogview-4-250304',
+    ]),
+};
+
+const IMAGE_MODEL_METADATA = {
+    openai: {
+        'gpt-image-2': {
+            id: 'gpt-image-2',
+            name: 'GPT Image 2',
+            description: 'OpenAI image generation model.',
+        },
+    },
+    gemini: {
+        'gemini-3.1-flash-image': {
+            id: 'gemini-3.1-flash-image',
+            name: 'Gemini 3.1 Flash Image',
+            description: 'Gemini Nano Banana 2 image generation model.',
+        },
+        'gemini-3.1-flash-lite-image': {
+            id: 'gemini-3.1-flash-lite-image',
+            name: 'Gemini 3.1 Flash Lite Image',
+            description: 'Gemini Nano Banana 2 Lite image generation model.',
+        },
+        'gemini-3-pro-image': {
+            id: 'gemini-3-pro-image',
+            name: 'Gemini 3 Pro Image',
+            description: 'Gemini Nano Banana Pro image generation model.',
+        },
+    },
+    zai: {
+        'glm-image': {
+            id: 'glm-image',
+            name: 'GLM-Image',
+            description: 'Z.ai text-to-image model for complex layouts, posters, diagrams, and text-rich images.',
+        },
+    },
+};
+
 function normalizeProviderModelId(providerId, modelId) {
     const id = String(modelId ?? '').trim();
 
@@ -247,6 +328,21 @@ function isProviderModelSupported(providerId, modelId) {
     const supportedModelIds = PROVIDER_SUPPORTED_MODEL_IDS[providerId];
 
     return !supportedModelIds || supportedModelIds.has(modelId);
+}
+
+function isProviderImageModelSupported(providerId, modelId, options = {}) {
+    const id = String(modelId ?? '').trim();
+    const unsupportedModelIds = PROVIDER_UNSUPPORTED_IMAGE_MODEL_IDS[providerId];
+
+    if (unsupportedModelIds?.has(id))
+        return false;
+
+    const supportedModelIds = PROVIDER_SUPPORTED_IMAGE_MODEL_IDS[providerId];
+
+    if (!supportedModelIds)
+        return true;
+
+    return supportedModelIds.has(id) || Boolean(options.custom && providerId === 'openai-compatible');
 }
 
 const KIMI_MODEL_METADATA = {
@@ -391,6 +487,61 @@ function normalizeStoredModels(models, providerId = '') {
     return normalizedModels;
 }
 
+function normalizeStoredImageModels(models, providerId = '') {
+    if (!Array.isArray(models))
+        return [];
+
+    const seenIds = new Set();
+    const normalizedModels = [];
+
+    for (const model of models) {
+        const id = String(model?.id ?? model).trim();
+
+        if (!id || seenIds.has(id) || !isProviderImageModelSupported(providerId, id))
+            continue;
+
+        const metadata = IMAGE_MODEL_METADATA[providerId]?.[id];
+
+        seenIds.add(id);
+        normalizedModels.push({
+            id,
+            name: metadata?.name ?? String(model?.name ?? id),
+            description: metadata?.description ?? String(model?.description ?? 'Discovered image generation model.'),
+            ...(model?.custom ? { custom: true } : {}),
+        });
+    }
+
+    const supportedModelIds = PROVIDER_SUPPORTED_IMAGE_MODEL_IDS[providerId];
+
+    if (supportedModelIds) {
+        const modelOrder = [...supportedModelIds];
+        normalizedModels.sort((left, right) => modelOrder.indexOf(left.id) - modelOrder.indexOf(right.id));
+    }
+
+    return normalizedModels;
+}
+
+function mergeImageModels(models, customModels = []) {
+    const merged = [];
+    const seenIds = new Set();
+
+    for (const model of [...models, ...customModels]) {
+        const id = String(model?.id ?? '').trim();
+
+        if (!id || seenIds.has(id))
+            continue;
+
+        seenIds.add(id);
+        merged.push({ ...model });
+    }
+
+    return merged;
+}
+
+function parseImageModelSettings(value) {
+    return parseDiscoveredModelSettings(value);
+}
+
 const GEMINI_3_LEVEL_THINKING = {
     api: 'gemini-thinking-level',
     levels: ['minimal', 'auto', 'low', 'medium', 'high'],
@@ -424,11 +575,13 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         implemented: true,
         enabled: false,
         apiFormat: 'openai-responses',
+        imageApiFormat: 'openai-images',
         apiKeyRequired: true,
         apiKeyConfigured: false,
         apiKeyEnvVar: 'OPENAI_API_KEY',
         baseUrl: 'https://api.openai.com/v1',
         defaultModelId: 'gpt-5.5',
+        defaultImageModelId: 'gpt-image-2',
         thinking: {
             api: 'openai-responses',
             levels: ['off', 'auto', 'low', 'medium', 'high'],
@@ -451,6 +604,9 @@ export const DEFAULT_PROVIDER_CONFIGS = [
                 description: 'Smart non-reasoning model.',
                 thinking: false,
             },
+        ],
+        imageModels: [
+            { ...IMAGE_MODEL_METADATA.openai['gpt-image-2'] },
         ],
     },
     {
@@ -508,11 +664,13 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         implemented: true,
         enabled: false,
         apiFormat: 'gemini-generate-content',
+        imageApiFormat: 'gemini-interactions',
         apiKeyRequired: true,
         apiKeyConfigured: false,
         apiKeyEnvVar: 'GEMINI_API_KEY',
         baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
         defaultModelId: 'gemini-3.5-flash',
+        defaultImageModelId: 'gemini-3.1-flash-image',
         models: [
             {
                 id: 'gemini-3.5-flash',
@@ -526,6 +684,11 @@ export const DEFAULT_PROVIDER_CONFIGS = [
                 description: 'Advanced intelligence and agentic coding model.',
                 thinking: GEMINI_3_PRO_LEVEL_THINKING,
             },
+        ],
+        imageModels: [
+            { ...IMAGE_MODEL_METADATA.gemini['gemini-3.1-flash-image'] },
+            { ...IMAGE_MODEL_METADATA.gemini['gemini-3.1-flash-lite-image'] },
+            { ...IMAGE_MODEL_METADATA.gemini['gemini-3-pro-image'] },
         ],
     },
     {
@@ -633,15 +796,21 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         enabled: false,
         apiFormat: 'openai-chat-completions',
         supportsModelDiscovery: false,
+        imageApiFormat: 'zai-images',
+        imageModelDiscoveryRequiresApiKey: false,
         apiKeyRequired: true,
         apiKeyConfigured: false,
         apiKeyEnvVar: 'ZAI_API_KEY',
         baseUrl: 'https://api.z.ai/api/paas/v4',
         chatPath: '/chat/completions',
         defaultModelId: 'glm-5.2',
+        defaultImageModelId: 'glm-image',
         models: [
             { ...ZAI_MODEL_METADATA['glm-5.2'] },
             { ...ZAI_MODEL_METADATA['glm-5-turbo'] },
+        ],
+        imageModels: [
+            { ...IMAGE_MODEL_METADATA.zai['glm-image'] },
         ],
     },
     {
@@ -653,13 +822,17 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         enabled: false,
         customizable: true,
         apiFormat: 'openai-chat-completions',
+        imageApiFormat: 'openai-images',
+        supportsImageModelDiscovery: false,
         apiKeyRequired: true,
         apiKeyConfigured: false,
         apiKeyEnvVar: 'CUSCO_CUSTOM_API_KEY',
         baseUrl: '',
         chatPath: '/chat/completions',
         defaultModelId: '',
+        defaultImageModelId: '',
         models: [],
+        imageModels: [],
     },
 ];
 
@@ -674,6 +847,9 @@ export class ProviderConfigStore {
         this._configs = configs.map((config) => ({
             ...config,
             models: config.models.map((model) => ({ ...model })),
+            imageModels: (config.imageModels ?? []).map((model) => ({ ...model })),
+            customImageModels: (config.customImageModels ?? []).map((model) => ({ ...model })),
+            discoveredImageModels: (config.discoveredImageModels ?? []).map((model) => ({ ...model })),
         }));
         this.refreshApiKeyStatus();
         this._loadPersistentState();
@@ -698,6 +874,9 @@ export class ProviderConfigStore {
         return providers.map((provider) => ({
             ...provider,
             models: provider.models.map((model) => ({ ...model })),
+            imageModels: (provider.imageModels ?? []).map((model) => ({ ...model })),
+            customImageModels: (provider.customImageModels ?? []).map((model) => ({ ...model })),
+            discoveredImageModels: (provider.discoveredImageModels ?? []).map((model) => ({ ...model })),
         }));
     }
 
@@ -786,6 +965,29 @@ export class ProviderConfigStore {
         return this.resolve(provider.id, provider.defaultModelId);
     }
 
+    setCustomImageModels(providerId, models) {
+        const provider = this.getProvider(providerId);
+
+        if (!provider)
+            throw new Error(`Provider does not exist: ${providerId}`);
+
+        if (!provider.imageApiFormat)
+            throw new Error(`Provider does not support image generation: ${provider.name}`);
+
+        provider.customImageModels = normalizeCustomImageModels(models, provider.id);
+        provider.imageModels = mergeImageModels(
+            (provider.imageModels ?? []).filter((model) => !model.custom),
+            provider.customImageModels,
+        );
+
+        if (!provider.imageModels.some((model) => model.id === provider.defaultImageModelId))
+            provider.defaultImageModelId = provider.imageModels[0]?.id ?? '';
+
+        this._persistCustomImageModels();
+        this._persistDefaultImageModels();
+        return this.resolveImageGeneration(provider.id, provider.defaultImageModelId);
+    }
+
     async discoverModels(providerId, options = {}) {
         const provider = this.getProvider(providerId);
 
@@ -829,6 +1031,45 @@ export class ProviderConfigStore {
         return this.listProviders().find((item) => item.id === provider.id);
     }
 
+    async discoverImageModels(providerId, options = {}) {
+        const provider = this.getProvider(providerId);
+
+        if (!provider)
+            throw new Error(`Provider does not exist: ${providerId}`);
+
+        if (!provider.imageApiFormat || provider.supportsImageModelDiscovery === false)
+            throw new Error(`Provider does not support image model discovery: ${provider.name}`);
+
+        if (!this._isProviderConfiguredForImageGeneration(provider))
+            throw new Error(`Provider is not configured for image model discovery: ${provider.name}`);
+
+        const requiresApiKey = provider.imageModelDiscoveryRequiresApiKey !== false;
+        const providerConfig = {
+            ...provider,
+            apiKey: provider.apiKeyRequired && requiresApiKey ? this._getApiKey(provider) : '',
+        };
+        const discoverer = options.discoverer ?? ((config, discoverOptions) => (
+            this._discoverImageModelsForProvider(config, discoverOptions)
+        ));
+        const discoveredModels = normalizeStoredImageModels(await discoverer(providerConfig, {
+            cancellable: options.cancellable ?? null,
+            timeoutSeconds: options.timeoutSeconds,
+        }), provider.id);
+
+        if (discoveredModels.length === 0)
+            throw new Error(`${provider.name} did not return any image generation models`);
+
+        provider.discoveredImageModels = discoveredModels;
+        provider.imageModels = mergeImageModels(discoveredModels, provider.customImageModels ?? []);
+
+        if (!provider.imageModels.some((model) => model.id === provider.defaultImageModelId))
+            provider.defaultImageModelId = provider.imageModels[0].id;
+
+        this._persistDiscoveredImageModels();
+        this._persistDefaultImageModels();
+        return this.listProviders().find((item) => item.id === provider.id);
+    }
+
     getDefaultProvider() {
         const activeProvider = this.getProvider(this._activeProviderId);
 
@@ -851,6 +1092,17 @@ export class ProviderConfigStore {
         return activeModel
             ?? provider?.models.find((model) => model.id === provider.defaultModelId)
             ?? provider?.models[0]
+            ?? null;
+    }
+
+    getDefaultImageModel(providerId) {
+        const provider = providerId ? this.getProvider(providerId) : this.getDefaultProvider();
+
+        if (!provider)
+            return null;
+
+        return provider.imageModels?.find((model) => model.id === provider.defaultImageModelId)
+            ?? provider.imageModels?.[0]
             ?? null;
     }
 
@@ -879,6 +1131,16 @@ export class ProviderConfigStore {
         const normalizedModelId = normalizeProviderModelId(provider?.id, modelId);
         const model = provider
             ? provider.models.find((item) => item.id === normalizedModelId) ?? this.getDefaultModel(provider.id)
+            : null;
+
+        return { provider, model };
+    }
+
+    resolveImageGeneration(providerId, imageModelId = '') {
+        const provider = providerId ? this.getProvider(providerId) : this.getDefaultProvider();
+        const model = provider
+            ? provider.imageModels?.find((item) => item.id === imageModelId)
+                ?? this.getDefaultImageModel(provider.id)
             : null;
 
         return { provider, model };
@@ -930,6 +1192,22 @@ export class ProviderConfigStore {
         return this.resolve(provider.id, normalizedModelId);
     }
 
+    setDefaultImageModel(providerId, modelId) {
+        const provider = this.getProvider(providerId);
+
+        if (!provider)
+            throw new Error(`Provider does not exist: ${providerId}`);
+
+        const normalizedModelId = String(modelId ?? '').trim();
+
+        if (!provider.imageModels?.some((model) => model.id === normalizedModelId))
+            throw new Error(`Image model does not exist for ${providerId}: ${modelId}`);
+
+        provider.defaultImageModelId = normalizedModelId;
+        this._persistDefaultImageModels();
+        return this.resolveImageGeneration(provider.id, normalizedModelId);
+    }
+
     setActiveSelection(providerId, modelId) {
         const { provider, model } = this.resolve(providerId, modelId);
 
@@ -971,6 +1249,33 @@ export class ProviderConfigStore {
         }
     }
 
+    createImageGenerationConfig(providerId, imageModelId = '') {
+        const { provider, model } = this.resolveImageGeneration(providerId, imageModelId);
+
+        if (!provider)
+            throw new Error('Configure an AI provider before generating images.');
+
+        if (!provider.imageApiFormat)
+            throw new Error(`${provider.name} does not support image generation.`);
+
+        if (!model)
+            throw new Error(`Configure an image generation model for ${provider.name}.`);
+
+        if (!this._isProviderConfiguredForImageGeneration(provider))
+            throw new Error(`${provider.name} is not configured for image generation.`);
+
+        const apiKey = provider.apiKeyRequired ? this._getApiKey(provider) : '';
+
+        return {
+            provider: {
+                ...provider,
+                apiKey,
+                imageModels: (provider.imageModels ?? []).map((item) => ({ ...item })),
+            },
+            model: { ...model },
+        };
+    }
+
     _isProviderUsable(provider) {
         return provider.implemented
             && this._isProviderConfigured(provider)
@@ -982,6 +1287,13 @@ export class ProviderConfigStore {
             return true;
 
         return Boolean(provider.baseUrl) && provider.models.length > 0;
+    }
+
+    _isProviderConfiguredForImageGeneration(provider) {
+        if (!provider.customizable)
+            return Boolean(provider.imageApiFormat);
+
+        return Boolean(provider.baseUrl);
     }
 
     _resolveApiKeyStatus(provider) {
@@ -1062,12 +1374,38 @@ export class ProviderConfigStore {
         }
     }
 
+    async _discoverImageModelsForProvider(providerConfig, options) {
+        let discoveredModels = [];
+
+        switch (providerConfig.imageApiFormat) {
+        case 'openai-images':
+            discoveredModels = providerConfig.id === 'openai-compatible'
+                ? []
+                : await discoverOpenAiImageModels(providerConfig, options);
+            break;
+        case 'gemini-interactions':
+            discoveredModels = await discoverGeminiImageModels(providerConfig, options);
+            break;
+        case 'zai-images':
+            discoveredModels = discoverZaiImageModels();
+            break;
+        default:
+            throw new Error(`Provider image model discovery is not implemented: ${providerConfig.imageApiFormat}`);
+        }
+
+        return discoveredModels.length > 0
+            ? discoveredModels
+            : (providerConfig.imageModels ?? []).filter((model) => !model.custom);
+    }
+
     _loadPersistentState() {
         if (!this._settings)
             return;
 
         this._loadCustomProviderSettings();
         this._loadDiscoveredModelSettings();
+        this._loadDiscoveredImageModelSettings();
+        this._loadCustomImageModelSettings();
 
         const enabledProviderIds = this._settings.get_strv('enabled-providers');
 
@@ -1085,6 +1423,15 @@ export class ProviderConfigStore {
 
             if (provider.models.some((model) => model.id === defaultModelId))
                 provider.defaultModelId = defaultModelId;
+        }
+
+        const defaultImageModels = parseImageModelSettings(this._settings.get_string('provider-default-image-models'));
+
+        for (const provider of this._configs) {
+            const defaultImageModelId = String(defaultImageModels[provider.id] ?? '').trim();
+
+            if (provider.imageModels?.some((model) => model.id === defaultImageModelId))
+                provider.defaultImageModelId = defaultImageModelId;
         }
 
         const activeProviderId = this._settings.get_string('active-provider');
@@ -1110,6 +1457,44 @@ export class ProviderConfigStore {
 
             if (normalizedModels.length > 0)
                 provider.models = normalizedModels;
+        }
+    }
+
+    _loadDiscoveredImageModelSettings() {
+        const discoveredImageModels = parseImageModelSettings(this._settings.get_string('provider-discovered-image-models'));
+
+        for (const [providerId, models] of Object.entries(discoveredImageModels)) {
+            const provider = this.getProvider(providerId);
+
+            if (!provider?.imageApiFormat)
+                continue;
+
+            const normalizedModels = normalizeStoredImageModels(models, providerId);
+
+            if (normalizedModels.length > 0) {
+                provider.discoveredImageModels = normalizedModels;
+                provider.imageModels = mergeImageModels(normalizedModels, provider.customImageModels ?? []);
+            }
+        }
+    }
+
+    _loadCustomImageModelSettings() {
+        const customImageModels = parseImageModelSettings(this._settings.get_string('provider-custom-image-models'));
+
+        for (const [providerId, models] of Object.entries(customImageModels)) {
+            const provider = this.getProvider(providerId);
+
+            if (!provider?.imageApiFormat)
+                continue;
+
+            provider.customImageModels = normalizeCustomImageModels(models, providerId);
+            provider.imageModels = mergeImageModels(
+                (provider.imageModels ?? []).filter((model) => !model.custom),
+                provider.customImageModels,
+            );
+
+            if (!provider.imageModels.some((model) => model.id === provider.defaultImageModelId))
+                provider.defaultImageModelId = provider.imageModels[0]?.id ?? '';
         }
     }
 
@@ -1145,6 +1530,18 @@ export class ProviderConfigStore {
         flushSettings();
     }
 
+    _persistDefaultImageModels() {
+        const defaultImageModels = {};
+
+        for (const provider of this._configs) {
+            if (provider.imageApiFormat)
+                defaultImageModels[provider.id] = provider.defaultImageModelId ?? '';
+        }
+
+        this._settings?.set_string('provider-default-image-models', JSON.stringify(defaultImageModels));
+        flushSettings();
+    }
+
     _persistDiscoveredModels() {
         const discoveredModels = {};
 
@@ -1161,6 +1558,47 @@ export class ProviderConfigStore {
         }
 
         this._settings?.set_string('provider-discovered-models', JSON.stringify(discoveredModels));
+        flushSettings();
+    }
+
+    _persistCustomImageModels() {
+        const customImageModels = {};
+
+        for (const provider of this._configs) {
+            if (!provider.imageApiFormat || !provider.customImageModels?.length)
+                continue;
+
+            customImageModels[provider.id] = provider.customImageModels.map((model) => ({
+                id: model.id,
+                name: model.name,
+                description: model.description,
+                custom: true,
+            }));
+        }
+
+        this._settings?.set_string('provider-custom-image-models', JSON.stringify(customImageModels));
+        flushSettings();
+    }
+
+    _persistDiscoveredImageModels() {
+        const discoveredImageModels = {};
+
+        for (const provider of this._configs) {
+            const models = (provider.discoveredImageModels?.length
+                ? provider.discoveredImageModels
+                : provider.imageModels ?? []).filter((model) => !model.custom);
+
+            if (!provider.imageApiFormat || models.length === 0)
+                continue;
+
+            discoveredImageModels[provider.id] = models.map((model) => ({
+                id: model.id,
+                name: model.name,
+                description: model.description,
+            }));
+        }
+
+        this._settings?.set_string('provider-discovered-image-models', JSON.stringify(discoveredImageModels));
         flushSettings();
     }
 }

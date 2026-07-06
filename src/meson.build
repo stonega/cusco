@@ -18,6 +18,7 @@ chat_sources = files(
 
 provider_sources = files(
   'providers/config.js',
+  'providers/imageGeneration.js',
   'providers/icons.js',
   'providers/provider.js',
   'providers/outputLimits.js',
@@ -65,6 +66,7 @@ skill_sources = files(
 )
 
 tool_sources = files(
+  'tools/display.js',
   'tools/permissions.js',
   'tools/tools.js',
 )

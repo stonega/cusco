@@ -10,6 +10,7 @@ const MAX_FILE_READ_BYTES = 120000;
 const MAX_FILE_LIST_ITEMS = 200;
 const MAX_TOOL_OUTPUT_CHARS = 60000;
 const MAX_BASH_OUTPUT_CHARS = 40000;
+const BASH_READ_CHUNK_BYTES = 4096;
 
 const SENSITIVE_PATHS = [
     '.ssh',
@@ -498,7 +499,89 @@ function bashProgram() {
     return path;
 }
 
-export function runBashCommand(command, options = {}) {
+function createBoundedTextCollector(maxChars) {
+    let text = '';
+    let truncated = false;
+
+    return {
+        append(chunk) {
+            const value = String(chunk ?? '');
+
+            if (!value)
+                return;
+
+            const available = Math.max(0, maxChars - text.length);
+
+            if (available > 0)
+                text += value.slice(0, available);
+
+            if (value.length > available)
+                truncated = true;
+        },
+        result() {
+            return {
+                text: truncated
+                    ? `${text}\n\n[Output truncated after ${maxChars} characters.]`
+                    : text,
+                truncated,
+            };
+        },
+    };
+}
+
+function waitForSubprocess(subprocess) {
+    return new Promise((resolve, reject) => {
+        subprocess.wait_async(null, (_process, result) => {
+            try {
+                resolve(subprocess.wait_finish(result));
+            } catch (error) {
+                reject(error);
+            }
+        });
+    });
+}
+
+function readTextPipe(stream, onChunk = null) {
+    const collector = createBoundedTextCollector(MAX_BASH_OUTPUT_CHARS);
+
+    return new Promise((resolve, reject) => {
+        const readNext = () => {
+            stream.read_bytes_async(BASH_READ_CHUNK_BYTES, GLib.PRIORITY_DEFAULT, null, (source, result) => {
+                try {
+                    const bytes = source.read_bytes_finish(result);
+                    const data = bytes.get_data();
+
+                    if (!data || data.length === 0) {
+                        resolve(collector.result());
+                        return;
+                    }
+
+                    const text = new TextDecoder().decode(data);
+                    collector.append(text);
+                    onChunk?.(text);
+                    readNext();
+                } catch (error) {
+                    reject(error);
+                }
+            });
+        };
+
+        readNext();
+    });
+}
+
+function notifyBashOutput(callback, stream, text) {
+    if (!callback || !text)
+        return;
+
+    try {
+        callback({ stream, text });
+    } catch (_error) {
+        // Output preview callbacks are best-effort UI updates; the command result is authoritative.
+    }
+}
+
+export async function runBashCommand(command, options = {}) {
     const normalizedCommand = String(command ?? '').trim();
 
     if (!normalizedCommand)
@@ -508,7 +591,6 @@ export function runBashCommand(command, options = {}) {
         DEFAULT_BASH_TIMEOUT_SECONDS,
         Math.max(1, Math.round(options.timeoutSeconds ?? DEFAULT_BASH_TIMEOUT_SECONDS)),
     );
-    const cancellable = new Gio.Cancellable();
     const externalCancellable = options.cancellable ?? null;
     let externalCancelHandlerId = 0;
     let timedOut = false;
@@ -534,75 +616,48 @@ export function runBashCommand(command, options = {}) {
         timedOut = true;
         timeoutId = 0;
         subprocess.force_exit();
-        cancellable.cancel();
         return GLib.SOURCE_REMOVE;
     });
 
-    return new Promise((resolve, reject) => {
-        subprocess.communicate_utf8_async(null, cancellable, (_process, result) => {
-            if (timeoutId)
-                GLib.source_remove(timeoutId);
-
-            if (externalCancelHandlerId)
-                externalCancellable.disconnect(externalCancelHandlerId);
-
-            try {
-                const [, stdout, stderr] = subprocess.communicate_utf8_finish(result);
-                const truncatedStdout = truncateText(stdout, MAX_BASH_OUTPUT_CHARS);
-                const truncatedStderr = truncateText(stderr, MAX_BASH_OUTPUT_CHARS);
-                const exitStatus = subprocess.get_if_exited() ? subprocess.get_exit_status() : 124;
-
-                resolve({
-                    command: normalizedCommand,
-                    exitStatus: cancelled ? 130 : timedOut ? 124 : exitStatus,
-                    stdout: truncatedStdout.text,
-                    stderr: truncatedStderr.text,
-                    stdoutTruncated: truncatedStdout.truncated,
-                    stderrTruncated: truncatedStderr.truncated,
-                    timedOut,
-                    cancelled,
-                    output: [
-                        `exit status: ${cancelled ? 130 : timedOut ? 124 : exitStatus}`,
-                        cancelled ? 'cancelled: true' : '',
-                        truncatedStdout.text ? `stdout:\n${truncatedStdout.text}` : 'stdout: <empty>',
-                        truncatedStderr.text ? `stderr:\n${truncatedStderr.text}` : 'stderr: <empty>',
-                    ].filter(Boolean).join('\n\n'),
-                });
-            } catch (error) {
-                if (timedOut) {
-                    resolve({
-                        command: normalizedCommand,
-                        exitStatus: 124,
-                        stdout: '',
-                        stderr: `Command timed out after ${timeoutSeconds} seconds.`,
-                        stdoutTruncated: false,
-                        stderrTruncated: false,
-                        timedOut: true,
-                        cancelled: false,
-                        output: `exit status: 124\n\nstderr:\nCommand timed out after ${timeoutSeconds} seconds.`,
-                    });
-                    return;
-                }
-
-                if (cancelled) {
-                    resolve({
-                        command: normalizedCommand,
-                        exitStatus: 130,
-                        stdout: '',
-                        stderr: 'Command cancelled by user.',
-                        stdoutTruncated: false,
-                        stderrTruncated: false,
-                        timedOut: false,
-                        cancelled: true,
-                        output: 'exit status: 130\n\ncancelled: true\n\nstderr:\nCommand cancelled by user.',
-                    });
-                    return;
-                }
-
-                reject(error);
-            }
-        });
+    const stdoutPromise = readTextPipe(subprocess.get_stdout_pipe(), (text) => {
+        notifyBashOutput(options.onOutput, 'stdout', text);
     });
+    const stderrPromise = readTextPipe(subprocess.get_stderr_pipe(), (text) => {
+        notifyBashOutput(options.onOutput, 'stderr', text);
+    });
+
+    try {
+        const [, stdoutResult, stderrResult] = await Promise.all([
+            waitForSubprocess(subprocess),
+            stdoutPromise,
+            stderrPromise,
+        ]);
+        const exitStatus = subprocess.get_if_exited() ? subprocess.get_exit_status() : 124;
+        const normalizedExitStatus = cancelled ? 130 : timedOut ? 124 : exitStatus;
+
+        return {
+            command: normalizedCommand,
+            exitStatus: normalizedExitStatus,
+            stdout: stdoutResult.text,
+            stderr: stderrResult.text,
+            stdoutTruncated: stdoutResult.truncated,
+            stderrTruncated: stderrResult.truncated,
+            timedOut,
+            cancelled,
+            output: [
+                `exit status: ${normalizedExitStatus}`,
+                cancelled ? 'cancelled: true' : '',
+                stdoutResult.text ? `stdout:\n${stdoutResult.text}` : 'stdout: <empty>',
+                stderrResult.text ? `stderr:\n${stderrResult.text}` : 'stderr: <empty>',
+            ].filter(Boolean).join('\n\n'),
+        };
+    } finally {
+        if (timeoutId)
+            GLib.source_remove(timeoutId);
+
+        if (externalCancelHandlerId)
+            externalCancellable.disconnect(externalCancelHandlerId);
+    }
 }
 
 export function parseToolRequest(text) {
@@ -661,6 +716,15 @@ export function formatToolResultForTranscript(result) {
             `Exit status: ${result.exitStatus}${result.timedOut ? ' (timed out)' : ''}${result.cancelled ? ' (cancelled)' : ''}`,
             result.stdout ? `\nstdout\n\`\`\`text\n${result.stdout}\n\`\`\`` : '\nstdout: <empty>',
             result.stderr ? `\nstderr\n\`\`\`text\n${result.stderr}\n\`\`\`` : '\nstderr: <empty>',
+        ].join('\n');
+
+    if (result.name === 'image_gen')
+        return [
+            `Generated image`,
+            `Prompt: ${result.prompt ?? result.input ?? ''}`,
+            `Provider: ${result.providerName ?? result.providerId ?? 'unknown'}`,
+            `Model: ${result.modelId ?? 'unknown'}`,
+            `Saved image: ${result.imagePath ?? 'unknown'}`,
         ].join('\n');
 
     return result.output;
@@ -781,10 +845,21 @@ export class ToolManager {
     async runRequest(request, options = {}) {
         if (this._registeredTools.has(request.name)) {
             const tool = this._registeredTools.get(request.name);
-            const output = await tool.run(request.input, options);
+            const result = await tool.run(request.input, options);
+
+            if (result && typeof result === 'object' && !Array.isArray(result)) {
+                return {
+                    ...result,
+                    ...request,
+                    output: typeof result.output === 'string'
+                        ? result.output
+                        : JSON.stringify(result, null, 2),
+                };
+            }
+
             return {
                 ...request,
-                output: typeof output === 'string' ? output : JSON.stringify(output ?? null, null, 2),
+                output: typeof result === 'string' ? result : JSON.stringify(result ?? null, null, 2),
             };
         }
 

@@ -397,6 +397,20 @@ export class ConversationManager {
         return message;
     }
 
+    updateMessageToolCall(conversationId, messageId, toolCall, content = null) {
+        const { conversation, message } = this._getMessageRecord(conversationId, messageId);
+
+        if (content !== null)
+            message.content = String(content ?? '');
+
+        message.toolCall = toolCall && typeof toolCall === 'object'
+            ? { ...toolCall }
+            : null;
+        conversation.updatedAt = now();
+        this._persist();
+        return message;
+    }
+
     _moveToTop(conversationId) {
         const index = this._conversations.findIndex((conversation) => conversation.id === conversationId);
 
