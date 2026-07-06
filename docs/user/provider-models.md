@@ -40,9 +40,11 @@ level. Models without thinking support keep the chat picker disabled.
 ## Image Generation Models
 
 Image generation models are configured separately from chat models. The
-`image_gen` chat tool uses the active conversation's provider and that
-provider's default image generation model. Custom API image models are entered
-by the user and use an OpenAI-compatible image generation endpoint.
+`image_gen` chat tool uses the standalone image generation provider and model
+chosen in Settings, independent of the active conversation's chat provider. For
+example, an OpenAI chat can generate images through Gemini when Gemini is the
+selected image provider. Custom API image models are entered by the user and use
+an OpenAI-compatible image generation endpoint.
 
 | Provider | Default image model | Supported image models |
 |---|---|---|

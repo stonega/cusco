@@ -11,6 +11,16 @@
       <summary>Active AI model</summary>
       <description>The model identifier selected for new conversations.</description>
     </key>
+    <key name="default-image-provider" type="s">
+      <default>''</default>
+      <summary>Default image generation provider</summary>
+      <description>The provider identifier used by the image generation tool.</description>
+    </key>
+    <key name="default-image-model" type="s">
+      <default>''</default>
+      <summary>Default image generation model</summary>
+      <description>The model identifier used by the image generation tool.</description>
+    </key>
     <key name="enabled-providers" type="as">
       <default>[]</default>
       <summary>Enabled AI providers</summary>

@@ -533,7 +533,7 @@ export function createImageGenerationTool(providerConfigs, options = {}) {
         concurrencySafe: false,
         run: async (input, runOptions = {}) => {
             const { provider, model } = providerConfigs.createImageGenerationConfig(
-                runOptions.providerId,
+                runOptions.imageProviderId,
                 runOptions.imageModelId,
             );
 

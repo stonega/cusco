@@ -22,6 +22,8 @@ const SETTINGS_SCHEMA_ID = 'io.github.stonega.Cusco';
 const REQUIRED_SETTINGS_KEYS = [
     'active-provider',
     'active-model',
+    'default-image-provider',
+    'default-image-model',
     'enabled-providers',
     'provider-default-models',
     'provider-discovered-models',
@@ -35,6 +37,8 @@ const FALLBACK_SETTINGS_VERSION = 1;
 const FALLBACK_STRING_DEFAULTS = {
     'active-provider': '',
     'active-model': '',
+    'default-image-provider': '',
+    'default-image-model': '',
     'provider-default-models': '{}',
     'provider-discovered-models': '{}',
     'provider-default-image-models': '{}',
@@ -844,6 +848,8 @@ export class ProviderConfigStore {
         this._apiKeyStatuses = new Map();
         this._activeProviderId = '';
         this._activeModelId = '';
+        this._defaultImageProviderId = '';
+        this._defaultImageModelId = '';
         this._configs = configs.map((config) => ({
             ...config,
             models: config.models.map((model) => ({ ...model })),
@@ -878,6 +884,21 @@ export class ProviderConfigStore {
             customImageModels: (provider.customImageModels ?? []).map((model) => ({ ...model })),
             discoveredImageModels: (provider.discoveredImageModels ?? []).map((model) => ({ ...model })),
         }));
+    }
+
+    listImageProviders({ configuredOnly = false } = {}) {
+        return this._configs
+            .filter((provider) => (
+                provider.imageApiFormat
+                && (!configuredOnly || this._isProviderConfiguredForImageGeneration(provider))
+            ))
+            .map((provider) => ({
+                ...provider,
+                models: provider.models.map((model) => ({ ...model })),
+                imageModels: (provider.imageModels ?? []).map((model) => ({ ...model })),
+                customImageModels: (provider.customImageModels ?? []).map((model) => ({ ...model })),
+                discoveredImageModels: (provider.discoveredImageModels ?? []).map((model) => ({ ...model })),
+            }));
     }
 
     getProvider(providerId) {
@@ -983,6 +1004,12 @@ export class ProviderConfigStore {
         if (!provider.imageModels.some((model) => model.id === provider.defaultImageModelId))
             provider.defaultImageModelId = provider.imageModels[0]?.id ?? '';
 
+        if (this._defaultImageProviderId === provider.id
+            && !provider.imageModels.some((model) => model.id === this._defaultImageModelId)) {
+            this._defaultImageModelId = provider.defaultImageModelId;
+            this._persistDefaultImageSelection();
+        }
+
         this._persistCustomImageModels();
         this._persistDefaultImageModels();
         return this.resolveImageGeneration(provider.id, provider.defaultImageModelId);
@@ -1065,6 +1092,12 @@ export class ProviderConfigStore {
         if (!provider.imageModels.some((model) => model.id === provider.defaultImageModelId))
             provider.defaultImageModelId = provider.imageModels[0].id;
 
+        if (this._defaultImageProviderId === provider.id
+            && !provider.imageModels.some((model) => model.id === this._defaultImageModelId)) {
+            this._defaultImageModelId = provider.defaultImageModelId;
+            this._persistDefaultImageSelection();
+        }
+
         this._persistDiscoveredImageModels();
         this._persistDefaultImageModels();
         return this.listProviders().find((item) => item.id === provider.id);
@@ -1095,15 +1128,35 @@ export class ProviderConfigStore {
             ?? null;
     }
 
+    getDefaultImageProvider() {
+        const selectedProvider = this.getProvider(this._defaultImageProviderId);
+
+        if (selectedProvider?.imageApiFormat)
+            return selectedProvider;
+
+        return this._configs.find((provider) => provider.imageApiFormat) ?? null;
+    }
+
     getDefaultImageModel(providerId) {
-        const provider = providerId ? this.getProvider(providerId) : this.getDefaultProvider();
+        const provider = providerId ? this.getProvider(providerId) : this.getDefaultImageProvider();
 
         if (!provider)
             return null;
 
+        if (!providerId && provider.id === this._defaultImageProviderId) {
+            const selectedModel = provider.imageModels?.find((model) => model.id === this._defaultImageModelId);
+
+            if (selectedModel)
+                return selectedModel;
+        }
+
         return provider.imageModels?.find((model) => model.id === provider.defaultImageModelId)
             ?? provider.imageModels?.[0]
             ?? null;
+    }
+
+    getImageGenerationSelection() {
+        return this.resolveImageGeneration('', '');
     }
 
     getActiveSelection() {
@@ -1137,9 +1190,14 @@ export class ProviderConfigStore {
     }
 
     resolveImageGeneration(providerId, imageModelId = '') {
-        const provider = providerId ? this.getProvider(providerId) : this.getDefaultProvider();
+        const provider = providerId ? this.getProvider(providerId) : this.getDefaultImageProvider();
+        const preferredModelId = String(
+            imageModelId || (!providerId && provider?.id === this._defaultImageProviderId
+                ? this._defaultImageModelId
+                : ''),
+        ).trim();
         const model = provider
-            ? provider.imageModels?.find((item) => item.id === imageModelId)
+            ? provider.imageModels?.find((item) => item.id === preferredModelId)
                 ?? this.getDefaultImageModel(provider.id)
             : null;
 
@@ -1205,7 +1263,60 @@ export class ProviderConfigStore {
 
         provider.defaultImageModelId = normalizedModelId;
         this._persistDefaultImageModels();
+        if (this._defaultImageProviderId === provider.id) {
+            this._defaultImageModelId = normalizedModelId;
+            this._persistDefaultImageSelection();
+        }
         return this.resolveImageGeneration(provider.id, normalizedModelId);
+    }
+
+    setDefaultImageProvider(providerId) {
+        const provider = this.getProvider(providerId);
+
+        if (!provider)
+            throw new Error(`Provider does not exist: ${providerId}`);
+
+        if (!provider.imageApiFormat)
+            throw new Error(`Provider does not support image generation: ${provider.name}`);
+
+        const model = provider.imageModels?.find((item) => item.id === provider.defaultImageModelId)
+            ?? provider.imageModels?.[0]
+            ?? null;
+
+        if (model)
+            provider.defaultImageModelId = model.id;
+
+        this._defaultImageProviderId = provider.id;
+        this._defaultImageModelId = model?.id ?? '';
+        this._persistDefaultImageModels();
+        this._persistDefaultImageSelection();
+        return { provider, model };
+    }
+
+    setDefaultImageSelection(providerId, modelId = '') {
+        const provider = this.getProvider(providerId);
+
+        if (!provider)
+            throw new Error(`Provider does not exist: ${providerId}`);
+
+        if (!provider.imageApiFormat)
+            throw new Error(`Provider does not support image generation: ${provider.name}`);
+
+        const normalizedModelId = String(modelId ?? '').trim();
+        const model = provider.imageModels?.find((item) => item.id === normalizedModelId)
+            ?? provider.imageModels?.find((item) => item.id === provider.defaultImageModelId)
+            ?? provider.imageModels?.[0]
+            ?? null;
+
+        if (!model)
+            throw new Error(`Configure an image generation model for ${provider.name}.`);
+
+        provider.defaultImageModelId = model.id;
+        this._defaultImageProviderId = provider.id;
+        this._defaultImageModelId = model.id;
+        this._persistDefaultImageModels();
+        this._persistDefaultImageSelection();
+        return this.resolveImageGeneration(provider.id, model.id);
     }
 
     setActiveSelection(providerId, modelId) {
@@ -1434,6 +1545,20 @@ export class ProviderConfigStore {
                 provider.defaultImageModelId = defaultImageModelId;
         }
 
+        const imageProviderId = this._settings.get_string('default-image-provider');
+        const imageModelId = this._settings.get_string('default-image-model');
+        const imageProvider = this.getProvider(imageProviderId);
+
+        if (imageProvider?.imageApiFormat) {
+            const imageModel = imageProvider.imageModels?.find((model) => model.id === imageModelId)
+                ?? this.getDefaultImageModel(imageProvider.id);
+
+            if (imageModel) {
+                this._defaultImageProviderId = imageProvider.id;
+                this._defaultImageModelId = imageModel.id;
+            }
+        }
+
         const activeProviderId = this._settings.get_string('active-provider');
         const activeModelId = normalizeProviderModelId(activeProviderId, this._settings.get_string('active-model'));
 
@@ -1539,6 +1664,12 @@ export class ProviderConfigStore {
         }
 
         this._settings?.set_string('provider-default-image-models', JSON.stringify(defaultImageModels));
+        flushSettings();
+    }
+
+    _persistDefaultImageSelection() {
+        this._settings?.set_string('default-image-provider', this._defaultImageProviderId);
+        this._settings?.set_string('default-image-model', this._defaultImageModelId);
         flushSettings();
     }
 

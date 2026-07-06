@@ -88,10 +88,14 @@ const providerConfigs = new ProviderConfigStore(undefined, {
     apiKeyStore: new MemoryApiKeyStore({ zai: 'zai-key' }),
     envLookup: () => '',
 });
+providerConfigs.setDefaultImageSelection('zai', 'glm-image');
 const tool = createImageGenerationTool(providerConfigs, {
-    requestJson: async () => ({
-        data: [{ url: 'https://example.invalid/generated.png' }],
-    }),
+    requestJson: async (_url, _headers, body) => {
+        assertEqual(body.model, 'glm-image', 'Standalone image provider model');
+        return {
+            data: [{ url: 'https://example.invalid/generated.png' }],
+        };
+    },
     downloadBytes: async () => ({
         bytes: new TextEncoder().encode('png-data'),
         mimeType: 'image/png',
@@ -101,9 +105,10 @@ const tool = createImageGenerationTool(providerConfigs, {
         mimeType: 'image/png',
     }),
 });
-const toolResult = await tool.run('A quiet desktop chat app', { providerId: 'zai' });
+const toolResult = await tool.run('A quiet desktop chat app', { providerId: 'openai' });
 
 assertEqual(toolResult.imagePath, '/tmp/tool-image.png', 'Tool image path');
 assertEqual(toolResult.modelId, 'glm-image', 'Tool image model');
+assertEqual(toolResult.providerId, 'zai', 'Tool standalone image provider');
 
 print('Cusco image generation smoke passed');

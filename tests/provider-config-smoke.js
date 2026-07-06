@@ -112,6 +112,9 @@ if (zaiImageModelIds.join(',') !== 'glm-image')
 if (defaultStore.getDefaultImageModel('zai').id !== 'glm-image')
     throw new Error('Z.ai default image model should be GLM-Image');
 
+if (defaultStore.getImageGenerationSelection().provider.id !== 'openai')
+    throw new Error('Default image generation provider should fall back to OpenAI');
+
 if (defaultStore.getThinkingLevels('zai', 'glm-5.2').join(',') !== 'off,auto,high,max')
     throw new Error('Z.ai GLM-5.2 should expose thinking effort controls');
 
@@ -181,6 +184,13 @@ if (geminiImageModelIds.join(',') !== expectedGeminiImageModelIds.join(','))
 
 if (defaultStore.getDefaultImageModel('gemini').id !== 'gemini-3.1-flash-image')
     throw new Error('Gemini default image model should be Gemini 3.1 Flash Image');
+
+defaultStore.setDefaultImageSelection('gemini', 'gemini-3-pro-image');
+
+if (defaultStore.getImageGenerationSelection().provider.id !== 'gemini'
+    || defaultStore.getImageGenerationSelection().model.id !== 'gemini-3-pro-image') {
+    throw new Error('Standalone image generation selection was not updated');
+}
 
 if (!defaultStore.getThinkingLevels('gemini', 'gemini-3.5-flash').includes('minimal'))
     throw new Error('Gemini 3.5 Flash minimal thinking level was not configured');
@@ -487,9 +497,15 @@ if (customStore.getDefaultModel('openai-compatible').id !== 'custom-large')
     throw new Error('Custom provider default model was not updated');
 
 customStore.setDefaultImageModel('openai-compatible', 'custom-image-fast');
+customStore.setDefaultImageSelection('openai-compatible', 'custom-image-fast');
 
 if (customStore.getDefaultImageModel('openai-compatible').id !== 'custom-image-fast')
     throw new Error('Custom provider default image model was not updated');
+
+if (customSettings.get_string('default-image-provider') !== 'openai-compatible'
+    || customSettings.get_string('default-image-model') !== 'custom-image-fast') {
+    throw new Error('Standalone default image generation selection was not persisted');
+}
 
 if (customStore.createProvider('openai-compatible').name !== 'Custom API')
     throw new Error('Custom provider client was not created');
