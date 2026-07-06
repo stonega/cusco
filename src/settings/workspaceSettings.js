@@ -180,10 +180,22 @@ function skillSubtitle(skill) {
     ].filter(Boolean).join('\n');
 }
 
+function normalizeSkillIdentity(value) {
+    return String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function isSkillVisibleInSettings(skill) {
+    return ![
+        skill.id,
+        skill.name,
+        skill.path,
+    ].some((value) => normalizeSkillIdentity(value).includes('codexcli'));
+}
+
 function addSkillRows(group, workspaceManager, refresh) {
     const rows = [];
 
-    for (const skill of workspaceManager.skills) {
+    for (const skill of workspaceManager.skills.filter(isSkillVisibleInSettings)) {
         const row = new Adw.ActionRow({
             title: skill.name,
             subtitle: skillSubtitle(skill),
