@@ -37,7 +37,7 @@ Keep this path boring and explicit. Most agent features should attach around it,
 - Keep tools atomic and composable. A tool should do one observable action and return a concise result.
 - Put provider-specific behavior behind provider adapters. The UI and chat engine should not know an API's wire format.
 - Load knowledge on demand. Skills, profile prompts, and reference material should be discoverable before they are injected.
-- Make memory visible and user-controlled. Memory writes need approval; memory reads should leave an audit trail in the transcript or local usage log.
+- Make memory visible and user-controlled. Memory writes need approval; memory reads should leave a local usage audit trail without adding transcript noise.
 - Put permission checks before side effects. Network, filesystem, shell, and external service actions need clear deny/allow behavior.
 - Preserve context quality. Truncate, summarize, or isolate noisy outputs rather than dumping them into the main conversation.
 - Prefer native GNOME surfaces. Agent controls should feel like part of the app, not a web workflow embedded in GTK.
@@ -80,7 +80,7 @@ Memory should remain explicit:
 - Record when memory is used for a response.
 - Distinguish user memory from session state and task state.
 
-Do not hide memory injection inside provider prompts without a visible audit path.
+Do not hide memory injection inside provider prompts without a local audit path.
 
 ## Skill Development Rules
 

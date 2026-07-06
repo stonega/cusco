@@ -2048,17 +2048,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (memories.length === 0)
             return;
 
-        const auditMessage = createMessage(
-            'system',
-            `Memory used for this response:\n${memories.map((memory) => `- ${memory.content}`).join('\n')}`,
-        );
-        this._conversations.appendMessage(conversation.id, auditMessage);
         this._memories.recordMemoryUse(memories.map((memory) => memory.id), {
             conversationId: conversation.id,
-            messageId: auditMessage.id,
+            messageId: '',
         });
-        this._addMessage(auditMessage.content, auditMessage.role, auditMessage);
-        this._updateUsageDisplay(conversation);
     }
 
     _injectSkillContext(conversation) {
@@ -3270,6 +3263,62 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return row;
     }
 
+    _createReasoningExpander(content, options = {}) {
+        const container = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 4,
+            hexpand: true,
+        });
+        const revealer = new Gtk.Revealer({
+            child: content,
+            reveal_child: false,
+            transition_type: Gtk.RevealerTransitionType.SLIDE_DOWN,
+        });
+        const headerButton = new Gtk.Button({
+            halign: Gtk.Align.START,
+        });
+        const header = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 6,
+            valign: Gtk.Align.CENTER,
+        });
+        const chevron = new Gtk.Image({
+            icon_name: 'pan-end-symbolic',
+            pixel_size: 14,
+            valign: Gtk.Align.CENTER,
+        });
+
+        container.add_css_class('cusco-reasoning');
+        headerButton.add_css_class('flat');
+        headerButton.add_css_class('cusco-reasoning-header');
+        chevron.add_css_class('cusco-reasoning-toggle-icon');
+
+        header.append(this._createThinkingLabelWidget(options.isActive));
+        header.append(chevron);
+        headerButton.set_child(header);
+
+        const updateExpandedState = (expanded) => {
+            headerButton.set_tooltip_text(expanded ? 'Collapse reasoning' : 'Expand reasoning');
+
+            if (expanded)
+                chevron.add_css_class('cusco-reasoning-toggle-icon-expanded');
+            else
+                chevron.remove_css_class('cusco-reasoning-toggle-icon-expanded');
+        };
+
+        headerButton.connect('clicked', () => {
+            const expanded = !revealer.get_reveal_child();
+
+            revealer.set_reveal_child(expanded);
+            updateExpandedState(expanded);
+        });
+        updateExpandedState(false);
+
+        container.append(headerButton);
+        container.append(revealer);
+        return container;
+    }
+
     _createBashOutputPreview(initialOutput = '') {
         const buffer = new Gtk.TextBuffer();
         const view = new Gtk.TextView({
@@ -3539,13 +3588,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
         let reasoningExpander = null;
 
         if (kind === 'assistant') {
-            reasoningExpander = new Gtk.Expander({
-                expanded: false,
-                visible: Boolean(reasoningText),
-                hexpand: true,
-            });
-            reasoningExpander.set_label_widget(this._createThinkingLabelWidget(isStreamingAssistant));
-            reasoningExpander.add_css_class('cusco-reasoning');
             reasoningContent = createMessageContent(reasoningText || ' ', this._messageContentOptions({
                 role: 'assistant',
                 hexpand: true,
@@ -3553,7 +3595,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
             }));
             reasoningContent.add_css_class('cusco-message-bubble');
             reasoningContent.add_css_class('cusco-message-assistant');
-            reasoningExpander.set_child(reasoningContent);
+            reasoningExpander = this._createReasoningExpander(reasoningContent, {
+                isActive: isStreamingAssistant,
+            });
+            reasoningExpander.set_visible(Boolean(reasoningText));
             wrapper.append(reasoningExpander);
         }
 

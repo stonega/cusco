@@ -301,6 +301,19 @@
     color: alpha(@window_fg_color, 0.74);
 }
 
+.cusco-reasoning-header {
+    padding: 4px 6px;
+}
+
+.cusco-reasoning-toggle-icon {
+    transition: -gtk-icon-transform 150ms ease;
+    -gtk-icon-transform: rotate(0deg);
+}
+
+.cusco-reasoning-toggle-icon-expanded {
+    -gtk-icon-transform: rotate(90deg);
+}
+
 .cusco-knot-status {
     color: alpha(@window_fg_color, 0.78);
 }

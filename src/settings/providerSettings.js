@@ -496,7 +496,6 @@ export function createProviderSettingsPage(providerConfigs, onChanged) {
     };
 
     imageGenerationSettings = createImageGenerationSettingsGroup(providerConfigs, onChanged, syncAllRows);
-    page.add(imageGenerationSettings.group);
 
     for (const provider of providerConfigs.listProviders()) {
         const providerRow = createProviderRow(providerConfigs, provider.id, onChanged, syncAllRows);
@@ -505,6 +504,7 @@ export function createProviderSettingsPage(providerConfigs, onChanged) {
     }
 
     page.add(group);
+    page.add(imageGenerationSettings.group);
     return page;
 }
 

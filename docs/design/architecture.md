@@ -62,7 +62,7 @@ Cusco starts as a standalone native GNOME application.
 - The custom OpenAI-compatible provider stores its base URL and model IDs in GSettings, while its API key stays in Secret Service.
 - Provider model discovery refreshes model lists from supported provider APIs and persists discovered model metadata in GSettings. Provider/model capability metadata, including supported thinking levels, lives in the provider registry and is documented in `docs/user/provider-models.md`.
 - Memory writes are never implicit: user messages can trigger a proposal dialog, and only explicit approval stores memory.
-- Memory use is per-chat controllable and creates both a visible transcript system message and a stored usage audit entry.
+- Memory use is per-chat controllable and creates a stored usage audit entry without adding a transcript system message.
 - Installed skills are discovered from `~/.agents/skills`, enabled in the Skills preferences page, selected per chat, and injected as ephemeral hidden provider context.
 - Tools run before the assistant response when requested with slash commands; sensitive web search asks for permission and tool results render as expandable transcript entries with citations where available.
 - Local file and image attachments are selected through the native GTK file dialog and folded into the user message context.

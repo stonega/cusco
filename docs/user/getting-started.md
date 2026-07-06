@@ -16,7 +16,7 @@ The Custom API provider accepts an OpenAI-compatible base URL and comma-separate
 
 Provider settings can refresh model lists from supported remote APIs after credentials are configured. Cusco keeps a supported built-in model matrix with per-model thinking levels in [Provider Models](provider-models.md).
 
-Memory is opt-in at write time. When a message looks like a useful long-term fact, Cusco asks before saving it. The Memory page in Preferences can search, edit, pin, disable, delete, import, and export memories. When memories are used in a chat, Cusco adds a visible transcript note and records an audit entry.
+Memory is opt-in at write time. When a message looks like a useful long-term fact, Cusco asks before saving it. The Memory page in Preferences can search, edit, pin, disable, delete, import, and export memories. When memories are used in a chat, Cusco records a local audit entry without adding a transcript note.
 
 Tools can be requested from the composer with `/search`, `/calc`, and `/data`. Web search asks for permission before sending a query and returns cited results. The attachment button adds local file context or image attachment notes to the next message.
 
