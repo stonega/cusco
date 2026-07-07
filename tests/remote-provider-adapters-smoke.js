@@ -1,3 +1,5 @@
+import GLib from 'gi://GLib?version=2.0';
+
 import {
     buildAnthropicMessagesBody,
     buildGeminiGenerateContentBody,
@@ -43,6 +45,22 @@ const messages = [
     createMessage('user', 'Hello'),
     createMessage('assistant', 'Hi'),
     createMessage('user', 'Summarize Cusco'),
+];
+const imagePath = GLib.build_filenamev([
+    GLib.get_tmp_dir(),
+    `cusco-provider-image-${GLib.uuid_string_random()}.png`,
+]);
+const imageBytes = new TextEncoder().encode('tiny-image');
+const imageData = GLib.base64_encode(imageBytes);
+GLib.file_set_contents(imagePath, imageBytes);
+const imageMessages = [
+    createMessage('user', 'Describe this image', {
+        attachments: [{
+            kind: 'image',
+            name: 'tiny.png',
+            path: imagePath,
+        }],
+    }),
 ];
 
 const openAiBody = buildOpenAiResponsesBody(messages, 'gpt-test');
@@ -94,10 +112,23 @@ assertEqual(openAiThinkingBody.reasoning.effort, 'high', 'OpenAI reasoning effor
 assertEqual(openAiThinkingBody.reasoning.summary, 'auto', 'OpenAI reasoning summary');
 assertEqual(openAiThinkingBody.max_output_tokens, 16000, 'OpenAI custom max output tokens');
 
+const openAiImageBody = buildOpenAiResponsesBody(imageMessages, 'gpt-test');
+assertEqual(openAiImageBody.input[0].content[0].type, 'input_text', 'OpenAI image prompt text part');
+assertEqual(openAiImageBody.input[0].content[1].type, 'input_image', 'OpenAI image part');
+assertEqual(openAiImageBody.input[0].content[1].image_url, `data:image/png;base64,${imageData}`, 'OpenAI image data URL');
+
 const chatBody = buildOpenAiCompatibleChatBody(messages, 'chat-test');
 assertEqual(chatBody.messages[0].role, 'system', 'OpenAI-compatible system role');
 assertEqual(chatBody.max_tokens, 8192, 'OpenAI-compatible default max tokens');
 assertEqual(chatBody.stream, false, 'OpenAI-compatible stream flag');
+const chatImageBody = buildOpenAiCompatibleChatBody(imageMessages, 'chat-test');
+assertEqual(chatImageBody.messages[0].content[0].type, 'text', 'OpenAI-compatible image prompt text part');
+assertEqual(chatImageBody.messages[0].content[1].type, 'image_url', 'OpenAI-compatible image part');
+assertEqual(chatImageBody.messages[0].content[1].image_url.url, `data:image/png;base64,${imageData}`, 'OpenAI-compatible image data URL');
+const unsupportedChatImageBody = buildOpenAiCompatibleChatBody(imageMessages, 'chat-test', {
+    provider: { supportsImageAttachments: false },
+});
+assertEqual(unsupportedChatImageBody.messages[0].content, 'Describe this image', 'Unsupported OpenAI-compatible provider omits image parts');
 
 const chatToolBody = buildOpenAiCompatibleChatBody(messages, 'chat-test', {
     tools: [mcpTool],
@@ -201,6 +232,11 @@ assertEqual(anthropicBody.model, 'claude-test', 'Anthropic model');
 assertEqual(anthropicBody.system, 'Keep answers concise.', 'Anthropic system text');
 assertEqual(anthropicBody.max_tokens, 8192, 'Anthropic default max tokens');
 assertEqual(anthropicBody.messages.length, 3, 'Anthropic conversation message count');
+const anthropicImageBody = buildAnthropicMessagesBody(imageMessages, 'claude-test');
+assertEqual(anthropicImageBody.messages[0].content[0].type, 'image', 'Anthropic image part');
+assertEqual(anthropicImageBody.messages[0].content[0].source.media_type, 'image/png', 'Anthropic image MIME type');
+assertEqual(anthropicImageBody.messages[0].content[0].source.data, imageData, 'Anthropic image data');
+assertEqual(anthropicImageBody.messages[0].content[1].type, 'text', 'Anthropic image prompt text part');
 const anthropicToolBody = buildAnthropicMessagesBody(messages, 'claude-test', {
     tools: [mcpTool],
 });
@@ -227,6 +263,10 @@ const geminiBody = buildGeminiGenerateContentBody(messages);
 assertEqual(geminiBody.systemInstruction.parts[0].text, 'Keep answers concise.', 'Gemini system instruction');
 assertEqual(geminiBody.contents[1].role, 'model', 'Gemini assistant role');
 assertEqual(geminiBody.generationConfig.maxOutputTokens, 8192, 'Gemini default max output tokens');
+const geminiImageBody = buildGeminiGenerateContentBody(imageMessages);
+assertEqual(geminiImageBody.contents[0].parts[0].text, 'Describe this image', 'Gemini image prompt text part');
+assertEqual(geminiImageBody.contents[0].parts[1].inline_data.mime_type, 'image/png', 'Gemini image MIME type');
+assertEqual(geminiImageBody.contents[0].parts[1].inline_data.data, imageData, 'Gemini image data');
 const geminiThinkingLevelBody = buildGeminiGenerateContentBody(messages, {
     model: {
         thinking: {
@@ -438,5 +478,8 @@ for await (const chunk of toolCallingProvider.streamChat([createMessage('user', 
 
 assertEqual(providerToolCall.name, 'calc', 'Provider tool call chunk name');
 assertEqual(providerToolCall.input, '2 + 2', 'Provider tool call chunk input');
+
+if (GLib.file_test(imagePath, GLib.FileTest.EXISTS))
+    GLib.unlink(imagePath);
 
 print('Cusco remote provider adapters smoke passed');

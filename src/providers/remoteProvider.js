@@ -34,6 +34,15 @@ const SUPPORTED_GEMINI_MODEL_IDS = new Set([
     'gemini-3.1-pro-preview',
 ]);
 const MAX_NATIVE_TOOL_DESCRIPTION_CHARS = 1024;
+const IMAGE_MIME_TYPES_BY_EXTENSION = new Map([
+    ['.bmp', 'image/bmp'],
+    ['.gif', 'image/gif'],
+    ['.jpeg', 'image/jpeg'],
+    ['.jpg', 'image/jpeg'],
+    ['.png', 'image/png'],
+    ['.svg', 'image/svg+xml'],
+    ['.webp', 'image/webp'],
+]);
 const GEMINI_SCHEMA_FIELDS = new Set([
     'type',
     'format',
@@ -103,6 +112,45 @@ export function streamChunks(text) {
 
 function messageContent(message) {
     return String(message.content ?? '');
+}
+
+function imageMimeTypeForAttachment(attachment) {
+    const explicitMimeType = String(attachment?.mimeType ?? attachment?.mime_type ?? '').trim().toLowerCase();
+
+    if (explicitMimeType.startsWith('image/'))
+        return explicitMimeType;
+
+    const name = String(attachment?.name ?? attachment?.path ?? '').toLowerCase();
+    const extension = [...IMAGE_MIME_TYPES_BY_EXTENSION.keys()].find((item) => name.endsWith(item));
+
+    return extension ? IMAGE_MIME_TYPES_BY_EXTENSION.get(extension) : 'image/png';
+}
+
+function imageAttachments(message) {
+    return (message?.attachments ?? []).filter((attachment) => {
+        if (attachment?.kind !== 'image')
+            return false;
+
+        const path = String(attachment.path ?? '').trim();
+        return Boolean(path) && GLib.file_test(path, GLib.FileTest.EXISTS);
+    });
+}
+
+function encodedImageAttachment(attachment) {
+    const [, contents] = GLib.file_get_contents(attachment.path);
+    return {
+        name: String(attachment.name ?? GLib.path_get_basename(attachment.path)),
+        mimeType: imageMimeTypeForAttachment(attachment),
+        data: GLib.base64_encode(contents),
+    };
+}
+
+function encodedImageAttachments(message) {
+    return imageAttachments(message).map(encodedImageAttachment);
+}
+
+function imageDataUrl(image) {
+    return `data:${image.mimeType};base64,${image.data}`;
 }
 
 function providerMessages(messages) {
@@ -646,17 +694,23 @@ export function extractGeminiToolCalls(response) {
         .filter((toolCall) => toolCall.name);
 }
 
+function providerSupportsImageAttachments(provider) {
+    return provider?.supportsImageAttachments !== false;
+}
+
 export function openAiMessages(messages) {
     return providerMessages(messages).map((message) => ({
         role: message.role === 'system' ? 'developer' : message.role,
-        content: messageContent(message),
+        content: openAiContent(message, { responses: true }),
     }));
 }
 
-export function openAiCompatibleMessages(messages) {
+export function openAiCompatibleMessages(messages, options = {}) {
+    const includeImages = providerSupportsImageAttachments(options.provider ?? options.config);
+
     return providerMessages(messages).map((message) => ({
         role: message.role,
-        content: messageContent(message),
+        content: openAiContent(message, { includeImages }),
     }));
 }
 
@@ -670,7 +724,7 @@ export function anthropicPayloadMessages(messages) {
         .filter((message) => message.role === 'user' || message.role === 'assistant')
         .map((message) => ({
             role: message.role,
-            content: messageContent(message),
+            content: anthropicContent(message),
         }));
 
     return { system, messages: conversationMessages };
@@ -686,7 +740,7 @@ export function geminiPayload(messages) {
         .filter((message) => message.role === 'user' || message.role === 'assistant')
         .map((message) => ({
             role: message.role === 'assistant' ? 'model' : 'user',
-            parts: [{ text: messageContent(message) }],
+            parts: geminiParts(message),
         }));
 
     const payload = { contents };
@@ -695,6 +749,82 @@ export function geminiPayload(messages) {
         payload.systemInstruction = { parts: [{ text: systemMessages }] };
 
     return payload;
+}
+
+function openAiContent(message, options = {}) {
+    const images = options.includeImages === false
+        ? []
+        : encodedImageAttachments(message);
+
+    if (images.length === 0)
+        return messageContent(message);
+
+    const textType = options.responses ? 'input_text' : 'text';
+    const imageType = options.responses ? 'input_image' : 'image_url';
+    const text = messageContent(message);
+    const parts = [];
+
+    if (text)
+        parts.push({ type: textType, text });
+
+    for (const image of images) {
+        if (options.responses) {
+            parts.push({
+                type: imageType,
+                image_url: imageDataUrl(image),
+            });
+        } else {
+            parts.push({
+                type: imageType,
+                image_url: {
+                    url: imageDataUrl(image),
+                },
+            });
+        }
+    }
+
+    return parts;
+}
+
+function anthropicContent(message) {
+    const images = encodedImageAttachments(message);
+
+    if (images.length === 0)
+        return messageContent(message);
+
+    const parts = images.map((image) => ({
+        type: 'image',
+        source: {
+            type: 'base64',
+            media_type: image.mimeType,
+            data: image.data,
+        },
+    }));
+    const text = messageContent(message);
+
+    if (text)
+        parts.push({ type: 'text', text });
+
+    return parts;
+}
+
+function geminiParts(message) {
+    const parts = [];
+    const text = messageContent(message);
+
+    if (text)
+        parts.push({ text });
+
+    for (const image of encodedImageAttachments(message)) {
+        parts.push({
+            inline_data: {
+                mime_type: image.mimeType,
+                data: image.data,
+            },
+        });
+    }
+
+    return parts.length > 0 ? parts : [{ text: '' }];
 }
 
 function getRequestedThinkingConfig(config, model, level) {
@@ -863,7 +993,7 @@ export function buildOpenAiResponsesBody(messages, modelId, options = {}) {
 export function buildOpenAiCompatibleChatBody(messages, modelId, options = {}) {
     const body = {
         model: modelId,
-        messages: openAiCompatibleMessages(messages),
+        messages: openAiCompatibleMessages(messages, options),
         max_tokens: normalizeMaxOutputTokens(options.maxOutputTokens),
         stream: false,
     };

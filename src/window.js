@@ -1,6 +1,7 @@
 import Cairo from 'cairo';
 import Adw from 'gi://Adw?version=1';
 import Gdk from 'gi://Gdk?version=4.0';
+import GdkPixbuf from 'gi://GdkPixbuf?version=2.0';
 import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 import GObject from 'gi://GObject?version=2.0';
@@ -72,6 +73,10 @@ const KNOT_ICON_STROKE_WIDTH = 35;
 const KNOT_ICON_SAMPLE_STEPS = 28;
 const KNOT_ICON_ANIMATION_SECONDS = 1;
 const LONG_RESPONSE_NOTIFICATION_DELAY_MS = 10000;
+const IMAGE_ATTACHMENT_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'];
+const MAX_ATTACHMENT_TEXT_CHARS = 20000;
+const COMPOSER_ATTACHMENT_THUMBNAIL_WIDTH = 36;
+const COMPOSER_ATTACHMENT_THUMBNAIL_HEIGHT = 28;
 const KNOT_ICON_CURVES = [
     [15, 219.379, 56.5, 207.379, 186.6, 201.8, 431, 259],
     [431, 259, 736.5, 330.5, 706.5, 70.3797, 706.5, 70.3797],
@@ -254,6 +259,51 @@ function getMessageReasoningContent(message) {
     return String(message?.reasoning?.content ?? '').trim();
 }
 
+function isImageAttachmentName(name) {
+    const lowerName = String(name ?? '').toLowerCase();
+    return IMAGE_ATTACHMENT_EXTENSIONS.some((extension) => lowerName.endsWith(extension));
+}
+
+function isImageAttachment(attachment) {
+    return attachment?.kind === 'image' || isImageAttachmentName(attachment?.name);
+}
+
+function imageAttachmentSummaryLine(attachment) {
+    return `Image attachment: ${attachment.name}`;
+}
+
+function attachmentPathExists(attachment) {
+    const path = String(attachment?.path ?? '').trim();
+    return Boolean(path) && GLib.file_test(path, GLib.FileTest.EXISTS);
+}
+
+function createScaledImagePaintable(path, width, height) {
+    try {
+        const pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, width, height, true);
+        return Gdk.Texture.new_for_pixbuf(pixbuf);
+    } catch (error) {
+        logError(error, `Failed to load image preview: ${path}`);
+        return null;
+    }
+}
+
+function displayBodyWithoutImageAttachmentLines(body, message) {
+    const text = String(body ?? '');
+    const imageSummaryLines = new Set((message?.attachments ?? [])
+        .filter(isImageAttachment)
+        .map(imageAttachmentSummaryLine));
+
+    if (imageSummaryLines.size === 0)
+        return text;
+
+    return text
+        .split('\n')
+        .filter((line) => !imageSummaryLines.has(line.trim()))
+        .join('\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
 export const CuscoWindow = GObject.registerClass(
 class CuscoWindow extends Adw.ApplicationWindow {
     _init(application) {
@@ -344,7 +394,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
         chatView.set_content(this._createChatSurface());
         split.set_end_child(chatView);
 
-        this.set_content(split);
+        this._toastOverlay = new Adw.ToastOverlay({
+            child: split,
+        });
+        this.set_content(this._toastOverlay);
         this._installKeyboardShortcuts();
         this.connect('notify::width', () => this._updateAdaptiveLayout());
         this._applyAccessibilityPreferences();
@@ -544,23 +597,30 @@ class CuscoWindow extends Adw.ApplicationWindow {
             visible: false,
         });
         this._attachmentRow.add_css_class('cusco-attachment-row');
-        this._attachmentLabel = new Gtk.Label({
-            label: '',
-            xalign: 0,
+        this._attachmentPreviewList = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 8,
             hexpand: true,
-            ellipsize: Pango.EllipsizeMode.END,
         });
-        this._attachmentLabel.add_css_class('caption');
-        this._attachmentLabel.add_css_class('dim-label');
+        this._attachmentPreviewScroller = new Gtk.ScrolledWindow({
+            child: this._attachmentPreviewList,
+            hexpand: true,
+            hscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+            vscrollbar_policy: Gtk.PolicyType.NEVER,
+            min_content_height: 42,
+            max_content_height: 50,
+            propagate_natural_height: true,
+        });
+        this._attachmentPreviewScroller.add_css_class('cusco-attachment-preview-scroller');
         this._removeAttachmentButton = new Gtk.Button({
             icon_name: 'window-close-symbolic',
-            tooltip_text: 'Remove attachment',
+            tooltip_text: 'Clear attachments',
             valign: Gtk.Align.CENTER,
         });
         this._removeAttachmentButton.add_css_class('flat');
         this._removeAttachmentButton.add_css_class('circular');
         this._removeAttachmentButton.connect('clicked', () => this._clearPendingAttachments());
-        this._attachmentRow.append(this._attachmentLabel);
+        this._attachmentRow.append(this._attachmentPreviewScroller);
         this._attachmentRow.append(this._removeAttachmentButton);
 
         this._attachButton = new Gtk.Button({
@@ -643,8 +703,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
             }
 
             const text = this._getComposerText().trim();
+            const hasAttachments = this._pendingAttachments.length > 0;
 
-            if (!text)
+            if (!text && !hasAttachments)
                 return;
 
             this._setComposerText('');
@@ -807,6 +868,15 @@ class CuscoWindow extends Adw.ApplicationWindow {
             (change) => this._handleProviderSettingsChanged(change),
             options,
         );
+    }
+
+    _showToast(title) {
+        if (!this._toastOverlay)
+            return;
+
+        this._toastOverlay.add_toast(new Adw.Toast({
+            title,
+        }));
     }
 
     async _handleCronJobChanged(job) {
@@ -1247,6 +1317,25 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
     }
 
+    _activeProviderSupportsImageAttachments() {
+        const providerId = this._conversations.activeConversation?.providerId
+            ?? this._providerPicker?.get_active_id?.()
+            ?? '';
+        const provider = this._providerConfigs.getProvider(providerId);
+
+        return provider?.supportsImageAttachments !== false;
+    }
+
+    _activeImageAttachmentUnsupportedMessage() {
+        const providerId = this._conversations.activeConversation?.providerId
+            ?? this._providerPicker?.get_active_id?.()
+            ?? '';
+        const provider = this._providerConfigs.getProvider(providerId);
+        const name = provider?.name ?? 'The selected provider';
+
+        return `${name} does not support image attachments.`;
+    }
+
     _attachFileContext() {
         const dialog = new Gtk.FileDialog({
             title: 'Attach File or Image',
@@ -1260,6 +1349,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 if (!path)
                     throw new Error('Only local file attachments are supported right now');
 
+                const isImage = isImageAttachmentName(GLib.path_get_basename(path));
+
+                if (isImage && !this._activeProviderSupportsImageAttachments()) {
+                    this._showToast(this._activeImageAttachmentUnsupportedMessage());
+                    return;
+                }
+
                 this._pendingAttachments.push(this._createAttachmentFromPath(path));
                 this._updateAttachmentLabel();
             } catch (error) {
@@ -1270,12 +1366,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _createAttachmentFromPath(path) {
         const name = GLib.path_get_basename(path);
-        const lowerName = name.toLowerCase();
-        const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].some((extension) => (
-            lowerName.endsWith(extension)
-        ));
 
-        if (isImage) {
+        if (isImageAttachmentName(name)) {
             return {
                 kind: 'image',
                 name,
@@ -1290,8 +1382,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
             kind: 'file',
             name,
             path,
-            content: text.slice(0, 20000),
-            truncated: text.length > 20000,
+            content: text.slice(0, MAX_ATTACHMENT_TEXT_CHARS),
+            truncated: text.length > MAX_ATTACHMENT_TEXT_CHARS,
         };
     }
 
@@ -1308,15 +1400,119 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this.focusComposer();
     }
 
+    _discardPendingImageAttachmentsIfUnsupportedProvider() {
+        if (this._activeProviderSupportsImageAttachments())
+            return;
+
+        const nextAttachments = this._pendingAttachments.filter((attachment) => !isImageAttachment(attachment));
+
+        if (nextAttachments.length === this._pendingAttachments.length)
+            return;
+
+        this._pendingAttachments = nextAttachments;
+        this._updateAttachmentLabel();
+        this._showToast(this._activeImageAttachmentUnsupportedMessage());
+    }
+
+    _removePendingAttachment(index) {
+        this._pendingAttachments.splice(index, 1);
+        this._updateAttachmentLabel();
+        this.focusComposer();
+    }
+
     _updateAttachmentLabel() {
         if (this._pendingAttachments.length === 0) {
-            this._attachmentLabel.set_label('');
+            this._clearBox(this._attachmentPreviewList);
             this._attachmentRow.set_visible(false);
             return;
         }
 
-        this._attachmentLabel.set_label(`Attached: ${this._pendingAttachments.map((attachment) => attachment.name).join(', ')}`);
+        this._clearBox(this._attachmentPreviewList);
+        this._pendingAttachments.forEach((attachment, index) => {
+            this._attachmentPreviewList.append(this._createPendingAttachmentPreview(attachment, index));
+        });
         this._attachmentRow.set_visible(true);
+    }
+
+    _createPendingAttachmentPreview(attachment, index) {
+        return this._createAttachmentPreviewCard(attachment, {
+            onRemove: () => this._removePendingAttachment(index),
+            removeTooltip: `Remove ${attachment.name}`,
+        });
+    }
+
+    _createAttachmentPreviewCard(attachment, options = {}) {
+        const card = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 8,
+            valign: Gtk.Align.CENTER,
+        });
+        card.add_css_class('cusco-composer-attachment-preview');
+
+        const attachmentPaintable = isImageAttachment(attachment) && attachmentPathExists(attachment)
+            ? createScaledImagePaintable(
+                attachment.path,
+                COMPOSER_ATTACHMENT_THUMBNAIL_WIDTH,
+                COMPOSER_ATTACHMENT_THUMBNAIL_HEIGHT,
+            )
+            : null;
+
+        if (attachmentPaintable) {
+            const picture = new Gtk.Picture({
+                can_shrink: true,
+                keep_aspect_ratio: true,
+            });
+            picture.set_content_fit(Gtk.ContentFit.COVER);
+            picture.set_size_request(COMPOSER_ATTACHMENT_THUMBNAIL_WIDTH, COMPOSER_ATTACHMENT_THUMBNAIL_HEIGHT);
+            picture.set_paintable(attachmentPaintable);
+            picture.add_css_class('cusco-composer-attachment-thumbnail');
+            card.append(picture);
+        } else {
+            const icon = new Gtk.Image({
+                icon_name: isImageAttachment(attachment) ? 'image-missing-symbolic' : 'text-x-generic-symbolic',
+                pixel_size: 22,
+                valign: Gtk.Align.CENTER,
+            });
+            icon.add_css_class('cusco-composer-attachment-icon');
+            card.append(icon);
+        }
+
+        const textBox = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 1,
+            valign: Gtk.Align.CENTER,
+        });
+        const nameLabel = new Gtk.Label({
+            label: attachment.name,
+            xalign: 0,
+            ellipsize: Pango.EllipsizeMode.END,
+            max_width_chars: 24,
+        });
+        const kindLabel = new Gtk.Label({
+            label: isImageAttachment(attachment) ? 'Image' : 'File',
+            xalign: 0,
+            ellipsize: Pango.EllipsizeMode.END,
+            max_width_chars: 24,
+        });
+        kindLabel.add_css_class('caption');
+        kindLabel.add_css_class('dim-label');
+        textBox.append(nameLabel);
+        textBox.append(kindLabel);
+        card.append(textBox);
+
+        if (options.onRemove) {
+            const removeButton = new Gtk.Button({
+                icon_name: 'window-close-symbolic',
+                tooltip_text: options.removeTooltip ?? `Remove ${attachment.name}`,
+                valign: Gtk.Align.CENTER,
+            });
+            removeButton.add_css_class('flat');
+            removeButton.add_css_class('circular');
+            removeButton.connect('clicked', options.onRemove);
+            card.append(removeButton);
+        }
+
+        return card;
     }
 
     _formatUserMessageContent(text, attachments) {
@@ -1335,7 +1531,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             ].join('\n');
         }).join('\n\n');
 
-        return `${text}\n\n${attachmentText}`;
+        return [text, attachmentText].filter(Boolean).join('\n\n');
     }
 
     async _streamAssistantResponse(conversationId, options = {}) {
@@ -2500,6 +2696,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._skillsToggleButton.set_active(this._workspace.getSkillsForConversation(conversation).length > 0);
         this._skillsToggleButton.set_sensitive(this._workspace.enabledSkills.length > 0);
         this._isUpdatingProviderControls = false;
+        this._discardPendingImageAttachmentsIfUnsupportedProvider();
     }
 
     _handleMemoryToggleChanged() {
@@ -2594,6 +2791,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         );
         this._providerConfigs.setActiveSelection(providerId, model?.id ?? '');
         this._syncProviderControls(conversation);
+        this._discardPendingImageAttachmentsIfUnsupportedProvider();
         this._refreshConversationList();
     }
 
@@ -3563,6 +3761,30 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return container;
     }
 
+    _createMessageImageAttachmentPreviews(message, role) {
+        const imageAttachments = (message?.attachments ?? []).filter(isImageAttachment);
+
+        if (imageAttachments.length === 0)
+            return null;
+
+        const list = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 8,
+            halign: role === 'user' ? Gtk.Align.END : Gtk.Align.START,
+        });
+        list.add_css_class('cusco-message-image-attachments');
+
+        imageAttachments.forEach((attachment) => {
+            list.append(this._createMessageImageAttachmentPreview(attachment));
+        });
+
+        return list;
+    }
+
+    _createMessageImageAttachmentPreview(attachment) {
+        return this._createAttachmentPreviewCard(attachment);
+    }
+
     _addMessage(body, kind, message = null) {
         if (message?.toolCall?.agentMode && this._lastAssistantMessageView?.append_tool_result) {
             const toolView = this._lastAssistantMessageView.append_tool_result(message);
@@ -3610,14 +3832,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
         bubble.add_css_class('cusco-message-bubble');
         bubble.add_css_class(kind === 'user' ? 'cusco-message-user' : 'cusco-message-assistant');
 
-        const bodyContent = createMessageContent(body, this._messageContentOptions({
+        const imageAttachmentPreviews = this._createMessageImageAttachmentPreviews(message, kind);
+        const displayBody = displayBodyWithoutImageAttachmentLines(body, message);
+        const bodyContent = createMessageContent(displayBody || ' ', this._messageContentOptions({
             role: kind,
         }));
-        let currentBodyText = String(body ?? '');
+        let currentBodyText = String(displayBody ?? '');
         let loadingRow = null;
         let hasToolResults = false;
 
-        if (isStreamingAssistant && !currentBodyText)
+        if ((isStreamingAssistant || imageAttachmentPreviews) && !currentBodyText)
             bodyContent.set_visible(false);
 
         const clearLoading = () => {
@@ -3673,9 +3897,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
             };
         };
 
+        if (imageAttachmentPreviews && kind === 'user')
+            wrapper.append(imageAttachmentPreviews);
+
         bubble.append(bodyContent);
 
-        wrapper.append(bubble);
+        if (imageAttachmentPreviews && kind !== 'user')
+            bubble.append(imageAttachmentPreviews);
+
+        if (currentBodyText || isStreamingAssistant || kind !== 'user')
+            wrapper.append(bubble);
 
         if (message?.id && kind !== 'system')
             wrapper.append(this._createMessageActions(message));

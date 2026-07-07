@@ -561,5 +561,5 @@ export function presentProviderSettingsDialog(
     if (options.initialPage === 'providers')
         dialog.set_visible_page(page);
 
-    dialog.present(parent);
+    dialog.present();
 }
