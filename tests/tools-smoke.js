@@ -10,9 +10,11 @@ import {
 } from '../src/tools/display.js';
 import {
     calculateExpression,
+    commandUsesSudo,
     extractSearchResults,
     formatToolResultForTranscript,
     parseToolRequest,
+    runBashCommand,
     summarizeStructuredData,
     ToolManager,
 } from '../src/tools/tools.js';
@@ -39,6 +41,12 @@ const request = parseToolRequest('/search native GNOME chat app');
 
 if (!request?.requiresPermission || request.name !== 'search')
     throw new Error('Search tool request was not parsed with permission requirement');
+
+if (!commandUsesSudo('sudo systemctl status')
+    || !commandUsesSudo('/usr/bin/sudo systemctl status')
+    || commandUsesSudo('printf sudoers')) {
+    throw new Error('Bash sudo command detection failed');
+}
 
 const manager = new ToolManager();
 const listedTools = manager.listTools();
@@ -127,6 +135,27 @@ const bashResult = await manager.runRequest(manager.createRequest('bash', 'print
 
 if (bashResult.exitStatus !== 0 || !bashResult.stdout.includes('cusco-bash-smoke'))
     throw new Error(`Bash tool failed: ${bashResult.output}`);
+
+let sudoPasswordRequested = false;
+const noSudoPromptResult = await runBashCommand('printf no-sudo-prompt', {
+    requestSudoPassword: async () => {
+        sudoPasswordRequested = true;
+        return 'unused';
+    },
+});
+
+if (sudoPasswordRequested || !noSudoPromptResult.stdout.includes('no-sudo-prompt'))
+    throw new Error('Bash requested a sudo password for a non-sudo command');
+
+const emptyBashResult = await manager.runRequest(manager.createRequest('bash', 'true'));
+const emptyBashTranscript = formatToolResultForTranscript(emptyBashResult);
+
+if (emptyBashResult.output.includes('stdout: <empty>')
+    || emptyBashResult.output.includes('stderr: <empty>')
+    || emptyBashTranscript.includes('stdout: <empty>')
+    || emptyBashTranscript.includes('stderr: <empty>')) {
+    throw new Error('Empty bash output streams should be hidden');
+}
 
 let streamedOutput = '';
 const streamedBashResult = await manager.runRequest(

@@ -24,11 +24,13 @@ install_data(
   install_dir: datadir / 'gnome-shell' / 'search-providers',
 )
 
-install_data(
-  '../assets/icon.png',
-  rename: application_id + '.png',
-  install_dir: datadir / 'icons' / 'hicolor' / '512x512' / 'apps',
-)
+app_icon_file = application_id + '.png'
+foreach icon_size : ['64x64', '128x128', '256x256', '512x512']
+  install_data(
+    'icons' / 'hicolor' / icon_size / 'apps' / app_icon_file,
+    install_dir: datadir / 'icons' / 'hicolor' / icon_size / 'apps',
+  )
+endforeach
 
 install_subdir(
   'resources',

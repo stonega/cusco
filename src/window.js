@@ -1177,6 +1177,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 timeoutSeconds: this._appSettings.responseTimeoutSeconds,
                 cancellable,
                 onOutput: (chunk) => this._appendToolOutputChunk(runningTool, chunk),
+                requestSudoPassword: request.name === 'bash'
+                    ? (command) => this._promptSudoPassword(command, cancellable)
+                    : null,
             });
             const status = result.cancelled ? 'cancelled' : 'completed';
             this._completeRunningToolMessage(conversationId, runningTool, result, status);
@@ -1313,6 +1316,65 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
                     resolve(false);
                 }
+            });
+        });
+    }
+
+    _promptSudoPassword(command, cancellable = null) {
+        return new Promise((resolve) => {
+            if (isCancellableCancelled(cancellable)) {
+                resolve(null);
+                return;
+            }
+
+            const entry = new Gtk.PasswordEntry({
+                placeholder_text: 'Password',
+                show_peek_icon: true,
+                hexpand: true,
+            });
+            const box = new Gtk.Box({
+                orientation: Gtk.Orientation.VERTICAL,
+                spacing: 8,
+            });
+            const commandLabel = new Gtk.Label({
+                label: String(command ?? ''),
+                xalign: 0,
+                selectable: true,
+                wrap: true,
+                max_width_chars: 72,
+            });
+            commandLabel.add_css_class('monospace');
+            commandLabel.add_css_class('caption');
+            box.append(commandLabel);
+            box.append(entry);
+
+            const dialog = new Adw.AlertDialog({
+                heading: 'Sudo Password Required',
+                body: 'Enter your sudo password to run this command. The password is not stored.',
+            });
+            dialog.set_extra_child(box);
+            dialog.add_response('cancel', 'Cancel');
+            dialog.add_response('run', 'Run');
+            dialog.set_default_response('run');
+            dialog.set_close_response('cancel');
+            dialog.set_response_appearance('run', Adw.ResponseAppearance.SUGGESTED);
+            dialog.choose(this, cancellable, (_dialog, result) => {
+                try {
+                    const response = dialog.choose_finish(result);
+                    const password = entry.get_text();
+
+                    resolve(response === 'run' && password ? password : null);
+                } catch (error) {
+                    if (!wasOperationCancelled(error, cancellable))
+                        logError(error, 'Failed to resolve sudo password dialog');
+
+                    resolve(null);
+                }
+            });
+
+            GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                entry.grab_focus();
+                return GLib.SOURCE_REMOVE;
             });
         });
     }
@@ -1932,6 +1994,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 timeoutSeconds: this._appSettings.responseTimeoutSeconds,
                 cancellable,
                 onOutput: (chunk) => this._appendToolOutputChunk(runningTool, chunk),
+                requestSudoPassword: request.name === 'bash'
+                    ? (command) => this._promptSudoPassword(command, cancellable)
+                    : null,
             });
             const transcriptText = formatToolResultForTranscript(result);
             this._completeRunningToolMessage(

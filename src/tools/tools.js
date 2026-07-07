@@ -11,6 +11,12 @@ const MAX_FILE_LIST_ITEMS = 200;
 const MAX_TOOL_OUTPUT_CHARS = 60000;
 const MAX_BASH_OUTPUT_CHARS = 40000;
 const BASH_READ_CHUNK_BYTES = 4096;
+const SUDO_AUTH_REQUIRED_PATTERNS = [
+    'a password is required',
+    'a terminal is required',
+    'no tty present',
+    'password is required',
+];
 
 const SENSITIVE_PATHS = [
     '.ssh',
@@ -499,6 +505,120 @@ function bashProgram() {
     return path;
 }
 
+function sudoProgram() {
+    return GLib.find_program_in_path('sudo');
+}
+
+export function commandUsesSudo(command) {
+    return /(^|[\s;|&({])(?:sudo|(?:\/[^\s;|&(){}]+)*\/sudo)(?=$|[\s;|&)}])/.test(String(command ?? ''));
+}
+
+function sudoAuthRequired(output) {
+    const normalized = String(output ?? '').toLowerCase();
+    return SUDO_AUTH_REQUIRED_PATTERNS.some((pattern) => normalized.includes(pattern));
+}
+
+async function sudoNeedsPassword() {
+    const path = sudoProgram();
+
+    if (!path)
+        return false;
+
+    const subprocess = Gio.Subprocess.new(
+        [path, '-n', '-v'],
+        Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+    );
+    const [, stdoutResult, stderrResult] = await Promise.all([
+        waitForSubprocess(subprocess),
+        readTextPipe(subprocess.get_stdout_pipe()),
+        readTextPipe(subprocess.get_stderr_pipe()),
+    ]);
+
+    if (subprocess.get_if_exited() && subprocess.get_exit_status() === 0)
+        return false;
+
+    return sudoAuthRequired(`${stdoutResult.text}\n${stderrResult.text}`);
+}
+
+function writeSubprocessPassword(subprocess, password) {
+    const stream = subprocess.get_stdin_pipe();
+
+    if (!stream)
+        return;
+
+    stream.write_all(new TextEncoder().encode(`${password}\n`), null);
+
+    try {
+        stream.close(null);
+    } catch (error) {
+        if (!error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CLOSED))
+            throw error;
+    }
+}
+
+async function refreshSudoTimestamp(password) {
+    const path = sudoProgram();
+
+    if (!path)
+        throw userVisibleError('sudo was not found in PATH.');
+
+    const subprocess = Gio.Subprocess.new(
+        [path, '-S', '-p', '', '-v'],
+        Gio.SubprocessFlags.STDIN_PIPE | Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+    );
+    writeSubprocessPassword(subprocess, password);
+
+    const [, stdoutResult, stderrResult] = await Promise.all([
+        waitForSubprocess(subprocess),
+        readTextPipe(subprocess.get_stdout_pipe()),
+        readTextPipe(subprocess.get_stderr_pipe()),
+    ]);
+
+    if (subprocess.get_if_exited() && subprocess.get_exit_status() === 0)
+        return;
+
+    const detail = [stdoutResult.text, stderrResult.text].filter(Boolean).join('\n').trim();
+    throw userVisibleError(detail ? `Sudo authentication failed: ${detail}` : 'Sudo authentication failed.');
+}
+
+function bashCancelledResult(command) {
+    return {
+        command,
+        exitStatus: 130,
+        stdout: '',
+        stderr: '',
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        timedOut: false,
+        cancelled: true,
+        output: formatBashOutput({
+            exitStatus: 130,
+            cancelled: true,
+        }),
+    };
+}
+
+function formatBashOutput(result) {
+    return [
+        `exit status: ${result.exitStatus}`,
+        result.cancelled ? 'cancelled: true' : '',
+        result.stdout ? `stdout:\n${result.stdout}` : '',
+        result.stderr ? `stderr:\n${result.stderr}` : '',
+    ].filter(Boolean).join('\n\n');
+}
+
+function formatBashTranscript(result) {
+    return [
+        'Bash command',
+        '```sh',
+        result.command,
+        '```',
+        `Exit status: ${result.exitStatus}${result.timedOut ? ' (timed out)' : ''}${result.cancelled ? ' (cancelled)' : ''}`,
+        result.stdout ? `\nstdout\n\`\`\`text\n${result.stdout}\n\`\`\`` : '',
+        result.stderr ? `\nstderr\n\`\`\`text\n${result.stderr}\n\`\`\`` : '',
+    ].filter(Boolean).join('\n');
+}
+
 function createBoundedTextCollector(maxChars) {
     let text = '';
     let truncated = false;
@@ -595,6 +715,26 @@ export async function runBashCommand(command, options = {}) {
     let externalCancelHandlerId = 0;
     let timedOut = false;
     let cancelled = Boolean(externalCancellable?.is_cancelled?.());
+    const usesSudo = commandUsesSudo(normalizedCommand);
+
+    if (usesSudo && await sudoNeedsPassword()) {
+        if (typeof options.requestSudoPassword !== 'function')
+            throw userVisibleError('This command requires a sudo password, but Cusco cannot prompt for it here.');
+
+        let sudoPassword = await options.requestSudoPassword(normalizedCommand);
+
+        if (externalCancellable?.is_cancelled?.()) {
+            cancelled = true;
+            return bashCancelledResult(normalizedCommand);
+        }
+
+        if (!sudoPassword)
+            throw userVisibleError('Sudo password was not provided.');
+
+        await refreshSudoTimestamp(sudoPassword);
+        sudoPassword = null;
+    }
+
     const subprocess = Gio.Subprocess.new(
         [bashProgram(), '-lc', normalizedCommand],
         Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
@@ -644,12 +784,12 @@ export async function runBashCommand(command, options = {}) {
             stderrTruncated: stderrResult.truncated,
             timedOut,
             cancelled,
-            output: [
-                `exit status: ${normalizedExitStatus}`,
-                cancelled ? 'cancelled: true' : '',
-                stdoutResult.text ? `stdout:\n${stdoutResult.text}` : 'stdout: <empty>',
-                stderrResult.text ? `stderr:\n${stderrResult.text}` : 'stderr: <empty>',
-            ].filter(Boolean).join('\n\n'),
+            output: formatBashOutput({
+                exitStatus: normalizedExitStatus,
+                stdout: stdoutResult.text,
+                stderr: stderrResult.text,
+                cancelled,
+            }),
         };
     } finally {
         if (timeoutId)
@@ -708,15 +848,7 @@ export function formatToolResultForTranscript(result) {
         ].join('\n');
 
     if (result.name === 'bash')
-        return [
-            `Bash command`,
-            '```sh',
-            result.command,
-            '```',
-            `Exit status: ${result.exitStatus}${result.timedOut ? ' (timed out)' : ''}${result.cancelled ? ' (cancelled)' : ''}`,
-            result.stdout ? `\nstdout\n\`\`\`text\n${result.stdout}\n\`\`\`` : '\nstdout: <empty>',
-            result.stderr ? `\nstderr\n\`\`\`text\n${result.stderr}\n\`\`\`` : '\nstderr: <empty>',
-        ].join('\n');
+        return formatBashTranscript(result);
 
     if (result.name === 'image_gen')
         return [
