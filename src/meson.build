@@ -1,14 +1,22 @@
 cusco_sources = files(
   'main.js',
-  'appInfo.js',
   'application.js',
   'bundledIcons.js',
   'searchProvider.js',
   'window.js',
 )
 
+configure_file(
+  input: 'appInfo.js.in',
+  output: 'appInfo.js',
+  configuration: conf,
+  install: true,
+  install_dir: pkgdatadir,
+)
+
 chat_sources = files(
   'chat/agentMode.js',
+  'chat/artifacts.js',
   'chat/codeThemes.js',
   'chat/conversation.js',
   'chat/markdown.js',

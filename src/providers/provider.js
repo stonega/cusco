@@ -17,6 +17,7 @@ export function createMessage(role, content, options = {}) {
         role,
         content,
         attachments: Array.isArray(options.attachments) ? options.attachments : [],
+        artifacts: Array.isArray(options.artifacts) ? options.artifacts : [],
         reasoning: options.reasoning ?? null,
         usage: options.usage ?? null,
         toolCall: options.toolCall ?? null,

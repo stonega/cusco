@@ -4,8 +4,10 @@ import {
     APP_NAME,
     APP_VERSION,
 } from '../src/appInfo.js';
+import GLib from 'gi://GLib';
 import { APP_ID as APPLICATION_APP_ID, CuscoApplication } from '../src/application.js';
 import { buildAgentModeSystemPrompt, parseAgentToolCall } from '../src/chat/agentMode.js';
+import { extractArtifactsFromMarkdown } from '../src/chat/artifacts.js';
 import { ConversationManager } from '../src/chat/conversation.js';
 import { markdownToPangoMarkup, parseMarkdownBlocks } from '../src/chat/markdown.js';
 import { createMessageContent } from '../src/chat/messageView.js';
@@ -57,6 +59,15 @@ if (APPLICATION_APP_ID !== APP_ID)
 if (APP_NAME !== 'Cusco' || APP_VERSION.length === 0 || APP_AUTHOR.length === 0)
     throw new Error('App info metadata did not import correctly');
 
+const [, mesonBuildBytes] = GLib.file_get_contents('meson.build');
+const mesonBuild = new TextDecoder().decode(mesonBuildBytes);
+const versionMatch = /version:\s*'([^']+)'/.exec(mesonBuild);
+if (!versionMatch)
+    throw new Error('Could not read project version from meson.build');
+
+if (APP_VERSION !== versionMatch[1])
+    throw new Error(`App info version ${APP_VERSION} does not match Meson version ${versionMatch[1]}`);
+
 if (typeof CuscoApplication !== 'function')
     throw new Error('CuscoApplication did not import as a class');
 
@@ -74,6 +85,9 @@ if (typeof ConversationManager !== 'function')
 
 if (typeof buildAgentModeSystemPrompt !== 'function' || typeof parseAgentToolCall !== 'function')
     throw new Error('Agent Mode helpers did not import');
+
+if (typeof extractArtifactsFromMarkdown !== 'function')
+    throw new Error('Artifact helpers did not import');
 
 if (typeof CronJobManager !== 'function' || typeof createCronCreateTool !== 'function')
     throw new Error('Cron manager helpers did not import');

@@ -1,3 +1,5 @@
+import { normalizeArtifacts } from '../chat/artifacts.js';
+
 const TOOL_DISPLAY_PRESETS = {
     bash: {
         label: 'Bash',
@@ -216,6 +218,7 @@ export function createToolCallFromRequest(request, options = {}) {
         output: '',
         outputPreview: '',
         results: [],
+        artifacts: [],
         status,
         agentMode: Boolean(options.agentMode),
         createdAt: options.createdAt ?? new Date().toISOString(),
@@ -235,6 +238,7 @@ export function createToolCallFromResult(result, options = {}) {
         output: String(result?.output ?? ''),
         outputPreview: String(options.outputPreview ?? result?.outputPreview ?? ''),
         results: Array.isArray(result?.results) ? result.results : [],
+        artifacts: normalizeArtifacts(result?.artifacts),
         path: result?.path ?? '',
         query: result?.query ?? '',
         command: result?.command ?? '',

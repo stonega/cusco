@@ -2,6 +2,7 @@ import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 import Soup from 'gi://Soup?version=3.0';
 
+import { createImageArtifactFromPath } from '../chat/artifacts.js';
 import { TOOL_PERMISSION_ASK } from '../tools/permissions.js';
 
 const APP_ID = 'io.github.stonega.Cusco';
@@ -316,7 +317,10 @@ export function extractImageResponsePayload(response) {
             };
     }
 
-    const interactionImage = response?.interaction?.output_image ?? response?.output_image;
+    const interactionImage = response?.interaction?.output_image
+        ?? response?.interaction?.outputImage
+        ?? response?.output_image
+        ?? response?.outputImage;
 
     if (typeof interactionImage?.data === 'string' && interactionImage.data) {
         return {
@@ -326,6 +330,36 @@ export function extractImageResponsePayload(response) {
         };
     }
 
+    const stepItems = Array.isArray(response?.steps) ? response.steps : [];
+
+    for (const step of stepItems) {
+        const contentItems = [
+            ...(Array.isArray(step?.content) ? step.content : []),
+            ...(Array.isArray(step?.summary) ? step.summary : []),
+        ];
+
+        for (const content of contentItems) {
+            if (content?.type !== 'image')
+                continue;
+
+            if (typeof content.data === 'string' && content.data) {
+                return {
+                    type: 'base64',
+                    data: content.data,
+                    mimeType: content.mime_type ?? content.mimeType ?? DEFAULT_IMAGE_MIME_TYPE,
+                };
+            }
+
+            if (typeof content.uri === 'string' && content.uri) {
+                return {
+                    type: 'url',
+                    url: content.uri,
+                    mimeType: content.mime_type ?? content.mimeType ?? DEFAULT_IMAGE_MIME_TYPE,
+                };
+            }
+        }
+    }
+
     const outputItems = Array.isArray(response?.output) ? response.output : [];
 
     for (const item of outputItems) {
@@ -333,6 +367,22 @@ export function extractImageResponsePayload(response) {
             return {
                 type: 'base64',
                 data: item.result,
+                mimeType: item.mime_type ?? item.mimeType ?? DEFAULT_IMAGE_MIME_TYPE,
+            };
+        }
+
+        if (item?.type === 'image' && typeof item?.data === 'string' && item.data) {
+            return {
+                type: 'base64',
+                data: item.data,
+                mimeType: item.mime_type ?? item.mimeType ?? DEFAULT_IMAGE_MIME_TYPE,
+            };
+        }
+
+        if (item?.type === 'image' && typeof item?.uri === 'string' && item.uri) {
+            return {
+                type: 'url',
+                url: item.uri,
                 mimeType: item.mime_type ?? item.mimeType ?? DEFAULT_IMAGE_MIME_TYPE,
             };
         }
@@ -505,6 +555,12 @@ export async function generateImageForProvider(providerConfig, imageModel, promp
         modelId,
         prompt: normalizedPrompt,
     });
+    const mimeType = saved.mimeType ?? image.mimeType;
+    const imageArtifact = createImageArtifactFromPath(saved.path, {
+        mimeType,
+        title: 'Generated image',
+        generatedBy: 'image_gen',
+    });
 
     return {
         name: 'image_gen',
@@ -516,7 +572,8 @@ export async function generateImageForProvider(providerConfig, imageModel, promp
         modelId,
         modelName: imageModel?.name ?? modelId,
         imagePath: saved.path,
-        mimeType: saved.mimeType ?? image.mimeType,
+        mimeType,
+        artifacts: imageArtifact ? [imageArtifact] : [],
         detail: `${providerName} · ${modelId}`,
         output: `Generated image saved to ${saved.path}`,
     };

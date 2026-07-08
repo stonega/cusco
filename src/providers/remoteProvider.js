@@ -157,6 +157,9 @@ function providerMessages(messages) {
     let hasUserMessage = false;
 
     return messages.filter((message) => {
+        if (message?.reasoning?.agentMode)
+            return false;
+
         if (message.role === 'system')
             return true;
 

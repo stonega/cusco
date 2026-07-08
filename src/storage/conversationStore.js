@@ -1,6 +1,7 @@
 import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 
+import { normalizeArtifacts } from '../chat/artifacts.js';
 import { DEFAULT_THINKING_LEVEL, normalizeThinkingLevel } from '../providers/thinking.js';
 import { normalizeTokenUsage } from '../providers/usage.js';
 
@@ -26,6 +27,13 @@ function normalizeStringList(value) {
 }
 
 function normalizeMessage(message) {
+    const toolCall = message?.toolCall && typeof message.toolCall === 'object'
+        ? { ...message.toolCall }
+        : null;
+
+    if (toolCall)
+        toolCall.artifacts = normalizeArtifacts(toolCall.artifacts);
+
     return {
         id: normalizeString(message?.id, GLib.uuid_string_random()),
         role: normalizeString(message?.role, 'assistant'),
@@ -33,11 +41,10 @@ function normalizeMessage(message) {
         attachments: Array.isArray(message?.attachments)
             ? message.attachments.map((attachment) => ({ ...attachment }))
             : [],
+        artifacts: normalizeArtifacts(message?.artifacts),
         reasoning: normalizeReasoning(message?.reasoning),
         usage: normalizeTokenUsage(message?.usage),
-        toolCall: message?.toolCall && typeof message.toolCall === 'object'
-            ? { ...message.toolCall }
-            : null,
+        toolCall,
         cronRun: message?.cronRun && typeof message.cronRun === 'object'
             ? { ...message.cronRun }
             : null,
@@ -66,6 +73,7 @@ function normalizeReasoning(reasoning) {
         thinkingLevel: reasoning.thinkingLevel
             ? normalizeThinkingLevel(reasoning.thinkingLevel)
             : '',
+        agentMode: Boolean(reasoning.agentMode),
         createdAt: normalizeString(reasoning.createdAt, new Date().toISOString()),
     };
 }

@@ -44,6 +44,15 @@ const messages = [
     createMessage('system', 'Keep answers concise.'),
     createMessage('user', 'Hello'),
     createMessage('assistant', 'Hi'),
+    createMessage('assistant', '', {
+        reasoning: {
+            content: 'Internal agent reasoning',
+            providerId: 'openai',
+            modelId: 'gpt-test',
+            thinkingLevel: 'high',
+            agentMode: true,
+        },
+    }),
     createMessage('user', 'Summarize Cusco'),
 ];
 const imagePath = GLib.build_filenamev([
@@ -67,6 +76,7 @@ const openAiBody = buildOpenAiResponsesBody(messages, 'gpt-test');
 assertEqual(openAiBody.model, 'gpt-test', 'OpenAI model');
 assertEqual(openAiBody.input.length, 4, 'OpenAI filtered message count');
 assertEqual(openAiBody.input[0].role, 'developer', 'OpenAI system role');
+assertEqual(openAiBody.input.some((message) => message.content === ''), false, 'OpenAI omitted Agent Mode reasoning messages');
 assertEqual(openAiBody.max_output_tokens, 8192, 'OpenAI default max output tokens');
 
 const mcpTool = {

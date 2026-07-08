@@ -4,6 +4,10 @@ set -eu
 missing_sources=$(
   find src -type f -name '*.js' | sort | while IFS= read -r source; do
     relative=${source#src/}
+    if [ "$relative" = "appInfo.js" ] \
+      && grep -F "output: 'appInfo.js'" src/meson.build >/dev/null 2>&1; then
+      continue
+    fi
     if ! grep -F "'$relative'" src/meson.build >/dev/null 2>&1; then
       printf '%s\n' "$source"
     fi
@@ -16,6 +20,7 @@ if [ -n "$missing_sources" ]; then
 fi
 
 gjs -m tests/import-smoke.js
+gjs -m tests/artifacts-smoke.js
 gjs -m tests/markdown-smoke.js
 gjs -m tests/usage-smoke.js
 gjs -m tests/memory-smoke.js

@@ -38,6 +38,18 @@ const geminiPayload = extractImageResponsePayload({
 });
 assertEqual(geminiPayload.type, 'base64', 'Gemini image payload type');
 
+const geminiStepsPayload = extractImageResponsePayload({
+    steps: [{
+        type: 'model_output',
+        content: [{
+            type: 'image',
+            data: GLib.base64_encode(new TextEncoder().encode('gemini-steps-image')),
+            mime_type: 'image/png',
+        }],
+    }],
+});
+assertEqual(geminiStepsPayload.type, 'base64', 'Gemini steps image payload type');
+
 const zaiPayload = extractImageResponsePayload({
     data: [{ url: 'https://example.invalid/image.png' }],
 });
@@ -82,6 +94,8 @@ const generated = await generateImageForProvider(
 
 assertEqual(generated.imagePath, '/tmp/generated-image.png', 'Generated image path');
 assertEqual(generated.providerId, 'zai', 'Generated image provider id');
+assertEqual(generated.artifacts[0].kind, 'image', 'Generated image artifact kind');
+assertEqual(generated.artifacts[0].path, '/tmp/generated-image.png', 'Generated image artifact path');
 
 const providerConfigs = new ProviderConfigStore(undefined, {
     settings: null,
@@ -110,5 +124,6 @@ const toolResult = await tool.run('A quiet desktop chat app', { providerId: 'ope
 assertEqual(toolResult.imagePath, '/tmp/tool-image.png', 'Tool image path');
 assertEqual(toolResult.modelId, 'glm-image', 'Tool image model');
 assertEqual(toolResult.providerId, 'zai', 'Tool standalone image provider');
+assertEqual(toolResult.artifacts[0].kind, 'image', 'Tool image artifact kind');
 
 print('Cusco image generation smoke passed');

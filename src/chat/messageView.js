@@ -1,8 +1,11 @@
 import Gdk from 'gi://Gdk?version=4.0';
+import Gio from 'gi://Gio?version=2.0';
+import GLib from 'gi://GLib?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
 import GtkSource from 'gi://GtkSource?version=5';
 import Pango from 'gi://Pango?version=1.0';
 
+import { artifactForCodeBlock } from './artifacts.js';
 import {
     inlineMarkdownToPangoMarkup,
     markdownToPangoMarkup,
@@ -16,6 +19,10 @@ import {
 const LANGUAGE_ALIASES = {
     bash: 'sh',
     shell: 'sh',
+    html: 'html',
+    htm: 'html',
+    svg: 'xml',
+    xml: 'xml',
     javascript: 'js',
     typescript: 'js',
     py: 'python3',
@@ -141,6 +148,246 @@ export function copyTextToClipboard(text) {
     clipboard?.set(text);
 }
 
+function artifactFileExists(artifact) {
+    const path = String(artifact?.path ?? '').trim();
+    return Boolean(path) && GLib.file_test(path, GLib.FileTest.EXISTS);
+}
+
+function artifactSourceText(artifact, fallback = '') {
+    if ((artifact?.kind !== 'svg' && artifact?.kind !== 'html') || !artifactFileExists(artifact))
+        return String(fallback ?? '');
+
+    try {
+        const [, contents] = GLib.file_get_contents(artifact.path);
+        return new TextDecoder().decode(contents);
+    } catch (error) {
+        logError(error, `Failed to read artifact source: ${artifact.path}`);
+        return String(fallback ?? '');
+    }
+}
+
+function artifactSaveName(artifact) {
+    const title = String(artifact?.title ?? artifact?.kind ?? 'artifact')
+        .replace(/[^\w.-]+/g, '-')
+        .replace(/^-|-$/g, '')
+        || 'artifact';
+
+    switch (artifact?.kind) {
+    case 'svg':
+        return `${title}.svg`;
+    case 'html':
+        return `${title}.html`;
+    case 'image': {
+        const extension = String(artifact.mimeType ?? '').toLowerCase() === 'image/svg+xml'
+            ? 'svg'
+            : String(artifact.mimeType ?? '').toLowerCase() === 'image/jpeg'
+                ? 'jpg'
+                : String(artifact.mimeType ?? '').toLowerCase() === 'image/webp'
+                    ? 'webp'
+                    : 'png';
+        return `${title}.${extension}`;
+    }
+    default:
+        return `${title}.txt`;
+    }
+}
+
+function createArtifactActionButton(iconName, tooltipText, onClicked) {
+    const button = new Gtk.Button({
+        icon_name: iconName,
+        tooltip_text: tooltipText,
+        valign: Gtk.Align.CENTER,
+    });
+
+    button.add_css_class('flat');
+    button.connect('clicked', onClicked);
+    return button;
+}
+
+function saveArtifactAs(artifact, parent, fallbackSource = '') {
+    const dialog = new Gtk.FileDialog({
+        title: `Save ${artifact.title}`,
+        initial_name: artifactSaveName(artifact),
+    });
+
+    dialog.save(parent ?? null, null, (_dialog, result) => {
+        try {
+            const file = dialog.save_finish(result);
+            const targetPath = file.get_path();
+
+            if (!targetPath)
+                throw new Error('Only local artifact save paths are supported right now');
+
+            if (artifactFileExists(artifact)) {
+                Gio.File.new_for_path(artifact.path).copy(
+                    Gio.File.new_for_path(targetPath),
+                    Gio.FileCopyFlags.OVERWRITE,
+                    null,
+                    null,
+                );
+                return;
+            }
+
+            const source = artifactSourceText(artifact, fallbackSource);
+
+            if (!source)
+                throw new Error('Artifact source is not available.');
+
+            GLib.file_set_contents(targetPath, source);
+        } catch (error) {
+            logError(error, 'Failed to save artifact');
+        }
+    });
+}
+
+function openArtifactExternally(artifact, parent) {
+    if (!artifactFileExists(artifact))
+        return;
+
+    try {
+        Gtk.show_uri(parent ?? null, Gio.File.new_for_path(artifact.path).get_uri(), 0);
+    } catch (error) {
+        logError(error, `Failed to open artifact: ${artifact.path}`);
+    }
+}
+
+function createArtifactHeader(artifact, source, options = {}) {
+    const header = new Gtk.Box({
+        orientation: Gtk.Orientation.HORIZONTAL,
+        spacing: 6,
+        margin_top: 6,
+        margin_bottom: 6,
+        margin_start: 8,
+        margin_end: 8,
+    });
+    header.add_css_class('cusco-artifact-header');
+
+    const titleBox = new Gtk.Box({
+        orientation: Gtk.Orientation.VERTICAL,
+        spacing: 1,
+        hexpand: true,
+    });
+    const titleLabel = new Gtk.Label({
+        label: artifact.title,
+        xalign: 0,
+        ellipsize: Pango.EllipsizeMode.END,
+    });
+    const metaLabel = new Gtk.Label({
+        label: artifact.kind === 'html'
+            ? 'HTML'
+            : artifact.kind === 'svg'
+                ? 'SVG'
+                : artifact.mimeType,
+        xalign: 0,
+        ellipsize: Pango.EllipsizeMode.END,
+    });
+    metaLabel.add_css_class('caption');
+    metaLabel.add_css_class('dim-label');
+    titleBox.append(titleLabel);
+    titleBox.append(metaLabel);
+    header.append(titleBox);
+
+    const copyText = artifact.kind === 'image'
+        ? String(artifact.path ?? '')
+        : artifactSourceText(artifact, source);
+    const copyButton = createArtifactActionButton(
+        'edit-copy-symbolic',
+        artifact.kind === 'image' ? 'Copy image path' : 'Copy source',
+        () => {
+            copyTextToClipboard(copyText);
+            options.onCopyArtifact?.(artifact);
+        },
+    );
+    copyButton.set_sensitive(Boolean(copyText));
+    header.append(copyButton);
+
+    const saveButton = createArtifactActionButton(
+        'document-save-symbolic',
+        'Save artifact',
+        () => saveArtifactAs(artifact, options.parentWindow, source),
+    );
+    saveButton.set_sensitive(artifactFileExists(artifact) || Boolean(source));
+    header.append(saveButton);
+
+    const openButton = createArtifactActionButton(
+        'document-open-symbolic',
+        'Open artifact',
+        () => openArtifactExternally(artifact, options.parentWindow),
+    );
+    openButton.set_sensitive(artifactFileExists(artifact));
+    header.append(openButton);
+
+    return header;
+}
+
+function createArtifactImagePreview(artifact) {
+    if (!artifactFileExists(artifact)) {
+        const missing = new Gtk.Label({
+            label: 'Artifact file is missing.',
+            xalign: 0,
+            margin_top: 10,
+            margin_bottom: 10,
+            margin_start: 10,
+            margin_end: 10,
+        });
+        missing.add_css_class('dim-label');
+        return missing;
+    }
+
+    const picture = new Gtk.Picture({
+        can_shrink: true,
+        keep_aspect_ratio: true,
+        hexpand: false,
+        vexpand: false,
+    });
+
+    picture.set_content_fit(Gtk.ContentFit.CONTAIN);
+    picture.set_size_request(360, 240);
+    picture.set_file(Gio.File.new_for_path(artifact.path));
+    picture.add_css_class('cusco-artifact-picture');
+    return picture;
+}
+
+function createArtifactSourcePreview(source, language, options = {}) {
+    const block = {
+        type: 'code',
+        language,
+        content: String(source ?? ''),
+    };
+    const preview = createCodeBlock(block, {
+        ...options,
+        codeMinWidth: options.codeMinWidth ?? DEFAULT_CODE_MIN_WIDTH,
+    });
+
+    preview.add_css_class('cusco-artifact-source-preview');
+    return preview;
+}
+
+export function createArtifactCard(artifact, options = {}) {
+    const source = String(options.source ?? '');
+    const card = new Gtk.Box({
+        orientation: Gtk.Orientation.VERTICAL,
+        spacing: 0,
+        hexpand: true,
+    });
+    card.add_css_class('cusco-artifact-card');
+    card.add_css_class(`cusco-artifact-${artifact.kind}`);
+
+    card.append(createArtifactHeader(artifact, source, options));
+
+    if (artifact.kind === 'image') {
+        card.append(createArtifactImagePreview(artifact));
+    } else if (artifact.kind === 'svg') {
+        card.append(artifactFileExists(artifact) || !source
+            ? createArtifactImagePreview(artifact)
+            : createArtifactSourcePreview(source, 'xml', options));
+    } else {
+        card.append(createArtifactSourcePreview(artifactSourceText(artifact, source), 'html', options));
+    }
+
+    return card;
+}
+
 function createCodeBlock(block, options) {
     const outer = new Gtk.Box({
         orientation: Gtk.Orientation.VERTICAL,
@@ -225,15 +472,24 @@ function createCodeBlock(block, options) {
 export function renderMessageContent(container, body, options = {}) {
     clearBox(container);
 
-    for (const block of parseMarkdownBlocks(body)) {
-        if (block.type === 'code')
-            container.append(createCodeBlock(block, options));
-        else if (block.type === 'divider')
+    for (const [index, block] of parseMarkdownBlocks(body).entries()) {
+        if (block.type === 'code') {
+            const artifact = artifactForCodeBlock(options.artifacts, index, block);
+
+            container.append(artifact
+                ? createArtifactCard(artifact, {
+                    ...options,
+                    source: block.content,
+                    sourceLanguage: block.language,
+                })
+                : createCodeBlock(block, options));
+        } else if (block.type === 'divider') {
             container.append(createMarkdownDivider());
-        else if (block.type === 'table')
+        } else if (block.type === 'table') {
             container.append(createMarkdownTable(block, options));
-        else
+        } else {
             container.append(createMarkdownLabel(block.content, options.role));
+        }
     }
 }
 

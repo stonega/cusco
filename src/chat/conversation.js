@@ -1,5 +1,6 @@
 import GLib from 'gi://GLib?version=2.0';
 
+import { normalizeArtifacts } from './artifacts.js';
 import { DEFAULT_THINKING_LEVEL, normalizeThinkingLevel } from '../providers/thinking.js';
 import { normalizeTokenUsage } from '../providers/usage.js';
 
@@ -29,14 +30,20 @@ function normalizeList(values) {
 }
 
 function normalizeMessage(message) {
+    const toolCall = message.toolCall ? { ...message.toolCall } : null;
+
+    if (toolCall)
+        toolCall.artifacts = normalizeArtifacts(toolCall.artifacts);
+
     return {
         id: message.id ?? GLib.uuid_string_random(),
         role: message.role,
         content: String(message.content ?? ''),
         attachments: Array.isArray(message.attachments) ? message.attachments.map((attachment) => ({ ...attachment })) : [],
+        artifacts: normalizeArtifacts(message.artifacts),
         reasoning: normalizeReasoning(message.reasoning),
         usage: normalizeUsage(message.usage),
-        toolCall: message.toolCall ? { ...message.toolCall } : null,
+        toolCall,
         cronRun: message.cronRun ? { ...message.cronRun } : null,
         createdAt: message.createdAt ?? now(),
     };
@@ -63,6 +70,7 @@ function normalizeReasoning(reasoning) {
         thinkingLevel: reasoning.thinkingLevel
             ? normalizeThinkingLevel(reasoning.thinkingLevel)
             : '',
+        agentMode: Boolean(reasoning.agentMode),
         createdAt: reasoning.createdAt ?? now(),
     };
 }
@@ -388,6 +396,15 @@ export class ConversationManager {
         return message;
     }
 
+    updateMessageArtifacts(conversationId, messageId, artifacts) {
+        const { conversation, message } = this._getMessageRecord(conversationId, messageId);
+
+        message.artifacts = normalizeArtifacts(artifacts);
+        conversation.updatedAt = now();
+        this._persist();
+        return message;
+    }
+
     updateMessageUsage(conversationId, messageId, usage) {
         const { conversation, message } = this._getMessageRecord(conversationId, messageId);
 
@@ -403,9 +420,14 @@ export class ConversationManager {
         if (content !== null)
             message.content = String(content ?? '');
 
-        message.toolCall = toolCall && typeof toolCall === 'object'
-            ? { ...toolCall }
-            : null;
+        if (toolCall && typeof toolCall === 'object') {
+            message.toolCall = {
+                ...toolCall,
+                artifacts: normalizeArtifacts(toolCall.artifacts),
+            };
+        } else {
+            message.toolCall = null;
+        }
         conversation.updatedAt = now();
         this._persist();
         return message;

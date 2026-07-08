@@ -20,6 +20,16 @@ const chat = conversations.createConversation();
 
 conversations.appendMessage(chat.id, createMessage('user', 'Persist this chat'));
 const assistantMessage = createMessage('assistant', 'Stored answer', {
+    artifacts: [{
+        id: 'artifact-1',
+        kind: 'svg',
+        title: 'Stored SVG',
+        mimeType: 'image/svg+xml',
+        path: '/tmp/stored.svg',
+        sourceBlockIndex: 0,
+        sourceLanguage: 'svg',
+        generatedBy: 'assistant',
+    }],
     reasoning: {
         content: 'Stored reasoning summary',
         providerId: 'openai',
@@ -44,6 +54,12 @@ conversations.appendMessage(chat.id, createMessage('system', 'Calculator result'
         input: '1+1',
         output: '2',
         status: 'running',
+        artifacts: [{
+            kind: 'html',
+            path: '/tmp/tool.html',
+            sourceBlockIndex: 0,
+            sourceLanguage: 'html',
+        }],
     },
 }));
 conversations.updateMessageToolCall(chat.id, chat.messages[2].id, {
@@ -52,7 +68,22 @@ conversations.updateMessageToolCall(chat.id, chat.messages[2].id, {
     input: '1+1',
     output: '2',
     status: 'completed',
+    artifacts: [{
+        kind: 'html',
+        path: '/tmp/tool.html',
+        sourceBlockIndex: 0,
+        sourceLanguage: 'html',
+    }],
 }, 'Calculator result\n\n1+1 = 2');
+conversations.appendMessage(chat.id, createMessage('assistant', '', {
+    reasoning: {
+        content: 'Agent reasoning segment',
+        providerId: 'openai',
+        modelId: 'gpt-5.5',
+        thinkingLevel: 'high',
+        agentMode: true,
+    },
+}));
 conversations.renameConversation(chat.id, 'Persistent chat');
 conversations.setMemoryEnabled(chat.id, false);
 conversations.setAgentModeEnabled(chat.id, true);
@@ -80,6 +111,15 @@ if (reloadedChat.messages[2].toolCall?.status !== 'completed')
 
 if (reloadedChat.messages[1].reasoning?.content !== 'Stored reasoning summary')
     throw new Error('Persisted reasoning metadata was not loaded');
+
+if (reloadedChat.messages[1].artifacts[0]?.kind !== 'svg')
+    throw new Error('Persisted message artifact metadata was not loaded');
+
+if (reloadedChat.messages[2].toolCall?.artifacts?.[0]?.kind !== 'html')
+    throw new Error('Persisted tool call artifact metadata was not loaded');
+
+if (reloadedChat.messages[3].reasoning?.agentMode !== true)
+    throw new Error('Persisted Agent Mode reasoning marker was not loaded');
 
 if (reloadedChat.messages[1].usage?.reasoningTokens !== 4)
     throw new Error('Persisted usage metadata was not loaded');
