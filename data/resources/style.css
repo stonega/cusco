@@ -126,6 +126,16 @@
     color: alpha(@window_fg_color, 0.66);
 }
 
+.cusco-composer-inline-controls button {
+    min-width: 26px;
+    min-height: 26px;
+    padding: 0;
+}
+
+.cusco-composer-inline-controls button image {
+    color: alpha(@window_fg_color, 0.78);
+}
+
 .cusco-context-usage-popover {
     padding: 0;
 }

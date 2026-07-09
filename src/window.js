@@ -719,17 +719,19 @@ class CuscoWindow extends Adw.ApplicationWindow {
             valign: Gtk.Align.CENTER,
         });
         this._attachButton.set_child(createBundledIcon(ATTACHMENT_ICON_FILE, 'mail-attachment-symbolic'));
+        this._attachButton.add_css_class('flat');
+        this._attachButton.add_css_class('circular');
         this._attachButton.connect('clicked', () => this._attachFileContext());
 
         this._promptMenuButton = this._createPromptMenuButton();
         this._promptMenuButton.set_valign(Gtk.Align.CENTER);
+        this._promptMenuButton.add_css_class('flat');
+        this._promptMenuButton.add_css_class('circular');
 
         composerMetaRow.append(this._providerPicker);
         composerMetaRow.append(this._providerConfigButton);
         composerMetaRow.append(this._modelPicker);
         composerMetaRow.append(this._thinkingLevelPicker);
-        composerMetaRow.append(this._attachButton);
-        composerMetaRow.append(this._promptMenuButton);
         composerMetaRow.append(this._chatOptionsMenuButton);
 
         this._composerBuffer = new Gtk.TextBuffer();
@@ -774,12 +776,21 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         composerOverlay.add_overlay(this._composerPlaceholder);
 
-        this._composerUsageFraction = 0;
-        this._composerUsageChart = new Gtk.DrawingArea({
+        const composerInlineControls = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 4,
             halign: Gtk.Align.START,
             valign: Gtk.Align.END,
-            margin_start: 12,
-            margin_bottom: 8,
+            margin_start: 8,
+            margin_bottom: 5,
+        });
+        composerInlineControls.add_css_class('cusco-composer-inline-controls');
+
+        this._composerUsageFraction = 0;
+        this._composerUsageChart = new Gtk.DrawingArea({
+            halign: Gtk.Align.CENTER,
+            valign: Gtk.Align.CENTER,
+            margin_start: 4,
         });
         this._composerUsageChart.set_size_request(18, 18);
         this._composerUsageChart.add_css_class('cusco-context-usage-chart');
@@ -792,7 +803,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
         usageMotionController.connect('enter', () => this._composerUsagePopover?.popup());
         usageMotionController.connect('leave', () => this._composerUsagePopover?.popdown());
         this._composerUsageChart.add_controller(usageMotionController);
-        composerOverlay.add_overlay(this._composerUsageChart);
+        composerInlineControls.append(this._attachButton);
+        composerInlineControls.append(this._promptMenuButton);
+        composerInlineControls.append(this._composerUsageChart);
+        composerOverlay.add_overlay(composerInlineControls);
 
         this._composerHint = new Gtk.Label({
             xalign: 1,
