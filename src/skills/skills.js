@@ -67,6 +67,63 @@ function normalizeWhitespace(value) {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
 
+function normalizeFrontMatterValue(value) {
+    return String(value ?? '').replace(/^["']|["']$/g, '').trim();
+}
+
+function isFrontMatterKey(line) {
+    return /^[A-Za-z0-9_-]+:\s*(.*)$/.test(line);
+}
+
+function isBlockScalarIndicator(value) {
+    return /^[|>](?:[+-]?\d*|\d*[+-]?)$/.test(String(value ?? '').trim());
+}
+
+function dedentBlockScalarLines(lines) {
+    const indentedLines = lines.filter((line) => line.trim().length > 0);
+    const minIndent = indentedLines.reduce((minimum, line) => {
+        const indent = line.match(/^[ \t]*/)?.[0].length ?? 0;
+        return Math.min(minimum, indent);
+    }, Number.MAX_SAFE_INTEGER);
+
+    if (minIndent === Number.MAX_SAFE_INTEGER || minIndent === 0)
+        return lines.map((line) => line.trimEnd());
+
+    return lines.map((line) => line.trim() ? line.slice(minIndent).trimEnd() : '');
+}
+
+function foldBlockScalarLines(lines) {
+    const paragraphs = [];
+    let paragraph = [];
+
+    for (const line of lines) {
+        if (line.trim().length === 0) {
+            if (paragraph.length > 0) {
+                paragraphs.push(paragraph.join(' '));
+                paragraph = [];
+            }
+
+            paragraphs.push('');
+            continue;
+        }
+
+        paragraph.push(line.trim());
+    }
+
+    if (paragraph.length > 0)
+        paragraphs.push(paragraph.join(' '));
+
+    return paragraphs.join('\n');
+}
+
+function parseBlockScalar(lines, indicator) {
+    const dedented = dedentBlockScalarLines(lines);
+    const style = String(indicator ?? '').trim()[0];
+    const value = style === '>' ? foldBlockScalarLines(dedented) : dedented.join('\n');
+
+    return value.trim();
+}
+
 function activeSkillList(skills, { includeAlwaysAvailable = true } = {}) {
     const seen = new Set();
     const activeSkills = [];
@@ -108,8 +165,34 @@ function parseFrontMatter(content) {
 
         const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
 
-        if (match)
-            metadata[match[1]] = match[2].replace(/^["']|["']$/g, '').trim();
+        if (match) {
+            const [, key, rawValue] = match;
+            const value = String(rawValue ?? '').trim();
+
+            if (isBlockScalarIndicator(value)) {
+                const blockLines = [];
+
+                for (index += 1; index < lines.length; index++) {
+                    const blockLine = lines[index];
+
+                    if (blockLine === '---') {
+                        index -= 1;
+                        break;
+                    }
+
+                    if (isFrontMatterKey(blockLine)) {
+                        index -= 1;
+                        break;
+                    }
+
+                    blockLines.push(blockLine);
+                }
+
+                metadata[key] = parseBlockScalar(blockLines, value);
+            } else {
+                metadata[key] = normalizeFrontMatterValue(rawValue);
+            }
+        }
     }
 
     return {};

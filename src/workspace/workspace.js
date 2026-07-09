@@ -339,8 +339,16 @@ export class WorkspaceManager {
     resolveSkillIdsForConversation(conversation) {
         const conversationSkillIds = normalizeList(conversation?.skillIds);
 
-        if (conversationSkillIds.length > 0)
-            return conversationSkillIds;
+        if (conversationSkillIds.length > 0) {
+            const skillIds = new Set(conversationSkillIds);
+
+            for (const skill of this._skills) {
+                if (skill.enabled && !skill.loadError)
+                    skillIds.add(skill.id);
+            }
+
+            return [...skillIds];
+        }
 
         const profile = this.getProfile(conversation?.profileId);
 

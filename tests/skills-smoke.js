@@ -21,6 +21,10 @@ const rootPath = GLib.build_filenamev([
 ]);
 const reviewSkillPath = GLib.build_filenamev([rootPath, 'review']);
 const customSkillPath = GLib.build_filenamev([rootPath, 'custom-skill']);
+const browserSkillPath = GLib.build_filenamev([
+    GLib.get_tmp_dir(),
+    `cusco-browser-skill-${GLib.uuid_string_random()}`,
+]);
 
 writeSkill(reviewSkillPath, [
     '---',
@@ -37,6 +41,20 @@ writeSkill(customSkillPath, [
     '',
     'Prefer concise implementation notes.',
 ].join('\n'));
+writeSkill(browserSkillPath, [
+    '---',
+    'name: browser-skill',
+    'description: |',
+    '  Use when the user asks to perform browser automation tasks against their',
+    '  logged-in browser: visit and read pages, fill forms, scrape data, click',
+    '  through a flow, regression-test a PR\'s UI, validate a deployed page.',
+    '  Requires the bsk CLI installed and the browser-skill extension loaded.',
+    '---',
+    '',
+    '# Browser Skill',
+    '',
+    'Automate browser workflows.',
+].join('\n'));
 
 const discovered = discoverInstalledSkills({ rootPath });
 const discoveredIds = discovered.map((skill) => skill.id).sort();
@@ -48,6 +66,12 @@ const loaded = loadSkillFromPath(reviewSkillPath, { source: 'global', id: 'revie
 
 if (loaded.name !== 'careful-review' || !loaded.description.includes('correctness'))
     throw new Error('Skill front matter was not parsed');
+
+const browserSkill = loadSkillFromPath(browserSkillPath, { source: 'global', id: 'browser-skill' });
+const expectedBrowserDescription = 'Use when the user asks to perform browser automation tasks against their logged-in browser: visit and read pages, fill forms, scrape data, click through a flow, regression-test a PR\'s UI, validate a deployed page. Requires the bsk CLI installed and the browser-skill extension loaded.';
+
+if (browserSkill.description !== expectedBrowserDescription)
+    throw new Error(`Skill block front matter description was not parsed: ${browserSkill.description}`);
 
 const alwaysAvailableSkills = getAlwaysAvailableSkills();
 
@@ -86,6 +110,14 @@ const activeSkills = workspace.getSkillsForConversation(conversation);
 
 if (activeSkills.length !== 2 || activeSkills[0].id !== 'review')
     throw new Error('Workspace did not resolve selected conversation skills');
+
+const staleConversation = conversations.createConversation({
+    skillIds: ['review'],
+});
+const refreshedActiveSkills = workspace.getSkillsForConversation(staleConversation);
+
+if (!refreshedActiveSkills.find((skill) => skill.id === customSkill.id))
+    throw new Error('Workspace did not include newly enabled skills for an active skill conversation');
 
 if (!workspace.buildSkillContextForConversation(conversation).includes('Prefer concise implementation notes'))
     throw new Error('Workspace did not build selected skill context');
