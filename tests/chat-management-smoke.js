@@ -82,7 +82,7 @@ if (conversations.archivedConversations.length !== 0)
     throw new Error('Archived conversation was not deleted');
 
 const providerIds = providers.listProviders().map((provider) => provider.id);
-const expectedProviderIds = ['openai', 'anthropic', 'gemini', 'kimi', 'deepseek', 'minimax', 'zai'];
+const expectedProviderIds = ['openai', 'anthropic', 'gemini', 'kimi', 'deepseek', 'grok', 'zai'];
 
 for (const providerId of expectedProviderIds) {
     if (!providerIds.includes(providerId))
@@ -95,12 +95,14 @@ if (zaiProvider.defaultModelId !== 'glm-5.2'
     || zaiProvider.models.map((model) => model.id).join(',') !== 'glm-5.2,glm-5-turbo')
     throw new Error('Z.ai GLM models were not configured');
 
-const minimaxProvider = providers.getProvider('minimax');
+const grokProvider = providers.getProvider('grok');
 
-if (minimaxProvider.baseUrl !== 'https://api.minimax.io/v1'
-    || minimaxProvider.defaultModelId !== 'MiniMax-M3'
-    || !minimaxProvider.models.some((model) => model.id === 'MiniMax-M2.7-highspeed'))
-    throw new Error('MiniMax M-series models were not configured');
+if (grokProvider.baseUrl !== 'https://api.x.ai/v1'
+    || grokProvider.defaultModelId !== 'grok-4.5'
+    || grokProvider.defaultImageModelId !== 'grok-imagine-image-quality'
+    || grokProvider.models.map((model) => model.id).join(',') !== 'grok-4.5,grok-4.3'
+    || grokProvider.imageModels.map((model) => model.id).join(',') !== 'grok-imagine-image-quality,grok-imagine-image')
+    throw new Error('Grok models were not configured');
 
 providers.setDefaultModel(defaultProvider.id, 'glm-5-turbo');
 

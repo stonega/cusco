@@ -36,7 +36,6 @@ import { createImageGenerationTool } from './providers/imageGeneration.js';
 import { getProviderGIcon } from './providers/icons.js';
 import { createMessage } from './providers/provider.js';
 import {
-    DEFAULT_THINKING_LEVEL,
     getThinkingLevelLabel,
     normalizeThinkingLevel,
 } from './providers/thinking.js';
@@ -2210,9 +2209,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
             cancellable,
             timeoutSeconds: this._appSettings.responseTimeoutSeconds,
             maxOutputTokens: collectOptions.maxOutputTokens ?? this._appSettings.maxOutputTokens,
-            thinkingLevel: collectOptions.thinkingLevel
-                ?? this._conversations.activeConversation?.thinkingLevel
-                ?? this._appSettings.thinkingLevel,
+            thinkingLevel: this._resolveThinkingLevelForSelection(
+                providerId,
+                modelId,
+                collectOptions.thinkingLevel
+                    ?? this._conversations.activeConversation?.thinkingLevel
+                    ?? this._appSettings.thinkingLevel,
+            ),
             tools: collectOptions.tools ?? [],
         })) {
             const normalizedChunk = normalizeProviderChunk(chunk);
@@ -3132,9 +3135,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const currentLevel = normalizeThinkingLevel(conversation.thinkingLevel ?? this._appSettings.thinkingLevel);
         const selectedLevel = levels.includes(currentLevel)
             ? currentLevel
-            : levels.includes(DEFAULT_THINKING_LEVEL)
-                ? DEFAULT_THINKING_LEVEL
-                : levels[0];
+            : this._providerConfigs.getDefaultThinkingLevel(
+                conversation.providerId,
+                conversation.modelId,
+                currentLevel,
+            );
 
         this._thinkingLevelPicker.set_active_id(selectedLevel);
         this._thinkingLevelPicker.set_tooltip_text('Thinking level for this chat');
@@ -3485,7 +3490,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (levels.includes(normalizedLevel))
             return normalizedLevel;
 
-        return levels.includes(DEFAULT_THINKING_LEVEL) ? DEFAULT_THINKING_LEVEL : levels[0];
+        return this._providerConfigs.getDefaultThinkingLevel(providerId, modelId, normalizedLevel);
     }
 
     _handleThinkingLevelChanged() {

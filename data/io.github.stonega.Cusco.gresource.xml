@@ -14,8 +14,8 @@
     <file>resources/providers/provider-custom.svg</file>
     <file>resources/providers/provider-deepseek.svg</file>
     <file>resources/providers/provider-gemini.svg</file>
+    <file>resources/providers/provider-grok.svg</file>
     <file>resources/providers/provider-kimi.svg</file>
-    <file>resources/providers/provider-minimax.svg</file>
     <file>resources/providers/provider-openai.svg</file>
     <file>resources/providers/provider-zai.svg</file>
     <file>resources/style.css</file>

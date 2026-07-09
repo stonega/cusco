@@ -32,7 +32,8 @@ level. Models without thinking support keep the chat picker disabled.
 | Kimi | `kimi-k2.7-code` | `kimi-k2.7-code`, `kimi-k2.7-code-highspeed` | `Auto` |
 | Kimi | `kimi-k2.7-code` | `kimi-k2.6` | `Off`, `Auto` |
 | DeepSeek | `deepseek-v4-pro` | `deepseek-v4-pro`, `deepseek-v4-flash` | `Off`, `Auto`, `High`, `Max` |
-| MiniMax | `MiniMax-M3` | `MiniMax-M3`, `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`, `MiniMax-M2.5-highspeed`, `MiniMax-M2.1`, `MiniMax-M2.1-highspeed`, `MiniMax-M2` | None |
+| Grok | `grok-4.5` | `grok-4.5` | `Low`, `Medium`, `High` |
+| Grok | `grok-4.5` | `grok-4.3` | `Off`, `Low`, `Medium`, `High` |
 | Z.ai | `glm-5.2` | `glm-5.2` | `Off`, `Auto`, `High`, `Max` |
 | Z.ai | `glm-5.2` | `glm-5-turbo` | `Off`, `Auto` |
 | Custom API | None | User configured | None |
@@ -57,14 +58,8 @@ from the built-in model metadata.
 | Kimi | `kimi-k2.6` | 256K tokens |
 | DeepSeek | `deepseek-v4-pro` | 1M tokens |
 | DeepSeek | `deepseek-v4-flash` | 1M tokens |
-| MiniMax | `MiniMax-M3` | 1M tokens |
-| MiniMax | `MiniMax-M2.7` | 204,800 tokens |
-| MiniMax | `MiniMax-M2.7-highspeed` | 204,800 tokens |
-| MiniMax | `MiniMax-M2.5` | 204,800 tokens |
-| MiniMax | `MiniMax-M2.5-highspeed` | 204,800 tokens |
-| MiniMax | `MiniMax-M2.1` | 204,800 tokens |
-| MiniMax | `MiniMax-M2.1-highspeed` | 204,800 tokens |
-| MiniMax | `MiniMax-M2` | 204,800 tokens |
+| Grok | `grok-4.5` | 1M tokens |
+| Grok | `grok-4.3` | 1M tokens |
 | Z.ai | `glm-5.2` | 1M tokens |
 | Z.ai | `glm-5-turbo` | 200K tokens |
 | Custom API | User configured | Unknown |
@@ -82,6 +77,7 @@ an OpenAI-compatible image generation endpoint.
 |---|---|---|
 | OpenAI | `gpt-image-2` | `gpt-image-2` |
 | Google Gemini | `gemini-3.1-flash-image` | `gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`, `gemini-3-pro-image` |
+| Grok | `grok-imagine-image-quality` | `grok-imagine-image-quality`, `grok-imagine-image` |
 | Z.ai | `glm-image` | `glm-image` |
 | Custom API | None | User configured |
 
@@ -101,6 +97,11 @@ an OpenAI-compatible image generation endpoint.
   `deepseek-v4-flash`. Older persisted models such as `deepseek-v3` are
   ignored. `Auto` enables DeepSeek thinking without an explicit effort;
   `High` and `Max` send the matching `reasoning_effort`.
+- Grok uses xAI's OpenAI-compatible API and is intentionally limited to
+  `grok-4.5` and `grok-4.3`. Grok image generation uses xAI's
+  OpenAI-compatible image endpoint with `grok-imagine-image-quality` and
+  `grok-imagine-image`. `grok-4.5` exposes `Low`, `Medium`, and `High`
+  reasoning and defaults to `High`; `grok-4.3` also supports `Off`.
 - Z.ai is intentionally limited to `glm-5.2` and `glm-5-turbo`, and model
   discovery is disabled. `glm-5.2` supports explicit `High` and `Max`
   reasoning effort; `glm-5-turbo` supports only thinking on/off. Z.ai image
@@ -122,6 +123,8 @@ an OpenAI-compatible image generation endpoint.
 | Kimi | `kimi-k2.6` | Kimi intelligent multimodal model for agent, code, visual understanding, and general tasks with thinking and non-thinking modes. Context 256k. | `Off`, `Auto` |
 | DeepSeek | `deepseek-v4-pro` | DeepSeek reasoning-capable model. | `Off`, `Auto`, `High`, `Max` |
 | DeepSeek | `deepseek-v4-flash` | DeepSeek lower-latency model. | `Off`, `Auto`, `High`, `Max` |
+| Grok | `grok-4.5` | xAI Grok model for frontier chat, coding, and agentic work. | `Low`, `Medium`, `High` |
+| Grok | `grok-4.3` | xAI Grok text and vision model with a 1M token context window. | `Off`, `Low`, `Medium`, `High` |
 | Z.ai | `glm-5.2` | Z.ai flagship model for coding and agent applications. | `Off`, `Auto`, `High`, `Max` |
 | Z.ai | `glm-5-turbo` | Z.ai faster GLM-5 series model optimized for agent workflows. | `Off`, `Auto` |
 
@@ -129,6 +132,9 @@ an OpenAI-compatible image generation endpoint.
 
 - Gemini image generation guide: https://ai.google.dev/gemini-api/docs/image-generation
 - OpenAI image generation guide: https://developers.openai.com/api/docs/guides/images-vision
+- xAI chat completions API: https://docs.x.ai/developers/rest-api-reference/inference/chat
+- xAI image generation API: https://docs.x.ai/developers/rest-api-reference/inference/images
+- xAI model listing API: https://docs.x.ai/developers/rest-api-reference/inference/models
 - Z.ai GLM-Image guide: https://docs.z.ai/guides/image/glm-image
 - Z.ai image generation API: https://docs.z.ai/api-reference/image/generate-image
 - Z.ai GLM-5-Turbo guide: https://docs.z.ai/guides/llm/glm-5-turbo

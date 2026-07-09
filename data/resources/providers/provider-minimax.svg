@@ -1,5 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-  <title>MiniMax</title>
-  <rect width="32" height="32" rx="8" fill="#FF6A00"/>
-  <path fill="#ffffff" d="M7 9h4.4l4.6 6.7L20.6 9H25v14h-4v-7.6l-3.4 5h-3.2l-3.4-5V23H7V9z"/>
-</svg>

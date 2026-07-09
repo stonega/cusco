@@ -11,7 +11,7 @@ Cusco is a native GNOME AI chat application built with GJS, GTK 4, and libadwait
 - Native GTK/libadwaita chat shell with a persistent conversation sidebar.
 - Markdown transcript rendering with highlighted code blocks and copy actions.
 - Message edit, retry, regenerate, branch, archive, delete, search, and export workflows.
-- Provider management for OpenAI, Anthropic, Gemini, Kimi, DeepSeek, MiniMax, Z.ai, and custom OpenAI-compatible APIs.
+- Provider management for OpenAI, Anthropic, Gemini, Kimi, DeepSeek, Grok, Z.ai, and custom OpenAI-compatible APIs.
 - Per-chat provider/model selection, model discovery, response timeouts, and optional provider fallback.
 - Secret Service API key storage, with environment variables as a development fallback.
 - User-approved memory proposals, per-chat memory controls, memory management, import/export, and visible audit notes.

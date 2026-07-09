@@ -110,13 +110,22 @@ if (defaultStore.resolve('anthropic', 'claude-haiku-4-5-20251001').model.context
 if (defaultStore.resolve('gemini', 'gemini-3.5-flash').model.contextWindowTokens !== 1048576)
     throw new Error('Gemini 3.5 Flash context window should match the documented input token limit');
 
-if (defaultStore.resolve('minimax', 'MiniMax-M2.7').model.contextWindowTokens !== 204800)
-    throw new Error('MiniMax M2.7 context window should be 204800 tokens');
+if (defaultStore.resolve('grok', 'grok-4.3').model.contextWindowTokens !== 1000000)
+    throw new Error('Grok 4.3 context window should be 1M tokens');
+
+if (defaultStore.getThinkingLevels('grok', 'grok-4.5').join(',') !== 'low,medium,high')
+    throw new Error('Grok 4.5 should expose low/medium/high reasoning levels');
+
+if (defaultStore.getDefaultThinkingLevel('grok', 'grok-4.5') !== 'high')
+    throw new Error('Grok 4.5 should default to high reasoning');
+
+if (defaultStore.getThinkingLevels('grok', 'grok-4.3').join(',') !== 'off,low,medium,high')
+    throw new Error('Grok 4.3 should expose off/low/medium/high reasoning levels');
 
 const discoveredContextStore = new ProviderConfigStore(undefined, {
     settings: new MemorySettings({
         strings: {
-            'provider-discovered-models': '{"openai":[{"id":"gpt-5.4-mini"}],"minimax":[{"id":"MiniMax-M2.7"}]}',
+            'provider-discovered-models': '{"openai":[{"id":"gpt-5.4-mini"}],"grok":[{"id":"grok-4.3"}]}',
         },
     }),
     apiKeyStore: new MemoryApiKeyStore(),
@@ -126,8 +135,11 @@ const discoveredContextStore = new ProviderConfigStore(undefined, {
 if (discoveredContextStore.resolve('openai', 'gpt-5.4-mini').model.contextWindowTokens !== 400000)
     throw new Error('Discovered OpenAI models should be enriched with known context windows');
 
-if (discoveredContextStore.resolve('minimax', 'MiniMax-M2.7').model.contextWindowTokens !== 204800)
-    throw new Error('Discovered MiniMax models should be enriched with known context windows');
+if (discoveredContextStore.resolve('grok', 'grok-4.3').model.contextWindowTokens !== 1000000)
+    throw new Error('Discovered Grok models should be enriched with known context windows');
+
+if (discoveredContextStore.getThinkingLevels('grok', 'grok-4.3').join(',') !== 'off,low,medium,high')
+    throw new Error('Discovered Grok models should be enriched with reasoning support');
 
 const zaiProvider = defaultStore.getProvider('zai');
 

@@ -236,6 +236,29 @@ const zaiTurboThinkingBody = buildOpenAiCompatibleChatBody(messages, 'glm-5-turb
 });
 assertEqual(zaiTurboThinkingBody.thinking.type, 'enabled', 'Z.ai GLM-5 Turbo thinking enabled');
 assertEqual(hasOwn(zaiTurboThinkingBody, 'reasoning_effort'), false, 'Z.ai GLM-5 Turbo omits unsupported reasoning effort');
+const grokThinkingBody = buildOpenAiCompatibleChatBody(messages, 'grok-4.5', {
+    model: {
+        thinking: {
+            api: 'xai-reasoning',
+            levels: ['low', 'medium', 'high'],
+            defaultLevel: 'high',
+        },
+    },
+    thinkingLevel: 'high',
+});
+assertEqual(grokThinkingBody.reasoning.effort, 'high', 'Grok reasoning effort');
+const grokOffThinkingBody = buildOpenAiCompatibleChatBody(messages, 'grok-4.3', {
+    model: {
+        thinking: {
+            api: 'xai-reasoning',
+            levels: ['off', 'low', 'medium', 'high'],
+            defaultLevel: 'low',
+            offEffort: 'none',
+        },
+    },
+    thinkingLevel: 'off',
+});
+assertEqual(grokOffThinkingBody.reasoning.effort, 'none', 'Grok disabled reasoning effort');
 
 const anthropicBody = buildAnthropicMessagesBody(messages, 'claude-test');
 assertEqual(anthropicBody.model, 'claude-test', 'Anthropic model');

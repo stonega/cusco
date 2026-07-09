@@ -968,6 +968,16 @@ function buildOpenAiCompatibleThinkingConfig(config, model, level) {
         return request;
     }
 
+    if (thinking.api === 'xai-reasoning') {
+        const effort = thinking.level === 'off'
+            ? thinking.offEffort ?? 'none'
+            : thinking.level;
+
+        return {
+            reasoning: { effort },
+        };
+    }
+
     return null;
 }
 

@@ -48,6 +48,28 @@ export function getSupportedThinkingLevels(provider, model = null) {
     return getThinkingCapability(provider, model)?.levels ?? [];
 }
 
+export function getDefaultThinkingLevel(provider, model = null, fallback = DEFAULT_THINKING_LEVEL) {
+    const capability = getThinkingCapability(provider, model);
+
+    if (!capability)
+        return normalizeThinkingLevel(fallback);
+
+    const defaultLevel = String(capability.defaultLevel ?? '').trim().toLowerCase();
+
+    if (THINKING_LEVELS.includes(defaultLevel) && capability.levels.includes(defaultLevel))
+        return defaultLevel;
+
+    const fallbackLevel = normalizeThinkingLevel(fallback);
+
+    if (capability.levels.includes(fallbackLevel))
+        return fallbackLevel;
+
+    if (capability.levels.includes(DEFAULT_THINKING_LEVEL))
+        return DEFAULT_THINKING_LEVEL;
+
+    return capability.levels[0];
+}
+
 export function isThinkingLevelSupported(provider, model, level) {
     return getSupportedThinkingLevels(provider, model).includes(normalizeThinkingLevel(level));
 }

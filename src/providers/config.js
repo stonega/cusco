@@ -15,7 +15,11 @@ import {
     discoverOpenAiImageModels,
     discoverZaiImageModels,
 } from './imageGeneration.js';
-import { getSupportedThinkingLevels } from './thinking.js';
+import {
+    getDefaultThinkingLevel,
+    getSupportedThinkingLevels,
+    normalizeThinkingLevel,
+} from './thinking.js';
 import { createDefaultApiKeyStore } from '../secrets/apiKeyStore.js';
 
 const SETTINGS_SCHEMA_ID = 'io.github.stonega.Cusco';
@@ -272,6 +276,10 @@ const PROVIDER_SUPPORTED_MODEL_IDS = {
         'deepseek-v4-pro',
         'deepseek-v4-flash',
     ]),
+    grok: new Set([
+        'grok-4.5',
+        'grok-4.3',
+    ]),
     zai: new Set([
         'glm-5.2',
         'glm-5-turbo',
@@ -286,6 +294,10 @@ const PROVIDER_SUPPORTED_IMAGE_MODEL_IDS = {
     ]),
     zai: new Set([
         'glm-image',
+    ]),
+    grok: new Set([
+        'grok-imagine-image-quality',
+        'grok-imagine-image',
     ]),
 };
 const PROVIDER_UNSUPPORTED_IMAGE_MODEL_IDS = {
@@ -327,6 +339,18 @@ const IMAGE_MODEL_METADATA = {
             id: 'glm-image',
             name: 'GLM-Image',
             description: 'Z.ai text-to-image model for complex layouts, posters, diagrams, and text-rich images.',
+        },
+    },
+    grok: {
+        'grok-imagine-image-quality': {
+            id: 'grok-imagine-image-quality',
+            name: 'Grok Imagine Image Quality',
+            description: 'xAI Grok Imagine image generation model optimized for higher-quality output.',
+        },
+        'grok-imagine-image': {
+            id: 'grok-imagine-image',
+            name: 'Grok Imagine Image',
+            description: 'xAI Grok Imagine image generation model.',
         },
     },
 };
@@ -440,9 +464,35 @@ const ZAI_MODEL_METADATA = {
         },
     },
 };
+const GROK_MODEL_METADATA = {
+    'grok-4.5': {
+        id: 'grok-4.5',
+        name: 'Grok 4.5',
+        description: 'xAI Grok model for frontier chat, coding, and agentic work.',
+        contextWindowTokens: 1000000,
+        thinking: {
+            api: 'xai-reasoning',
+            levels: ['low', 'medium', 'high'],
+            defaultLevel: 'high',
+        },
+    },
+    'grok-4.3': {
+        id: 'grok-4.3',
+        name: 'Grok 4.3',
+        description: 'xAI Grok text and vision model with a 1M token context window.',
+        contextWindowTokens: 1000000,
+        thinking: {
+            api: 'xai-reasoning',
+            levels: ['off', 'low', 'medium', 'high'],
+            defaultLevel: 'low',
+            offEffort: 'none',
+        },
+    },
+};
 const PROVIDER_MODEL_METADATA = {
     kimi: KIMI_MODEL_METADATA,
     deepseek: DEEPSEEK_MODEL_METADATA,
+    grok: GROK_MODEL_METADATA,
     zai: ZAI_MODEL_METADATA,
 };
 const PROVIDER_MODEL_CONTEXT_WINDOW_TOKENS = {
@@ -460,15 +510,9 @@ const PROVIDER_MODEL_CONTEXT_WINDOW_TOKENS = {
         'gemini-3.5-flash': 1048576,
         'gemini-3.1-pro-preview': 1048576,
     },
-    minimax: {
-        'MiniMax-M3': 1000000,
-        'MiniMax-M2.7': 204800,
-        'MiniMax-M2.7-highspeed': 204800,
-        'MiniMax-M2.5': 204800,
-        'MiniMax-M2.5-highspeed': 204800,
-        'MiniMax-M2.1': 204800,
-        'MiniMax-M2.1-highspeed': 204800,
-        'MiniMax-M2': 204800,
+    grok: {
+        'grok-4.5': 1000000,
+        'grok-4.3': 1000000,
     },
 };
 
@@ -804,68 +848,28 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         ],
     },
     {
-        id: 'minimax',
-        name: 'MiniMax',
-        description: 'MiniMax OpenAI-compatible API.',
-        themeColor: '#FF6A00',
+        id: 'grok',
+        name: 'Grok',
+        description: 'xAI Grok OpenAI-compatible API.',
+        themeColor: '#111111',
         implemented: true,
         enabled: false,
         apiFormat: 'openai-chat-completions',
+        imageApiFormat: 'openai-images',
         apiKeyRequired: true,
         apiKeyConfigured: false,
-        apiKeyEnvVar: 'MINIMAX_API_KEY',
-        baseUrl: 'https://api.minimax.io/v1',
+        apiKeyEnvVar: 'XAI_API_KEY',
+        baseUrl: 'https://api.x.ai/v1',
         chatPath: '/chat/completions',
-        defaultModelId: 'MiniMax-M3',
+        defaultModelId: 'grok-4.5',
+        defaultImageModelId: 'grok-imagine-image-quality',
         models: [
-            {
-                id: 'MiniMax-M3',
-                name: 'MiniMax M3',
-                description: 'Frontier multimodal coding and agentic model with 1M context.',
-                contextWindowTokens: 1000000,
-            },
-            {
-                id: 'MiniMax-M2.7',
-                name: 'MiniMax M2.7',
-                description: 'MiniMax M-series model for engineering, office, and character-rich tasks.',
-                contextWindowTokens: 204800,
-            },
-            {
-                id: 'MiniMax-M2.7-highspeed',
-                name: 'MiniMax M2.7 Highspeed',
-                description: 'Lower-latency M2.7 variant.',
-                contextWindowTokens: 204800,
-            },
-            {
-                id: 'MiniMax-M2.5',
-                name: 'MiniMax M2.5',
-                description: 'MiniMax M-series model for complex text and coding tasks.',
-                contextWindowTokens: 204800,
-            },
-            {
-                id: 'MiniMax-M2.5-highspeed',
-                name: 'MiniMax M2.5 Highspeed',
-                description: 'Lower-latency M2.5 variant.',
-                contextWindowTokens: 204800,
-            },
-            {
-                id: 'MiniMax-M2.1',
-                name: 'MiniMax M2.1',
-                description: 'MiniMax model for multilingual programming and reasoning tasks.',
-                contextWindowTokens: 204800,
-            },
-            {
-                id: 'MiniMax-M2.1-highspeed',
-                name: 'MiniMax M2.1 Highspeed',
-                description: 'Lower-latency M2.1 variant.',
-                contextWindowTokens: 204800,
-            },
-            {
-                id: 'MiniMax-M2',
-                name: 'MiniMax M2',
-                description: 'MiniMax model with agentic capabilities and advanced reasoning.',
-                contextWindowTokens: 204800,
-            },
+            { ...GROK_MODEL_METADATA['grok-4.5'] },
+            { ...GROK_MODEL_METADATA['grok-4.3'] },
+        ],
+        imageModels: [
+            { ...IMAGE_MODEL_METADATA.grok['grok-imagine-image-quality'] },
+            { ...IMAGE_MODEL_METADATA.grok['grok-imagine-image'] },
         ],
     },
     {
@@ -1289,6 +1293,15 @@ export class ProviderConfigStore {
             return [];
 
         return getSupportedThinkingLevels(provider, model);
+    }
+
+    getDefaultThinkingLevel(providerId, modelId = '', fallback = undefined) {
+        const { provider, model } = this.resolve(providerId, modelId);
+
+        if (!provider)
+            return normalizeThinkingLevel(fallback);
+
+        return getDefaultThinkingLevel(provider, model, fallback);
     }
 
     supportsThinking(providerId, modelId = '') {
