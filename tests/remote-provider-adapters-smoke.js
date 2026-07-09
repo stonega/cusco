@@ -62,12 +62,28 @@ const imagePath = GLib.build_filenamev([
 const imageBytes = new TextEncoder().encode('tiny-image');
 const imageData = GLib.base64_encode(imageBytes);
 GLib.file_set_contents(imagePath, imageBytes);
+const svgPath = GLib.build_filenamev([
+    GLib.get_tmp_dir(),
+    `cusco-provider-svg-${GLib.uuid_string_random()}.svg`,
+]);
+const svgBytes = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h1v1H0z"/></svg>');
+GLib.file_set_contents(svgPath, svgBytes);
 const imageMessages = [
     createMessage('user', 'Describe this image', {
         attachments: [{
             kind: 'image',
             name: 'tiny.png',
             path: imagePath,
+        }],
+    }),
+];
+const svgImageMessages = [
+    createMessage('user', 'Read this SVG', {
+        attachments: [{
+            kind: 'image',
+            name: 'icon.svg',
+            mimeType: 'image/svg+xml',
+            path: svgPath,
         }],
     }),
 ];
@@ -126,6 +142,8 @@ const openAiImageBody = buildOpenAiResponsesBody(imageMessages, 'gpt-test');
 assertEqual(openAiImageBody.input[0].content[0].type, 'input_text', 'OpenAI image prompt text part');
 assertEqual(openAiImageBody.input[0].content[1].type, 'input_image', 'OpenAI image part');
 assertEqual(openAiImageBody.input[0].content[1].image_url, `data:image/png;base64,${imageData}`, 'OpenAI image data URL');
+const openAiSvgBody = buildOpenAiResponsesBody(svgImageMessages, 'gpt-test');
+assertEqual(openAiSvgBody.input[0].content, 'Read this SVG', 'OpenAI SVG attachment is not sent as an image part');
 
 const chatBody = buildOpenAiCompatibleChatBody(messages, 'chat-test');
 assertEqual(chatBody.messages[0].role, 'system', 'OpenAI-compatible system role');
@@ -139,6 +157,8 @@ const unsupportedChatImageBody = buildOpenAiCompatibleChatBody(imageMessages, 'c
     provider: { supportsImageAttachments: false },
 });
 assertEqual(unsupportedChatImageBody.messages[0].content, 'Describe this image', 'Unsupported OpenAI-compatible provider omits image parts');
+const chatSvgBody = buildOpenAiCompatibleChatBody(svgImageMessages, 'chat-test');
+assertEqual(chatSvgBody.messages[0].content, 'Read this SVG', 'OpenAI-compatible SVG attachment is not sent as an image part');
 
 const chatToolBody = buildOpenAiCompatibleChatBody(messages, 'chat-test', {
     tools: [mcpTool],
@@ -270,6 +290,8 @@ assertEqual(anthropicImageBody.messages[0].content[0].type, 'image', 'Anthropic 
 assertEqual(anthropicImageBody.messages[0].content[0].source.media_type, 'image/png', 'Anthropic image MIME type');
 assertEqual(anthropicImageBody.messages[0].content[0].source.data, imageData, 'Anthropic image data');
 assertEqual(anthropicImageBody.messages[0].content[1].type, 'text', 'Anthropic image prompt text part');
+const anthropicSvgBody = buildAnthropicMessagesBody(svgImageMessages, 'claude-test');
+assertEqual(anthropicSvgBody.messages[0].content, 'Read this SVG', 'Anthropic SVG attachment is not sent as an image part');
 const anthropicToolBody = buildAnthropicMessagesBody(messages, 'claude-test', {
     tools: [mcpTool],
 });
@@ -300,6 +322,9 @@ const geminiImageBody = buildGeminiGenerateContentBody(imageMessages);
 assertEqual(geminiImageBody.contents[0].parts[0].text, 'Describe this image', 'Gemini image prompt text part');
 assertEqual(geminiImageBody.contents[0].parts[1].inline_data.mime_type, 'image/png', 'Gemini image MIME type');
 assertEqual(geminiImageBody.contents[0].parts[1].inline_data.data, imageData, 'Gemini image data');
+const geminiSvgBody = buildGeminiGenerateContentBody(svgImageMessages);
+assertEqual(geminiSvgBody.contents[0].parts.length, 1, 'Gemini SVG attachment is not sent as an image part');
+assertEqual(geminiSvgBody.contents[0].parts[0].text, 'Read this SVG', 'Gemini SVG prompt text part');
 const geminiThinkingLevelBody = buildGeminiGenerateContentBody(messages, {
     model: {
         thinking: {

@@ -111,9 +111,24 @@
     background-image: none;
 }
 
+.cusco-floating-composer .cusco-composer-meta button.cusco-scroll-to-bottom-button {
+    background-color: alpha(black, 0.5);
+    background-image: none;
+}
+
+.cusco-floating-composer .cusco-composer-meta button.cusco-scroll-to-bottom-button:hover,
+.cusco-floating-composer .cusco-composer-meta button.cusco-scroll-to-bottom-button:active {
+    background-color: alpha(black, 0.62);
+    background-image: none;
+}
+
 .cusco-floating-composer .cusco-composer-meta button image,
 .cusco-message-actions button image {
     color: @window_fg_color;
+}
+
+.cusco-floating-composer .cusco-composer-meta button.cusco-scroll-to-bottom-button image {
+    color: white;
 }
 
 .cusco-composer-input {

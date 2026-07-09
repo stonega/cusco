@@ -80,7 +80,10 @@ const KNOT_ICON_STROKE_WIDTH = 35;
 const KNOT_ICON_SAMPLE_STEPS = 28;
 const KNOT_ICON_ANIMATION_SECONDS = 1;
 const LONG_RESPONSE_NOTIFICATION_DELAY_MS = 10000;
-const IMAGE_ATTACHMENT_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'];
+const SCROLL_TO_BOTTOM_ANIMATION_MS = 180;
+const SCROLL_TO_BOTTOM_ANIMATION_INTERVAL_MS = 16;
+// SVG is XML text; most model image endpoints do not accept it as a vision input.
+const IMAGE_ATTACHMENT_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
 const MAX_ATTACHMENT_TEXT_CHARS = 20000;
 const COMPOSER_ATTACHMENT_THUMBNAIL_WIDTH = 36;
 const COMPOSER_ATTACHMENT_THUMBNAIL_HEIGHT = 28;
@@ -411,6 +414,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._pendingAttachments = [];
         this._cronJobIndex = new Map();
         this._cronLogSyncTimeoutId = 0;
+        this._followLatestMessage = false;
+        this._scrollToBottomSourceId = 0;
+        this._scrollToBottomPasses = 0;
+        this._scrollToBottomAnimationSourceId = 0;
         this._providerConfigs = new ProviderConfigStore();
         const { provider: defaultProvider, model: defaultModel } = this._providerConfigs.getActiveSelection();
 
@@ -621,8 +628,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const composerMetaRow = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 8,
+            hexpand: true,
         });
         composerMetaRow.add_css_class('cusco-composer-meta');
+        const composerMetaSpacer = new Gtk.Box({
+            hexpand: true,
+        });
 
         this._providerPicker = this._createProviderPicker();
         this._providerConfigButton = this._createProviderConfigButton();
@@ -637,6 +648,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._modelPicker.connect('changed', () => this._handleModelChanged());
         this._thinkingLevelPicker.connect('changed', () => this._handleThinkingLevelChanged());
         this._chatOptionsMenuButton = this._createChatOptionsMenuButton();
+        this._scrollToBottomButton = new Gtk.Button({
+            icon_name: 'go-down-symbolic',
+            tooltip_text: 'Scroll to latest message',
+            valign: Gtk.Align.CENTER,
+            visible: false,
+        });
+        this._scrollToBottomButton.add_css_class('flat');
+        this._scrollToBottomButton.add_css_class('circular');
+        this._scrollToBottomButton.add_css_class('cusco-scroll-to-bottom-button');
+        this._scrollToBottomButton.connect('clicked', () => this._scrollToBottom({ animate: true }));
 
         this._messages = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
@@ -655,6 +676,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
             hexpand: true,
             vexpand: true,
         });
+        this._scroller.get_vadjustment().connect('changed', () => {
+            if (this._followLatestMessage)
+                this._scrollToBottom({ passes: 2 });
+
+            this._syncScrollToBottomButton();
+        });
+        this._scroller.get_vadjustment().connect('value-changed', () => this._syncScrollToBottomButton());
 
         this._emptyConversationState = this._createEmptyConversationState();
         main.connect('get-child-position', (overlay, child, allocation) => {
@@ -733,6 +761,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
         composerMetaRow.append(this._modelPicker);
         composerMetaRow.append(this._thinkingLevelPicker);
         composerMetaRow.append(this._chatOptionsMenuButton);
+        composerMetaRow.append(composerMetaSpacer);
+        composerMetaRow.append(this._scrollToBottomButton);
 
         this._composerBuffer = new Gtk.TextBuffer();
         this._composer = new Gtk.TextView({
@@ -1716,6 +1746,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         toolCall.outputPreview = appendToolOutputPreview(toolCall.outputPreview, text);
         runningTool?.view?.append_tool_output?.(toolCall.outputPreview);
+        this._scrollToBottom();
     }
 
     _updateRunningToolMessage(conversationId, runningTool, content, toolCall) {
@@ -2089,6 +2120,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (!cancellable)
             return;
 
+        this._setFollowLatestMessage(true);
         let assistantView = null;
         let assistantViewState = null;
         let shouldSendQueued = false;
@@ -2198,6 +2230,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             throw error;
         } finally {
             this._stopLongResponseNotification();
+            this._setFollowLatestMessage(false);
 
             if (ownsActiveTurn)
                 this._finishActiveTurn(cancellable);
@@ -4968,14 +5001,117 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._appendMessageBottomSpacer();
     }
 
-    _scrollToBottom() {
+    _setFollowLatestMessage(enabled) {
+        this._followLatestMessage = Boolean(enabled);
+        this._scrollToBottom({ passes: enabled ? 3 : 2 });
+    }
+
+    _stopScrollToBottomAnimation() {
+        if (!this._scrollToBottomAnimationSourceId)
+            return;
+
+        GLib.source_remove(this._scrollToBottomAnimationSourceId);
+        this._scrollToBottomAnimationSourceId = 0;
+    }
+
+    _getScrollToBottomValue() {
+        if (!this._scroller)
+            return 0;
+
+        const adjustment = this._scroller.get_vadjustment();
+        return Math.max(0, adjustment.get_upper() - adjustment.get_page_size());
+    }
+
+    _animateScrollToBottom() {
+        if (!this._scroller || this._appSettings.reducedMotionEnabled) {
+            this._scrollToBottom({ passes: 2 });
+            return;
+        }
+
+        this._stopScrollToBottomAnimation();
+
+        const adjustment = this._scroller.get_vadjustment();
+        const startValue = adjustment.get_value();
+        const startTime = GLib.get_monotonic_time();
+
+        if (Math.abs(this._getScrollToBottomValue() - startValue) < 1) {
+            adjustment.set_value(this._getScrollToBottomValue());
+            this._syncScrollToBottomButton();
+            return;
+        }
+
+        this._scrollToBottomAnimationSourceId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT,
+            SCROLL_TO_BOTTOM_ANIMATION_INTERVAL_MS,
+            () => {
+                const elapsedMs = (GLib.get_monotonic_time() - startTime) / 1000;
+                const progress = Math.min(1, elapsedMs / SCROLL_TO_BOTTOM_ANIMATION_MS);
+                const easedProgress = 1 - Math.pow(1 - progress, 3);
+                const endValue = this._getScrollToBottomValue();
+
+                adjustment.set_value(startValue + ((endValue - startValue) * easedProgress));
+                this._syncScrollToBottomButton();
+
+                if (progress < 1)
+                    return GLib.SOURCE_CONTINUE;
+
+                adjustment.set_value(this._getScrollToBottomValue());
+                this._scrollToBottomAnimationSourceId = 0;
+                this._syncScrollToBottomButton();
+                return GLib.SOURCE_REMOVE;
+            },
+        );
+    }
+
+    _queueScrollToBottomPass() {
+        if (this._scrollToBottomSourceId)
+            return;
+
+        this._scrollToBottomSourceId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._scrollToBottomSourceId = 0;
+
+            if (!this._scroller) {
+                this._scrollToBottomPasses = 0;
+                return GLib.SOURCE_REMOVE;
+            }
+
+            const adjustment = this._scroller.get_vadjustment();
+            adjustment.set_value(this._getScrollToBottomValue());
+            this._scrollToBottomPasses = Math.max(0, this._scrollToBottomPasses - 1);
+            this._syncScrollToBottomButton();
+
+            if (this._scrollToBottomPasses > 0)
+                this._queueScrollToBottomPass();
+
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _scrollToBottom(options = {}) {
         if (!this._scroller)
             return;
 
-        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-            const adjustment = this._scroller.get_vadjustment();
-            adjustment.set_value(adjustment.get_upper() - adjustment.get_page_size());
-            return GLib.SOURCE_REMOVE;
-        });
+        if (options.animate && !this._followLatestMessage) {
+            this._animateScrollToBottom();
+            return;
+        }
+
+        this._stopScrollToBottomAnimation();
+        const passes = Math.max(1, Math.round(options.passes ?? (this._followLatestMessage ? 3 : 1)));
+        this._scrollToBottomPasses = Math.max(this._scrollToBottomPasses, passes);
+        this._queueScrollToBottomPass();
+    }
+
+    _syncScrollToBottomButton() {
+        if (!this._scrollToBottomButton || !this._scroller)
+            return;
+
+        const adjustment = this._scroller.get_vadjustment();
+        const pageSize = adjustment.get_page_size();
+        const maxValue = Math.max(0, adjustment.get_upper() - pageSize);
+        const distanceToBottom = Math.max(0, maxValue - adjustment.get_value());
+        const shouldShow = !this._followLatestMessage && pageSize > 0 && distanceToBottom > pageSize;
+
+        this._scrollToBottomButton.set_visible(shouldShow);
     }
 });

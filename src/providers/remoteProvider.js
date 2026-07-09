@@ -40,7 +40,6 @@ const IMAGE_MIME_TYPES_BY_EXTENSION = new Map([
     ['.jpeg', 'image/jpeg'],
     ['.jpg', 'image/jpeg'],
     ['.png', 'image/png'],
-    ['.svg', 'image/svg+xml'],
     ['.webp', 'image/webp'],
 ]);
 const GEMINI_SCHEMA_FIELDS = new Set([
@@ -126,9 +125,22 @@ function imageMimeTypeForAttachment(attachment) {
     return extension ? IMAGE_MIME_TYPES_BY_EXTENSION.get(extension) : 'image/png';
 }
 
+function isSvgAttachment(attachment) {
+    const explicitMimeType = String(attachment?.mimeType ?? attachment?.mime_type ?? '').trim().toLowerCase();
+
+    if (explicitMimeType === 'image/svg+xml')
+        return true;
+
+    const name = String(attachment?.name ?? attachment?.path ?? '').toLowerCase();
+    return name.endsWith('.svg');
+}
+
 function imageAttachments(message) {
     return (message?.attachments ?? []).filter((attachment) => {
         if (attachment?.kind !== 'image')
+            return false;
+
+        if (isSvgAttachment(attachment))
             return false;
 
         const path = String(attachment.path ?? '').trim();
