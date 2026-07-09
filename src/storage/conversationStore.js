@@ -26,6 +26,12 @@ function normalizeStringList(value) {
         : [];
 }
 
+function normalizeMetadata(metadata) {
+    return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+        ? { ...metadata }
+        : {};
+}
+
 function normalizeMessage(message) {
     const toolCall = message?.toolCall && typeof message.toolCall === 'object'
         ? { ...message.toolCall }
@@ -48,6 +54,7 @@ function normalizeMessage(message) {
         cronRun: message?.cronRun && typeof message.cronRun === 'object'
             ? { ...message.cronRun }
             : null,
+        metadata: normalizeMetadata(message?.metadata),
         createdAt: normalizeString(message?.createdAt, new Date().toISOString()),
     };
 }

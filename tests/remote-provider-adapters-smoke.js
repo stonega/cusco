@@ -419,7 +419,12 @@ assertEqual(extractGeminiUsage({
 
 const discoveredModels = extractDiscoveredModels({
     models: [
-        { name: 'models/gemini-test', displayName: 'Gemini Test', supportedGenerationMethods: ['generateContent'] },
+        {
+            name: 'models/gemini-test',
+            displayName: 'Gemini Test',
+            supportedGenerationMethods: ['generateContent'],
+            inputTokenLimit: 1048576,
+        },
         { name: 'models/embed-test', supportedGenerationMethods: ['embedContent'] },
         { id: 'chat-test' },
     ],
@@ -427,6 +432,7 @@ const discoveredModels = extractDiscoveredModels({
 
 assertEqual(discoveredModels.length, 2, 'Discovered model count');
 assertEqual(discoveredModels[0].id, 'gemini-test', 'Gemini model prefix normalization');
+assertEqual(discoveredModels[0].contextWindowTokens, 1048576, 'Discovered context window normalization');
 
 class ContinuingProvider extends OpenAiCompatibleChatProvider {
     constructor(responses) {

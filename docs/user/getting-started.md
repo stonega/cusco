@@ -8,7 +8,7 @@ Run it from the project root:
 gjs -m src/main.js
 ```
 
-The first window has a persistent conversation sidebar, markdown-capable transcript, and composer with provider/model selection plus estimated context usage. The Preferences button opens chat settings plus provider management, including opt-in provider fallback and Secret Service API key storage for remote providers.
+The first window has a persistent conversation sidebar, markdown-capable transcript, and composer with provider/model selection plus estimated context usage. Hover the composer context ring for token details. When a chat reaches 80% of the selected model's context window, Cusco automatically summarizes older messages into a context checkpoint and keeps the recent conversation active. The Preferences button opens chat settings plus provider management, including opt-in provider fallback and Secret Service API key storage for remote providers.
 
 Messages can be edited, retried, regenerated, or branched from the transcript. Fenced code blocks render with syntax highlighting and copy buttons.
 

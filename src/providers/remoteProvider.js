@@ -1209,11 +1209,24 @@ function normalizeDiscoveredModel(item) {
 
     const id = String(rawId).replace(/^models\//, '');
     const name = item.display_name ?? item.displayName ?? item.name ?? item.id ?? id;
+    const contextWindowTokens = [
+        item.contextWindowTokens,
+        item.context_window_tokens,
+        item.contextLengthTokens,
+        item.context_length_tokens,
+        item.contextLength,
+        item.context_length,
+        item.inputTokenLimit,
+        item.input_token_limit,
+        item.maxInputTokens,
+        item.max_input_tokens,
+    ].map(Number).find((tokens) => Number.isFinite(tokens) && tokens > 0);
 
     return {
         id,
         name: String(name).replace(/^models\//, ''),
         description: item.description ?? 'Discovered model.',
+        ...(contextWindowTokens ? { contextWindowTokens: Math.round(contextWindowTokens) } : {}),
     };
 }
 

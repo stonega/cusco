@@ -37,6 +37,38 @@ level. Models without thinking support keep the chat picker disabled.
 | Z.ai | `glm-5.2` | `glm-5-turbo` | `Off`, `Auto` |
 | Custom API | None | User configured | None |
 
+## Context Windows
+
+The composer usage percentage uses these approximate maximum context windows
+from the built-in model metadata.
+
+| Provider | Model | Context window |
+|---|---|---|
+| OpenAI | `gpt-5.5` | 1M tokens |
+| OpenAI | `gpt-5.4-mini` | 400K tokens |
+| OpenAI | `gpt-4.1` | 1M tokens |
+| Anthropic | `claude-opus-4-8` | 1M tokens |
+| Anthropic | `claude-sonnet-4-6` | 1M tokens |
+| Anthropic | `claude-haiku-4-5-20251001` | 200K tokens |
+| Google Gemini | `gemini-3.5-flash` | 1,048,576 tokens |
+| Google Gemini | `gemini-3.1-pro-preview` | 1,048,576 tokens |
+| Kimi | `kimi-k2.7-code` | 256K tokens |
+| Kimi | `kimi-k2.7-code-highspeed` | 256K tokens |
+| Kimi | `kimi-k2.6` | 256K tokens |
+| DeepSeek | `deepseek-v4-pro` | 1M tokens |
+| DeepSeek | `deepseek-v4-flash` | 1M tokens |
+| MiniMax | `MiniMax-M3` | 1M tokens |
+| MiniMax | `MiniMax-M2.7` | 204,800 tokens |
+| MiniMax | `MiniMax-M2.7-highspeed` | 204,800 tokens |
+| MiniMax | `MiniMax-M2.5` | 204,800 tokens |
+| MiniMax | `MiniMax-M2.5-highspeed` | 204,800 tokens |
+| MiniMax | `MiniMax-M2.1` | 204,800 tokens |
+| MiniMax | `MiniMax-M2.1-highspeed` | 204,800 tokens |
+| MiniMax | `MiniMax-M2` | 204,800 tokens |
+| Z.ai | `glm-5.2` | 1M tokens |
+| Z.ai | `glm-5-turbo` | 200K tokens |
+| Custom API | User configured | Unknown |
+
 ## Image Generation Models
 
 Image generation models are configured separately from chat models. The

@@ -1,5 +1,6 @@
 import GLib from 'gi://GLib?version=2.0';
 
+import { CONTEXT_COMPACTION_SUMMARY_KIND } from '../src/chat/compaction.js';
 import { ConversationManager } from '../src/chat/conversation.js';
 import { createMessage } from '../src/providers/provider.js';
 import { ConversationFileStore } from '../src/storage/conversationStore.js';
@@ -145,6 +146,33 @@ reloaded.archiveConversation(reloadedChat.id, false);
 
 if (reloaded.searchConversations('persist').length !== 1)
     throw new Error('Conversation search did not find message content');
+
+reloaded.replaceMessages(reloadedChat.id, [
+    createMessage('system', 'Context compacted automatically.\n\nSummary', {
+        metadata: {
+            kind: CONTEXT_COMPACTION_SUMMARY_KIND,
+            summary: 'Summary',
+            tokensBefore: 120,
+            tokensAfter: 30,
+            messagesCompacted: 4,
+        },
+    }),
+    createMessage('user', 'Recent request'),
+]);
+
+const reloadedCompacted = new ConversationManager({
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
+    store,
+}).activeConversation;
+
+if (reloadedCompacted.messages.length !== 2)
+    throw new Error('Compacted transcript replacement was not persisted');
+
+if (reloadedCompacted.messages[0].metadata?.kind !== CONTEXT_COMPACTION_SUMMARY_KIND
+    || reloadedCompacted.messages[0].metadata?.tokensBefore !== 120) {
+    throw new Error('Compaction summary metadata was not persisted');
+}
 
 const cronChat = reloaded.createConversation({
     title: 'Daily sync',

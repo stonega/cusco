@@ -18,6 +18,13 @@ import {
     parseAgentToolCall,
 } from './chat/agentMode.js';
 import { extractArtifactsFromMarkdown } from './chat/artifacts.js';
+import {
+    AUTO_COMPACTION_MAX_SUMMARY_OUTPUT_TOKENS,
+    buildCompactedMessageList,
+    buildCompactionPrompt,
+    getContextUsageState,
+    prepareContextCompaction,
+} from './chat/compaction.js';
 import { ConversationManager } from './chat/conversation.js';
 import { copyTextToClipboard, createArtifactCard, createMessageContent } from './chat/messageView.js';
 import { estimateConversationUsage } from './chat/usage.js';
@@ -96,6 +103,83 @@ const BASE_RESPONSE_SYSTEM_PROMPT = [
     'If more work remains, keep going within the available output budget instead of asking the user to say "continue".',
     'Ask a follow-up only when required information is missing or the user must choose between options.',
 ].join(' ');
+
+function trimFixedNumber(value, fractionDigits) {
+    return value.toFixed(fractionDigits).replace(/\.?0+$/, '');
+}
+
+function normalizeContextWindowTokens(value) {
+    const tokens = Number(value);
+
+    return Number.isFinite(tokens) && tokens > 0 ? Math.round(tokens) : 0;
+}
+
+function formatCompactTokenCount(tokens) {
+    const normalized = normalizeContextWindowTokens(tokens);
+
+    if (normalized >= 1000000)
+        return `${trimFixedNumber(normalized / 1000000, 2)}m`;
+
+    if (normalized >= 1000)
+        return `${trimFixedNumber(normalized / 1000, 1)}k`;
+
+    return String(normalized);
+}
+
+function formatTokenCount(tokens) {
+    return `${formatCompactTokenCount(tokens)} tokens`;
+}
+
+function formatContextUsagePercent(tokens, contextWindowTokens) {
+    const normalizedContextWindowTokens = normalizeContextWindowTokens(contextWindowTokens);
+
+    if (!normalizedContextWindowTokens)
+        return '';
+
+    const percentage = (Math.max(0, Number(tokens) || 0) / normalizedContextWindowTokens) * 100;
+
+    if (percentage === 0)
+        return '0%';
+
+    if (percentage < 0.1)
+        return '<0.1%';
+
+    if (percentage < 10)
+        return `${trimFixedNumber(percentage, 1)}%`;
+
+    return `${Math.round(percentage)}%`;
+}
+
+function drawContextUsageChart(cr, width, height, fraction, color) {
+    const size = Math.min(width, height);
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const radius = Math.max(1, (size / 2) - 2);
+    const lineWidth = Math.max(2, size / 6);
+    const clampedFraction = Math.min(1, Math.max(0, Number(fraction) || 0));
+
+    cr.save();
+    cr.setLineWidth(lineWidth);
+    cr.setLineCap(Cairo.LineCap.ROUND);
+
+    cr.setSourceRGBA(color.red, color.green, color.blue, color.alpha * 0.18);
+    cr.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    cr.stroke();
+
+    if (clampedFraction > 0) {
+        cr.setSourceRGBA(color.red, color.green, color.blue, color.alpha);
+        cr.arc(
+            centerX,
+            centerY,
+            radius,
+            -Math.PI / 2,
+            (-Math.PI / 2) + (Math.PI * 2 * clampedFraction),
+        );
+        cr.stroke();
+    }
+
+    cr.restore();
+}
 
 let knotIconPath = null;
 
@@ -378,7 +462,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const headerBar = new Adw.HeaderBar();
         const title = new Adw.WindowTitle({
             title: 'Cusco',
-            subtitle: '0 est. tokens · 0 messages',
+            subtitle: '0 messages',
         });
 
         this._windowTitle = title;
@@ -691,6 +775,26 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         composerOverlay.add_overlay(this._composerPlaceholder);
 
+        this._composerUsageFraction = 0;
+        this._composerUsageChart = new Gtk.DrawingArea({
+            halign: Gtk.Align.START,
+            valign: Gtk.Align.END,
+            margin_start: 12,
+            margin_bottom: 8,
+        });
+        this._composerUsageChart.set_size_request(18, 18);
+        this._composerUsageChart.add_css_class('cusco-context-usage-chart');
+        this._composerUsageChart.set_draw_func((widget, cr, drawWidth, drawHeight) => {
+            drawContextUsageChart(cr, drawWidth, drawHeight, this._composerUsageFraction, widget.get_color());
+        });
+        this._composerUsagePopover = this._createComposerUsagePopover();
+        this._composerUsagePopover.set_parent(this._composerUsageChart);
+        const usageMotionController = new Gtk.EventControllerMotion();
+        usageMotionController.connect('enter', () => this._composerUsagePopover?.popup());
+        usageMotionController.connect('leave', () => this._composerUsagePopover?.popdown());
+        this._composerUsageChart.add_controller(usageMotionController);
+        composerOverlay.add_overlay(this._composerUsageChart);
+
         this._composerHint = new Gtk.Label({
             xalign: 1,
             yalign: 1,
@@ -742,8 +846,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return false;
         });
         this._composer.add_controller(composerKeyController);
-        this._composerBuffer.connect('changed', () => this._syncComposerPlaceholder());
+        this._composerBuffer.connect('changed', () => {
+            this._syncComposerPlaceholder();
+            this._syncComposerUsageChart();
+            this._syncComposerHint();
+        });
         this._syncComposerPlaceholder();
+        this._syncComposerUsageChart();
         this._syncComposerHint();
 
         composerRow.append(composerOverlay);
@@ -821,6 +930,107 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return;
 
         this._composerPlaceholder.set_visible(this._composerBuffer.get_char_count() === 0);
+    }
+
+    _getUsageMessages(conversation, {
+        pendingAssistantText = '',
+        includeComposerDraft = false,
+    } = {}) {
+        const messages = [...(conversation?.messages ?? [])];
+
+        if (pendingAssistantText)
+            messages.push({ content: pendingAssistantText });
+
+        if (includeComposerDraft) {
+            const draft = this._getComposerText().trim();
+
+            if (draft)
+                messages.push({ content: draft });
+        }
+
+        return messages;
+    }
+
+    _getContextWindowTokens(conversation) {
+        if (!conversation)
+            return 0;
+
+        const { model } = this._providerConfigs.resolve(conversation.providerId, conversation.modelId);
+
+        return normalizeContextWindowTokens(model?.contextWindowTokens);
+    }
+
+    _createComposerUsagePopover() {
+        const popover = new Gtk.Popover({
+            position: Gtk.PositionType.TOP,
+            autohide: false,
+        });
+        popover.add_css_class('cusco-context-usage-popover');
+        const content = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 5,
+            margin_top: 8,
+            margin_bottom: 8,
+            margin_start: 12,
+            margin_end: 12,
+        });
+
+        this._composerUsageTitleLabel = new Gtk.Label({
+            label: 'Context window:',
+            xalign: 0.5,
+            halign: Gtk.Align.CENTER,
+        });
+        this._composerUsageTitleLabel.add_css_class('caption');
+        this._composerUsageTitleLabel.add_css_class('dim-label');
+
+        this._composerUsagePercentLabel = new Gtk.Label({
+            label: '0% full',
+            xalign: 0.5,
+            halign: Gtk.Align.CENTER,
+        });
+
+        this._composerUsageDetailLabel = new Gtk.Label({
+            label: '0 / unknown tokens used',
+            xalign: 0.5,
+            halign: Gtk.Align.CENTER,
+        });
+        this._composerUsageDetailLabel.add_css_class('caption');
+
+        content.append(this._composerUsageTitleLabel);
+        content.append(this._composerUsagePercentLabel);
+        content.append(this._composerUsageDetailLabel);
+        popover.set_child(content);
+        return popover;
+    }
+
+    _syncComposerUsageChart() {
+        if (!this._composerUsageChart)
+            return;
+
+        const conversation = this._conversations.activeConversation;
+        const usage = estimateConversationUsage(this._getUsageMessages(conversation, {
+            includeComposerDraft: true,
+        }));
+        const contextWindowTokens = this._getContextWindowTokens(conversation);
+        this._composerUsageFraction = contextWindowTokens > 0
+            ? usage.tokens / contextWindowTokens
+            : 0;
+
+        this._composerUsageChart.set_tooltip_text('');
+        if (contextWindowTokens > 0) {
+            this._composerUsagePercentLabel?.set_label(
+                `${formatContextUsagePercent(usage.tokens, contextWindowTokens)} full`,
+            );
+            this._composerUsageDetailLabel?.set_label(
+                `${formatCompactTokenCount(usage.tokens)} / ${
+                    formatTokenCount(contextWindowTokens)
+                } used`,
+            );
+        } else {
+            this._composerUsagePercentLabel?.set_label('Unknown');
+            this._composerUsageDetailLabel?.set_label(`${usage.tokens} est. tokens used`);
+        }
+        this._composerUsageChart.queue_draw();
     }
 
     _syncComposerHint(isBusy = false) {
@@ -1874,15 +2084,18 @@ class CuscoWindow extends Adw.ApplicationWindow {
         try {
             this._injectMemoryContext(conversation);
             const activeSkills = this._injectSkillContext(conversation);
-            assistantView = this._createStreamingAssistantView(conversation);
-            assistantViewState = { view: assistantView };
-            assistantView.set_loading();
 
             if (conversation.agentModeEnabled)
                 await this._mcp.refreshTools(this._tools, {
                     timeoutSeconds: this._appSettings.responseTimeoutSeconds,
                     cancellable,
                 });
+
+            await this._maybeAutoCompactConversation(conversation, activeSkills, cancellable);
+
+            assistantView = this._createStreamingAssistantView(conversation);
+            assistantViewState = { view: assistantView };
+            assistantView.set_loading();
 
             const providerMessages = this._buildProviderMessages(conversation, activeSkills, {
                 agentMode: Boolean(conversation.agentModeEnabled),
@@ -1996,8 +2209,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
             ...providerConfig,
             cancellable,
             timeoutSeconds: this._appSettings.responseTimeoutSeconds,
-            maxOutputTokens: this._appSettings.maxOutputTokens,
-            thinkingLevel: this._conversations.activeConversation?.thinkingLevel ?? this._appSettings.thinkingLevel,
+            maxOutputTokens: collectOptions.maxOutputTokens ?? this._appSettings.maxOutputTokens,
+            thinkingLevel: collectOptions.thinkingLevel
+                ?? this._conversations.activeConversation?.thinkingLevel
+                ?? this._appSettings.thinkingLevel,
             tools: collectOptions.tools ?? [],
         })) {
             const normalizedChunk = normalizeProviderChunk(chunk);
@@ -2732,6 +2947,73 @@ class CuscoWindow extends Adw.ApplicationWindow {
         ];
     }
 
+    async _maybeAutoCompactConversation(conversation, skills, cancellable) {
+        const contextWindowTokens = this._getContextWindowTokens(conversation);
+
+        if (!contextWindowTokens)
+            return false;
+
+        const providerMessages = this._buildProviderMessages(conversation, skills, {
+            agentMode: Boolean(conversation.agentModeEnabled),
+        });
+        const usageState = getContextUsageState(providerMessages, contextWindowTokens);
+
+        if (!usageState.shouldCompact)
+            return false;
+
+        const compaction = prepareContextCompaction(conversation.messages, contextWindowTokens);
+
+        if (!compaction)
+            return false;
+
+        this._showToast('Compacting context...');
+        const summary = await this._generateContextCompactionSummary(conversation, compaction, cancellable);
+        const nextMessages = buildCompactedMessageList(summary, compaction, {
+            providerId: conversation.providerId,
+            modelId: conversation.modelId,
+        });
+
+        this._conversations.replaceMessages(conversation.id, nextMessages);
+        if (this._isActiveConversationId(conversation.id))
+            this._renderActiveConversation();
+        else
+            this._refreshConversationList();
+
+        this._showToast('Context compacted');
+        return true;
+    }
+
+    async _generateContextCompactionSummary(conversation, compaction, cancellable) {
+        const prompt = buildCompactionPrompt(compaction);
+        const messages = [
+            createMessage(
+                'system',
+                'Create concise, factual continuation summaries for long AI chat sessions.',
+            ),
+            createMessage('user', prompt),
+        ];
+        const summary = String(await this._collectProviderResponse(
+            conversation.providerId,
+            conversation.modelId,
+            messages,
+            cancellable,
+            null,
+            {
+                maxOutputTokens: AUTO_COMPACTION_MAX_SUMMARY_OUTPUT_TOKENS,
+                thinkingLevel: 'off',
+                tools: [],
+            },
+        )).trim();
+
+        if (!summary) {
+            const error = new Error('Context compaction returned an empty summary.');
+            error.userMessage = 'Context compaction failed before sending.';
+            throw error;
+        }
+
+        return summary;
+    }
+
     _promptMemoryProposal(message, conversation) {
         const proposal = this._memories.createProposalFromMessage(message, conversation);
 
@@ -3242,6 +3524,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._providerConfigs.setActiveSelection(providerId, model?.id ?? '');
         this._syncProviderControls(conversation);
         this._discardPendingImageAttachmentsIfUnsupportedProvider();
+        this._updateUsageDisplay(conversation);
         this._refreshConversationList();
     }
 
@@ -3265,6 +3548,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         );
         this._providerConfigs.setActiveSelection(conversation.providerId, modelId);
         this._syncProviderControls(conversation);
+        this._updateUsageDisplay(conversation);
         this._refreshConversationList();
     }
 
@@ -3633,13 +3917,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (conversation?.id && !this._isActiveConversationId(conversation.id))
             return;
 
-        const messages = [...(conversation?.messages ?? [])];
+        const usage = estimateConversationUsage(this._getUsageMessages(conversation, {
+            pendingAssistantText,
+        }));
 
-        if (pendingAssistantText)
-            messages.push({ content: pendingAssistantText });
-
-        const usage = estimateConversationUsage(messages);
-        this._windowTitle.set_subtitle(`${usage.tokens} est. tokens · ${usage.messages} messages`);
+        this._windowTitle.set_subtitle(`${usage.messages} messages`);
+        this._syncComposerUsageChart();
+        this._syncComposerHint(Boolean(this._activeChatCancellable));
     }
 
     _setComposerBusy(isBusy) {

@@ -18,6 +18,7 @@ chat_sources = files(
   'chat/agentMode.js',
   'chat/artifacts.js',
   'chat/codeThemes.js',
+  'chat/compaction.js',
   'chat/conversation.js',
   'chat/markdown.js',
   'chat/messageView.js',

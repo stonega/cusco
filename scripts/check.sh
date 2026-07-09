@@ -23,6 +23,7 @@ gjs -m tests/import-smoke.js
 gjs -m tests/artifacts-smoke.js
 gjs -m tests/markdown-smoke.js
 gjs -m tests/usage-smoke.js
+gjs -m tests/compaction-smoke.js
 gjs -m tests/memory-smoke.js
 gjs -m tests/image-generation-smoke.js
 gjs -m tests/tools-smoke.js

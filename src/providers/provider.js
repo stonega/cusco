@@ -22,6 +22,9 @@ export function createMessage(role, content, options = {}) {
         usage: options.usage ?? null,
         toolCall: options.toolCall ?? null,
         cronRun: options.cronRun ?? null,
+        metadata: options.metadata && typeof options.metadata === 'object' && !Array.isArray(options.metadata)
+            ? { ...options.metadata }
+            : {},
         createdAt: new Date().toISOString(),
     };
 }

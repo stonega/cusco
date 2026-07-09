@@ -29,6 +29,12 @@ function normalizeList(values) {
         : [];
 }
 
+function normalizeMetadata(metadata) {
+    return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+        ? { ...metadata }
+        : {};
+}
+
 function normalizeMessage(message) {
     const toolCall = message.toolCall ? { ...message.toolCall } : null;
 
@@ -45,6 +51,7 @@ function normalizeMessage(message) {
         usage: normalizeUsage(message.usage),
         toolCall,
         cronRun: message.cronRun ? { ...message.cronRun } : null,
+        metadata: normalizeMetadata(message.metadata),
         createdAt: message.createdAt ?? now(),
     };
 }
@@ -431,6 +438,21 @@ export class ConversationManager {
         conversation.updatedAt = now();
         this._persist();
         return message;
+    }
+
+    replaceMessages(conversationId, messages) {
+        const conversation = this.getConversation(conversationId);
+
+        if (!conversation)
+            throw new Error(`Conversation does not exist: ${conversationId}`);
+
+        conversation.messages = Array.isArray(messages)
+            ? messages.map(normalizeMessage)
+            : [];
+        conversation.updatedAt = now();
+        this._moveToTop(conversationId);
+        this._persist();
+        return conversation;
     }
 
     _moveToTop(conversationId) {

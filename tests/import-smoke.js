@@ -8,6 +8,7 @@ import GLib from 'gi://GLib';
 import { APP_ID as APPLICATION_APP_ID, CuscoApplication } from '../src/application.js';
 import { buildAgentModeSystemPrompt, parseAgentToolCall } from '../src/chat/agentMode.js';
 import { extractArtifactsFromMarkdown } from '../src/chat/artifacts.js';
+import { buildCompactionPrompt, getContextUsageState } from '../src/chat/compaction.js';
 import { ConversationManager } from '../src/chat/conversation.js';
 import { markdownToPangoMarkup, parseMarkdownBlocks } from '../src/chat/markdown.js';
 import { createMessageContent } from '../src/chat/messageView.js';
@@ -85,6 +86,9 @@ if (typeof ConversationManager !== 'function')
 
 if (typeof buildAgentModeSystemPrompt !== 'function' || typeof parseAgentToolCall !== 'function')
     throw new Error('Agent Mode helpers did not import');
+
+if (typeof buildCompactionPrompt !== 'function' || typeof getContextUsageState !== 'function')
+    throw new Error('Compaction helpers did not import');
 
 if (typeof extractArtifactsFromMarkdown !== 'function')
     throw new Error('Artifact helpers did not import');

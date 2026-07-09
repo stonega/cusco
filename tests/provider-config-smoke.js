@@ -92,6 +92,43 @@ const defaultStore = new ProviderConfigStore(undefined, {
     apiKeyStore: new MemoryApiKeyStore({ zai: 'zai-key' }),
     envLookup: () => '',
 });
+const builtInModelsMissingContext = defaultStore.listProviders()
+    .filter((provider) => !provider.customizable)
+    .flatMap((provider) => provider.models
+        .filter((model) => !Number.isFinite(model.contextWindowTokens) || model.contextWindowTokens <= 0)
+        .map((model) => `${provider.id}/${model.id}`));
+
+if (builtInModelsMissingContext.length > 0)
+    throw new Error(`Built-in chat models are missing context windows: ${builtInModelsMissingContext.join(', ')}`);
+
+if (defaultStore.resolve('openai', 'gpt-5.4-mini').model.contextWindowTokens !== 400000)
+    throw new Error('OpenAI GPT-5.4 mini context window should be 400K tokens');
+
+if (defaultStore.resolve('anthropic', 'claude-haiku-4-5-20251001').model.contextWindowTokens !== 200000)
+    throw new Error('Claude Haiku 4.5 context window should be 200K tokens');
+
+if (defaultStore.resolve('gemini', 'gemini-3.5-flash').model.contextWindowTokens !== 1048576)
+    throw new Error('Gemini 3.5 Flash context window should match the documented input token limit');
+
+if (defaultStore.resolve('minimax', 'MiniMax-M2.7').model.contextWindowTokens !== 204800)
+    throw new Error('MiniMax M2.7 context window should be 204800 tokens');
+
+const discoveredContextStore = new ProviderConfigStore(undefined, {
+    settings: new MemorySettings({
+        strings: {
+            'provider-discovered-models': '{"openai":[{"id":"gpt-5.4-mini"}],"minimax":[{"id":"MiniMax-M2.7"}]}',
+        },
+    }),
+    apiKeyStore: new MemoryApiKeyStore(),
+    envLookup: () => '',
+});
+
+if (discoveredContextStore.resolve('openai', 'gpt-5.4-mini').model.contextWindowTokens !== 400000)
+    throw new Error('Discovered OpenAI models should be enriched with known context windows');
+
+if (discoveredContextStore.resolve('minimax', 'MiniMax-M2.7').model.contextWindowTokens !== 204800)
+    throw new Error('Discovered MiniMax models should be enriched with known context windows');
+
 const zaiProvider = defaultStore.getProvider('zai');
 
 if (zaiProvider.baseUrl !== 'https://api.z.ai/api/paas/v4' || zaiProvider.chatPath !== '/chat/completions')
@@ -257,6 +294,9 @@ if (kimiModelIds.join(',') !== expectedKimiModelIds.join(','))
 if (!kimiProvider.models.every((model) => model.description.includes('Context 256k')))
     throw new Error('Kimi model details should include context length descriptions');
 
+if (!kimiProvider.models.every((model) => model.contextWindowTokens === 256000))
+    throw new Error('Kimi model metadata should include 256K context windows');
+
 if (defaultStore.getThinkingLevels('kimi', 'kimi-k2.7-code').join(',') !== 'auto')
     throw new Error('Kimi K2.7 Code should expose always-on thinking');
 
@@ -290,6 +330,9 @@ if (staleKimiStore.getDefaultModel('kimi').id !== 'kimi-k2.7-code')
 if (staleKimiStore.getThinkingLevels('kimi', 'kimi-k2.6').join(',') !== 'off,auto')
     throw new Error('Persisted Kimi models should be enriched with thinking support');
 
+if (!staleKimiStore.getProvider('kimi').models.every((model) => model.contextWindowTokens === 256000))
+    throw new Error('Persisted Kimi models should be enriched with context windows');
+
 const kimiDiscoveryStore = new ProviderConfigStore(undefined, {
     settings: null,
     apiKeyStore: new MemoryApiKeyStore({ kimi: 'kimi-key' }),
@@ -316,6 +359,9 @@ if (!kimiDiscoveryStore.getProvider('kimi').models[1].description.includes('180 
 
 if (kimiDiscoveryStore.getThinkingLevels('kimi', 'kimi-k2.7-code').join(',') !== 'auto')
     throw new Error('Kimi discovery did not enrich thinking support');
+
+if (!kimiDiscoveryStore.getProvider('kimi').models.every((model) => model.contextWindowTokens === 256000))
+    throw new Error('Kimi discovery did not enrich context windows');
 
 if (defaultStore.getThinkingLevels('deepseek', 'deepseek-v4-pro').join(',') !== 'off,auto,high,max')
     throw new Error('DeepSeek V4 Pro should expose thinking on/off modes');
@@ -513,7 +559,7 @@ if (customStore.createProvider('openai-compatible').name !== 'Custom API')
 await customStore.discoverModels('openai-compatible', {
     discoverer: async () => [
         { id: 'discovered-small', name: 'Discovered Small' },
-        { id: 'discovered-large', name: 'Discovered Large' },
+        { id: 'discovered-large', name: 'Discovered Large', contextWindowTokens: 131072 },
     ],
 });
 
@@ -522,5 +568,8 @@ if (customStore.getDefaultModel('openai-compatible').id !== 'discovered-small')
 
 if (!customSettings.get_string('provider-discovered-models').includes('discovered-large'))
     throw new Error('Discovered models were not persisted');
+
+if (customStore.resolve('openai-compatible', 'discovered-large').model.contextWindowTokens !== 131072)
+    throw new Error('Discovered custom model context window was not preserved');
 
 print('Cusco provider config smoke passed');

@@ -240,6 +240,15 @@ function normalizeCustomImageModels(models, providerId = '') {
         }));
 }
 
+function normalizeContextWindowTokens(value) {
+    const tokens = Number(value);
+
+    if (!Number.isFinite(tokens) || tokens <= 0)
+        return undefined;
+
+    return Math.round(tokens);
+}
+
 const PROVIDER_MODEL_ID_ALIASES = {
     gemini: {
         'gemini-3.1-pro': 'gemini-3.1-pro-preview',
@@ -354,6 +363,7 @@ const KIMI_MODEL_METADATA = {
         id: 'kimi-k2.7-code',
         name: 'Kimi K2.7 Code',
         description: 'Kimi coding model with stronger long-context instruction following and higher coding task success. Context 256k.',
+        contextWindowTokens: 256000,
         thinking: {
             api: 'kimi-thinking',
             levels: ['auto'],
@@ -365,6 +375,7 @@ const KIMI_MODEL_METADATA = {
         id: 'kimi-k2.7-code-highspeed',
         name: 'Kimi K2.7 Code High-Speed',
         description: 'High-speed Kimi K2.7 Code variant, around 180 tokens/s and up to 260 tokens/s in short contexts. Context 256k.',
+        contextWindowTokens: 256000,
         thinking: {
             api: 'kimi-thinking',
             levels: ['auto'],
@@ -376,6 +387,7 @@ const KIMI_MODEL_METADATA = {
         id: 'kimi-k2.6',
         name: 'Kimi K2.6',
         description: 'Kimi intelligent multimodal model for agent, code, visual understanding, and general tasks with thinking and non-thinking modes. Context 256k.',
+        contextWindowTokens: 256000,
         thinking: {
             api: 'kimi-thinking',
             levels: ['off', 'auto'],
@@ -388,6 +400,7 @@ const DEEPSEEK_MODEL_METADATA = {
         id: 'deepseek-v4-pro',
         name: 'DeepSeek V4 Pro',
         description: 'DeepSeek reasoning-capable model.',
+        contextWindowTokens: 1000000,
         thinking: {
             api: 'deepseek-thinking',
             levels: ['off', 'auto', 'high', 'max'],
@@ -397,6 +410,7 @@ const DEEPSEEK_MODEL_METADATA = {
         id: 'deepseek-v4-flash',
         name: 'DeepSeek V4 Flash',
         description: 'DeepSeek lower-latency model.',
+        contextWindowTokens: 1000000,
         thinking: {
             api: 'deepseek-thinking',
             levels: ['off', 'auto', 'high', 'max'],
@@ -408,6 +422,7 @@ const ZAI_MODEL_METADATA = {
         id: 'glm-5.2',
         name: 'GLM-5.2',
         description: 'Z.ai flagship model for coding and agent applications.',
+        contextWindowTokens: 1000000,
         thinking: {
             api: 'zai-thinking',
             levels: ['off', 'auto', 'high', 'max'],
@@ -418,6 +433,7 @@ const ZAI_MODEL_METADATA = {
         id: 'glm-5-turbo',
         name: 'GLM-5 Turbo',
         description: 'Z.ai faster GLM-5 series model optimized for agent workflows.',
+        contextWindowTokens: 200000,
         thinking: {
             api: 'zai-thinking',
             levels: ['off', 'auto'],
@@ -429,9 +445,44 @@ const PROVIDER_MODEL_METADATA = {
     deepseek: DEEPSEEK_MODEL_METADATA,
     zai: ZAI_MODEL_METADATA,
 };
+const PROVIDER_MODEL_CONTEXT_WINDOW_TOKENS = {
+    openai: {
+        'gpt-5.5': 1000000,
+        'gpt-5.4-mini': 400000,
+        'gpt-4.1': 1000000,
+    },
+    anthropic: {
+        'claude-opus-4-8': 1000000,
+        'claude-sonnet-4-6': 1000000,
+        'claude-haiku-4-5-20251001': 200000,
+    },
+    gemini: {
+        'gemini-3.5-flash': 1048576,
+        'gemini-3.1-pro-preview': 1048576,
+    },
+    minimax: {
+        'MiniMax-M3': 1000000,
+        'MiniMax-M2.7': 204800,
+        'MiniMax-M2.7-highspeed': 204800,
+        'MiniMax-M2.5': 204800,
+        'MiniMax-M2.5-highspeed': 204800,
+        'MiniMax-M2.1': 204800,
+        'MiniMax-M2.1-highspeed': 204800,
+        'MiniMax-M2': 204800,
+    },
+};
 
 function getProviderModelMetadata(providerId, modelId) {
-    return PROVIDER_MODEL_METADATA[providerId]?.[modelId] ?? null;
+    const metadata = PROVIDER_MODEL_METADATA[providerId]?.[modelId] ?? null;
+    const contextWindowTokens = PROVIDER_MODEL_CONTEXT_WINDOW_TOKENS[providerId]?.[modelId];
+
+    if (contextWindowTokens === undefined)
+        return metadata;
+
+    return {
+        ...(metadata ?? {}),
+        contextWindowTokens,
+    };
 }
 
 function normalizeStoredThinkingCapability(value) {
@@ -472,7 +523,16 @@ function normalizeStoredModels(models, providerId = '') {
             name: metadata?.name ?? String(model?.name ?? id).replace(rawId, id),
             description: metadata?.description ?? String(model?.description ?? 'Discovered model.'),
         };
+        const contextWindowTokens = normalizeContextWindowTokens(
+            metadata?.contextWindowTokens
+            ?? model?.contextWindowTokens
+            ?? model?.contextLengthTokens
+            ?? model?.contextLength,
+        );
         const thinking = normalizeStoredThinkingCapability(model?.thinking ?? metadata?.thinking);
+
+        if (contextWindowTokens !== undefined)
+            normalizedModel.contextWindowTokens = contextWindowTokens;
 
         if (thinking !== undefined)
             normalizedModel.thinking = thinking;
@@ -596,16 +656,19 @@ export const DEFAULT_PROVIDER_CONFIGS = [
                 id: 'gpt-5.5',
                 name: 'GPT-5.5',
                 description: 'Frontier model for complex reasoning and coding.',
+                contextWindowTokens: 1000000,
             },
             {
                 id: 'gpt-5.4-mini',
                 name: 'GPT-5.4 mini',
                 description: 'Lower-latency and lower-cost GPT-5.4 variant.',
+                contextWindowTokens: 400000,
             },
             {
                 id: 'gpt-4.1',
                 name: 'GPT-4.1',
                 description: 'Smart non-reasoning model.',
+                contextWindowTokens: 1000000,
                 thinking: false,
             },
         ],
@@ -636,16 +699,19 @@ export const DEFAULT_PROVIDER_CONFIGS = [
                 id: 'claude-opus-4-8',
                 name: 'Claude Opus 4.8',
                 description: 'Anthropic model for complex reasoning and agentic coding.',
+                contextWindowTokens: 1000000,
             },
             {
                 id: 'claude-sonnet-4-6',
                 name: 'Claude Sonnet 4.6',
                 description: 'Fast balance of intelligence and speed.',
+                contextWindowTokens: 1000000,
             },
             {
                 id: 'claude-haiku-4-5-20251001',
                 name: 'Claude Haiku 4.5',
                 description: 'Fastest Claude model with near-frontier intelligence.',
+                contextWindowTokens: 200000,
                 thinking: {
                     api: 'anthropic-budget',
                     levels: ['off', 'auto', 'low', 'medium', 'high'],
@@ -680,12 +746,14 @@ export const DEFAULT_PROVIDER_CONFIGS = [
                 id: 'gemini-3.5-flash',
                 name: 'Gemini 3.5 Flash',
                 description: 'Stable Gemini 3 model for sustained frontier performance.',
+                contextWindowTokens: 1048576,
                 thinking: GEMINI_3_LEVEL_THINKING,
             },
             {
                 id: 'gemini-3.1-pro-preview',
                 name: 'Gemini 3.1 Pro Preview',
                 description: 'Advanced intelligence and agentic coding model.',
+                contextWindowTokens: 1048576,
                 thinking: GEMINI_3_PRO_LEVEL_THINKING,
             },
         ],
@@ -754,41 +822,49 @@ export const DEFAULT_PROVIDER_CONFIGS = [
                 id: 'MiniMax-M3',
                 name: 'MiniMax M3',
                 description: 'Frontier multimodal coding and agentic model with 1M context.',
+                contextWindowTokens: 1000000,
             },
             {
                 id: 'MiniMax-M2.7',
                 name: 'MiniMax M2.7',
                 description: 'MiniMax M-series model for engineering, office, and character-rich tasks.',
+                contextWindowTokens: 204800,
             },
             {
                 id: 'MiniMax-M2.7-highspeed',
                 name: 'MiniMax M2.7 Highspeed',
                 description: 'Lower-latency M2.7 variant.',
+                contextWindowTokens: 204800,
             },
             {
                 id: 'MiniMax-M2.5',
                 name: 'MiniMax M2.5',
                 description: 'MiniMax M-series model for complex text and coding tasks.',
+                contextWindowTokens: 204800,
             },
             {
                 id: 'MiniMax-M2.5-highspeed',
                 name: 'MiniMax M2.5 Highspeed',
                 description: 'Lower-latency M2.5 variant.',
+                contextWindowTokens: 204800,
             },
             {
                 id: 'MiniMax-M2.1',
                 name: 'MiniMax M2.1',
                 description: 'MiniMax model for multilingual programming and reasoning tasks.',
+                contextWindowTokens: 204800,
             },
             {
                 id: 'MiniMax-M2.1-highspeed',
                 name: 'MiniMax M2.1 Highspeed',
                 description: 'Lower-latency M2.1 variant.',
+                contextWindowTokens: 204800,
             },
             {
                 id: 'MiniMax-M2',
                 name: 'MiniMax M2',
                 description: 'MiniMax model with agentic capabilities and advanced reasoning.',
+                contextWindowTokens: 204800,
             },
         ],
     },
