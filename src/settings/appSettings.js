@@ -10,12 +10,6 @@ import {
     THINKING_LEVELS,
 } from '../providers/thinking.js';
 import {
-    DEFAULT_MAX_OUTPUT_TOKENS,
-    MAX_MAX_OUTPUT_TOKENS,
-    MIN_MAX_OUTPUT_TOKENS,
-    normalizeMaxOutputTokens,
-} from '../providers/outputLimits.js';
-import {
     DEFAULT_CODE_THEME_ID,
     getCodeThemeOptions,
     normalizeCodeTheme,
@@ -26,7 +20,6 @@ const PERSISTENT_SETTINGS_KEYS = [
     'send-with-enter',
     'auto-mode-enabled',
     'response-timeout-seconds',
-    'max-output-tokens',
     'provider-fallback-enabled',
     'thinking-level',
     'code-theme',
@@ -52,7 +45,6 @@ const FALLBACK_BOOLEAN_DEFAULTS = {
 };
 const FALLBACK_UINT_DEFAULTS = {
     'response-timeout-seconds': DEFAULT_RESPONSE_TIMEOUT_SECONDS,
-    'max-output-tokens': DEFAULT_MAX_OUTPUT_TOKENS,
 };
 const FALLBACK_STRING_DEFAULTS = {
     'thinking-level': DEFAULT_THINKING_LEVEL,
@@ -287,7 +279,6 @@ export class AppSettingsStore {
         this._sendWithEnter = DEFAULT_SEND_WITH_ENTER;
         this._autoModeEnabled = DEFAULT_AUTO_MODE_ENABLED;
         this._responseTimeoutSeconds = DEFAULT_RESPONSE_TIMEOUT_SECONDS;
-        this._maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS;
         this._providerFallbackEnabled = DEFAULT_PROVIDER_FALLBACK_ENABLED;
         this._thinkingLevel = DEFAULT_THINKING_LEVEL;
         this._codeTheme = DEFAULT_CODE_THEME_ID;
@@ -324,16 +315,6 @@ export class AppSettingsStore {
         this._responseTimeoutSeconds = clampTimeoutSeconds(value);
         this._setUint('response-timeout-seconds', this._responseTimeoutSeconds);
         return this._responseTimeoutSeconds;
-    }
-
-    get maxOutputTokens() {
-        return this._maxOutputTokens;
-    }
-
-    setMaxOutputTokens(value) {
-        this._maxOutputTokens = normalizeMaxOutputTokens(value);
-        this._setUint('max-output-tokens', this._maxOutputTokens);
-        return this._maxOutputTokens;
     }
 
     get providerFallbackEnabled() {
@@ -468,7 +449,6 @@ export class AppSettingsStore {
         this._responseTimeoutSeconds = clampTimeoutSeconds(
             this._getUint('response-timeout-seconds', this._responseTimeoutSeconds),
         );
-        this._maxOutputTokens = normalizeMaxOutputTokens(this._getUint('max-output-tokens', this._maxOutputTokens));
         this._providerFallbackEnabled = this._getBoolean('provider-fallback-enabled', this._providerFallbackEnabled);
         this._thinkingLevel = normalizeThinkingLevel(this._getString('thinking-level', this._thinkingLevel));
         this._codeTheme = normalizeCodeTheme(this._getString('code-theme', this._codeTheme));
@@ -551,25 +531,6 @@ export function createApplicationSettingsPage(appSettings, onChanged) {
         onChanged?.();
     });
     providerGroup.add(timeoutRow);
-
-    const maxOutputAdjustment = new Gtk.Adjustment({
-        lower: MIN_MAX_OUTPUT_TOKENS,
-        upper: MAX_MAX_OUTPUT_TOKENS,
-        step_increment: 1024,
-        page_increment: 4096,
-        value: appSettings.maxOutputTokens,
-    });
-    const maxOutputRow = new Adw.SpinRow({
-        title: 'Maximum output tokens',
-        subtitle: 'Higher values help long answers finish without asking to continue.',
-        adjustment: maxOutputAdjustment,
-        digits: 0,
-    });
-    maxOutputRow.connect('notify::value', () => {
-        appSettings.setMaxOutputTokens(maxOutputRow.get_value());
-        onChanged?.();
-    });
-    providerGroup.add(maxOutputRow);
 
     const fallbackRow = new Adw.SwitchRow({
         title: 'Provider fallback',

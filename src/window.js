@@ -2222,7 +2222,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             ...providerConfig,
             cancellable,
             timeoutSeconds: this._appSettings.responseTimeoutSeconds,
-            maxOutputTokens: collectOptions.maxOutputTokens ?? this._appSettings.maxOutputTokens,
+            maxOutputTokens: collectOptions.maxOutputTokens,
             thinkingLevel: this._resolveThinkingLevelForSelection(
                 providerId,
                 modelId,

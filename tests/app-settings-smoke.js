@@ -57,7 +57,6 @@ const settings = new MemorySettings({
     },
     uints: {
         'response-timeout-seconds': 90,
-        'max-output-tokens': 16384,
     },
     strings: {
         'thinking-level': 'high',
@@ -75,9 +74,6 @@ if (appSettings.autoModeEnabled !== true)
 if (appSettings.responseTimeoutSeconds !== 90)
     throw new Error(`Timeout preference was not loaded: ${appSettings.responseTimeoutSeconds}`);
 
-if (appSettings.maxOutputTokens !== 16384)
-    throw new Error(`Maximum output tokens preference was not loaded: ${appSettings.maxOutputTokens}`);
-
 if (appSettings.providerFallbackEnabled !== true)
     throw new Error('Provider fallback preference was not loaded');
 
@@ -93,7 +89,6 @@ if (appSettings.highContrastEnabled !== true || appSettings.reducedMotionEnabled
 appSettings.setSendWithEnter(true);
 appSettings.setAutoModeEnabled(false);
 appSettings.setResponseTimeoutSeconds(2);
-appSettings.setMaxOutputTokens(999999);
 appSettings.setProviderFallbackEnabled(false);
 appSettings.setThinkingLevel('low');
 appSettings.setCodeTheme(nextCodeTheme);
@@ -109,9 +104,6 @@ if (settings.get_boolean('auto-mode-enabled') !== false)
 if (settings.get_uint('response-timeout-seconds') !== 5)
     throw new Error(`Timeout preference was not clamped and persisted: ${settings.get_uint('response-timeout-seconds')}`);
 
-if (settings.get_uint('max-output-tokens') !== 32768)
-    throw new Error(`Maximum output tokens preference was not clamped and persisted: ${settings.get_uint('max-output-tokens')}`);
-
 if (settings.get_boolean('provider-fallback-enabled') !== false)
     throw new Error('Provider fallback preference was not persisted');
 
@@ -126,22 +118,22 @@ if (settings.get_boolean('high-contrast-enabled') !== false || settings.get_bool
 
 const partialSettings = new MemorySettings({
     uints: {
-        'max-output-tokens': 12288,
+        'response-timeout-seconds': 120,
     },
 });
 const partialAppSettings = new AppSettingsStore({
     settings: partialSettings,
-    settingsKeys: ['max-output-tokens'],
+    settingsKeys: ['response-timeout-seconds'],
 });
 
-if (partialAppSettings.maxOutputTokens !== 12288)
-    throw new Error(`Maximum output tokens did not load with partial schema support: ${partialAppSettings.maxOutputTokens}`);
+if (partialAppSettings.responseTimeoutSeconds !== 120)
+    throw new Error(`Timeout did not load with partial schema support: ${partialAppSettings.responseTimeoutSeconds}`);
 
-partialAppSettings.setMaxOutputTokens(24576);
+partialAppSettings.setResponseTimeoutSeconds(240);
 partialAppSettings.setCodeTheme(nextCodeTheme);
 
-if (partialSettings.get_uint('max-output-tokens') !== 24576)
-    throw new Error('Maximum output tokens did not persist when unrelated schema keys were missing');
+if (partialSettings.get_uint('response-timeout-seconds') !== 240)
+    throw new Error('Timeout did not persist when unrelated schema keys were missing');
 
 if (partialSettings.get_string('code-theme') !== '')
     throw new Error('Missing schema keys should not be written');
@@ -152,29 +144,29 @@ const fallbackSettingsPath = GLib.build_filenamev([
 ]);
 const staleSchemaSettings = new MemorySettings({
     uints: {
-        'max-output-tokens': 12288,
+        'response-timeout-seconds': 120,
     },
 });
 
 try {
     const staleSchemaAppSettings = new AppSettingsStore({
         settings: staleSchemaSettings,
-        settingsKeys: ['max-output-tokens'],
+        settingsKeys: ['response-timeout-seconds'],
         settingsPath: fallbackSettingsPath,
     });
 
-    staleSchemaAppSettings.setMaxOutputTokens(24576);
+    staleSchemaAppSettings.setResponseTimeoutSeconds(240);
     staleSchemaAppSettings.setCodeTheme(nextCodeTheme);
     staleSchemaAppSettings.setHighContrastEnabled(true);
 
     const reloadedStaleSchemaAppSettings = new AppSettingsStore({
         settings: staleSchemaSettings,
-        settingsKeys: ['max-output-tokens'],
+        settingsKeys: ['response-timeout-seconds'],
         settingsPath: fallbackSettingsPath,
     });
 
-    if (reloadedStaleSchemaAppSettings.maxOutputTokens !== 24576)
-        throw new Error(`Schema-backed setting did not reload: ${reloadedStaleSchemaAppSettings.maxOutputTokens}`);
+    if (reloadedStaleSchemaAppSettings.responseTimeoutSeconds !== 240)
+        throw new Error(`Schema-backed setting did not reload: ${reloadedStaleSchemaAppSettings.responseTimeoutSeconds}`);
 
     if (reloadedStaleSchemaAppSettings.codeTheme !== nextCodeTheme)
         throw new Error(`Fallback code theme preference was not reloaded: ${reloadedStaleSchemaAppSettings.codeTheme}`);
