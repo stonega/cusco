@@ -16,26 +16,54 @@ function createStringList(values) {
     return list;
 }
 
+function stringListMatches(list, values) {
+    if (list.get_n_items() === values.length) {
+        for (let index = 0; index < values.length; index++) {
+            if (list.get_string(index) !== values[index])
+                return false;
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+function syncComboRowStringList(row, list, values) {
+    if (stringListMatches(list, values))
+        return;
+
+    row.set_selected(Gtk.INVALID_LIST_POSITION);
+    list.splice(0, list.get_n_items(), values);
+}
+
+function selectedIndexOrNone(index, itemCount) {
+    if (itemCount === 0)
+        return Gtk.INVALID_LIST_POSITION;
+
+    return Math.max(index, 0);
+}
+
 function getDefaultModelIndex(provider) {
     const index = provider.models.findIndex((model) => model.id === provider.defaultModelId);
-    return Math.max(index, 0);
+    return selectedIndexOrNone(index, provider.models.length);
 }
 
 function getDefaultImageModelIndex(provider) {
     const imageModels = provider.imageModels ?? [];
     const index = imageModels.findIndex((model) => model.id === provider.defaultImageModelId);
-    return Math.max(index, 0);
+    return selectedIndexOrNone(index, imageModels.length);
 }
 
 function getImageModelIndex(provider, modelId) {
     const imageModels = provider?.imageModels ?? [];
     const index = imageModels.findIndex((model) => model.id === modelId);
-    return Math.max(index, 0);
+    return selectedIndexOrNone(index, imageModels.length);
 }
 
 function getImageProviderIndex(providers, providerId) {
     const index = providers.findIndex((provider) => provider.id === providerId);
-    return Math.max(index, 0);
+    return selectedIndexOrNone(index, providers.length);
 }
 
 function canDisableProvider(providerConfigs, provider) {
@@ -180,6 +208,7 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows) 
         });
         row.add_row(modelRow);
         row._modelRow = modelRow;
+        row._modelNames = modelNames;
     } else if (!provider.customizable) {
         row.add_row(new Adw.ActionRow({
             title: 'Models',
@@ -301,7 +330,11 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows) 
 
         if (row._modelRow) {
             row._modelRow._syncing = true;
-            row._modelRow.set_model(createStringList(currentProvider.models.map((model) => model.name)));
+            syncComboRowStringList(
+                row._modelRow,
+                row._modelNames,
+                currentProvider.models.map((model) => model.name),
+            );
             row._modelRow.set_sensitive(currentProvider.models.length > 0);
             row._modelRow.set_selected(getDefaultModelIndex(currentProvider));
             row._modelRow._syncing = false;
@@ -322,15 +355,17 @@ function createImageGenerationSettingsGroup(providerConfigs, onChanged, syncAllR
         title: 'Image Generation',
         description: 'Choose the provider and model used by the image generation tool. This is independent from the active chat provider.',
     });
+    const providerNames = createStringList([]);
+    const modelNames = createStringList([]);
     const providerRow = new Adw.ComboRow({
         title: 'Provider',
         subtitle: 'Used by image_gen in every chat.',
-        model: createStringList([]),
+        model: providerNames,
     });
     const modelRow = new Adw.ComboRow({
         title: 'Model',
         subtitle: 'Default image generation model.',
-        model: createStringList([]),
+        model: modelNames,
     });
     const customImageModelsEntryRow = new Adw.EntryRow({
         title: 'Custom image model IDs',
@@ -447,13 +482,17 @@ function createImageGenerationSettingsGroup(providerConfigs, onChanged, syncAllR
 
         providerRow._syncing = true;
         providerRow._providers = providers;
-        providerRow.set_model(createStringList(providers.map((provider) => provider.name)));
+        syncComboRowStringList(
+            providerRow,
+            providerNames,
+            providers.map((provider) => provider.name),
+        );
         providerRow.set_sensitive(providers.length > 0);
         providerRow.set_selected(providerIndex);
         providerRow._syncing = false;
 
         modelRow._syncing = true;
-        modelRow.set_model(createStringList(imageModels.map((model) => model.name)));
+        syncComboRowStringList(modelRow, modelNames, imageModels.map((model) => model.name));
         modelRow.set_sensitive(imageModels.length > 0);
         modelRow.set_selected(getImageModelIndex(currentProvider, selectedModelId));
         modelRow._syncing = false;
