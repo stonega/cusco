@@ -6,6 +6,7 @@ import {
     buildOpenAiCompatibleChatBody,
     buildOpenAiResponsesBody,
     extractAnthropicToolCalls,
+    extractAnthropicServerToolResults,
     extractAnthropicReasoning,
     extractAnthropicText,
     extractAnthropicUsage,
@@ -15,17 +16,20 @@ import {
     extractChatCompletionText,
     extractChatCompletionToolCalls,
     extractChatCompletionUsage,
+    extractChatCompletionServerToolResults,
     extractDiscoveredModels,
     extractGeminiFinishReason,
     extractGeminiReasoning,
     extractGeminiText,
     extractGeminiToolCalls,
     extractGeminiUsage,
+    extractGeminiServerToolResults,
     extractOpenAiFinishReason,
     extractOpenAiReasoning,
     extractOpenAiText,
     extractOpenAiToolCalls,
     extractOpenAiUsage,
+    extractOpenAiServerToolResults,
     OpenAiCompatibleChatProvider,
 } from '../src/providers/remoteProvider.js';
 import { createMessage } from '../src/providers/provider.js';
@@ -117,11 +121,49 @@ const mcpTool = {
         additionalProperties: false,
     },
 };
+const searchTool = {
+    name: 'search',
+    label: 'Web Search',
+    description: 'Search the web.',
+    inputDescription: 'Search query.',
+};
 const openAiToolBody = buildOpenAiResponsesBody(messages, 'gpt-test', {
     tools: [mcpTool],
 });
 assertEqual(openAiToolBody.tool_choice, 'auto', 'OpenAI tool choice');
 assertEqual(openAiToolBody.tools[0].name, 'mcp__context7__resolve_library_id', 'OpenAI tool name');
+const openAiNativeSearchBody = buildOpenAiResponsesBody(messages, 'gpt-test', {
+    provider: {
+        nativeSearch: {
+            api: 'openai-responses',
+            tools: ['web_search'],
+            includeSources: true,
+        },
+    },
+    tools: [searchTool, mcpTool],
+});
+assertEqual(openAiNativeSearchBody.tools[0].type, 'web_search', 'OpenAI native web search');
+assertEqual(openAiNativeSearchBody.tools[1].name, 'mcp__context7__resolve_library_id', 'OpenAI retained client tool');
+assertEqual(openAiNativeSearchBody.tools.some((tool) => tool.name === 'search'), false, 'OpenAI removed fallback search function');
+assertEqual(openAiNativeSearchBody.include[0], 'web_search_call.action.sources', 'OpenAI requested complete search sources');
+const grokNativeSearchBody = buildOpenAiResponsesBody(messages, 'grok-4.5', {
+    provider: {
+        nativeSearch: {
+            api: 'openai-responses',
+            tools: ['web_search', 'x_search'],
+        },
+    },
+    model: {
+        thinking: {
+            api: 'xai-reasoning',
+            levels: ['low', 'medium', 'high'],
+        },
+    },
+    thinkingLevel: 'high',
+    tools: [searchTool],
+});
+assertEqual(grokNativeSearchBody.tools.map((tool) => tool.type).join(','), 'web_search,x_search', 'Grok native search tools');
+assertEqual(grokNativeSearchBody.reasoning.effort, 'high', 'Grok Responses reasoning effort');
 
 const openAiThinkingBody = buildOpenAiResponsesBody(messages, 'gpt-test', {
     provider: {
@@ -321,6 +363,19 @@ const anthropicToolBody = buildAnthropicMessagesBody(messages, 'claude-test', {
 });
 assertEqual(anthropicToolBody.tools[0].name, 'mcp__context7__resolve_library_id', 'Anthropic tool name');
 assertEqual(anthropicToolBody.tools[0].input_schema.required.length, 2, 'Anthropic tool schema');
+const anthropicNativeSearchBody = buildAnthropicMessagesBody(messages, 'claude-test', {
+    provider: {
+        nativeSearch: {
+            api: 'anthropic-messages',
+            version: 'web_search_20250305',
+            maxUses: 5,
+        },
+    },
+    tools: [searchTool, mcpTool],
+});
+assertEqual(anthropicNativeSearchBody.tools[0].type, 'web_search_20250305', 'Anthropic native web search');
+assertEqual(anthropicNativeSearchBody.tools[0].max_uses, 5, 'Anthropic search cap');
+assertEqual(anthropicNativeSearchBody.tools[1].name, 'mcp__context7__resolve_library_id', 'Anthropic retained client tool');
 
 const anthropicThinkingBody = buildAnthropicMessagesBody(messages, 'claude-test', {
     provider: {
@@ -368,12 +423,40 @@ assertEqual(geminiToolBody.tools[0].functionDeclarations[0].name, 'mcp__context7
 const geminiToolParameters = geminiToolBody.tools[0].functionDeclarations[0].parameters;
 assertEqual(hasOwn(geminiToolParameters, 'additionalProperties'), false, 'Gemini top-level schema omits additionalProperties');
 assertEqual(hasOwn(geminiToolParameters.properties.metadata, 'additionalProperties'), false, 'Gemini nested schema omits additionalProperties');
+const geminiNativeSearchBody = buildGeminiGenerateContentBody(messages, {
+    provider: {
+        nativeSearch: {
+            api: 'gemini-generate-content',
+            tools: ['google_search'],
+        },
+    },
+    tools: [searchTool, mcpTool],
+});
+assertEqual(hasOwn(geminiNativeSearchBody.tools[0], 'googleSearch'), true, 'Gemini native Google Search');
+assertEqual(geminiNativeSearchBody.tools[1].functionDeclarations[0].name, 'mcp__context7__resolve_library_id', 'Gemini retained client tool');
+assertEqual(geminiNativeSearchBody.toolConfig.includeServerSideToolInvocations, true, 'Gemini exposed server tool activity');
+assertEqual(geminiNativeSearchBody.toolConfig.functionCallingConfig.mode, 'VALIDATED', 'Gemini validated combined tools');
 const geminiFallbackToolBody = buildGeminiGenerateContentBody(messages, {
     tools: [{ name: 'calc', label: 'Calculator', description: 'Calculate.', inputDescription: 'Expression.' }],
 });
 const geminiFallbackParameters = geminiFallbackToolBody.tools[0].functionDeclarations[0].parameters;
 assertEqual(geminiFallbackParameters.properties.input.type, 'string', 'Gemini fallback schema keeps text input');
 assertEqual(hasOwn(geminiFallbackParameters, 'additionalProperties'), false, 'Gemini fallback schema omits additionalProperties');
+
+const zaiNativeSearchBody = buildOpenAiCompatibleChatBody(messages, 'glm-5.2', {
+    provider: {
+        nativeSearch: {
+            api: 'zai-chat-completions',
+            tools: ['web_search'],
+            searchEngine: 'search-prime',
+            count: 5,
+        },
+    },
+    tools: [searchTool, mcpTool],
+});
+assertEqual(zaiNativeSearchBody.tools[0].type, 'web_search', 'Z.ai native web search');
+assertEqual(zaiNativeSearchBody.tools[0].web_search.search_engine, 'search-prime', 'Z.ai search engine');
+assertEqual(zaiNativeSearchBody.tools[1].function.name, 'mcp__context7__resolve_library_id', 'Z.ai retained client tool');
 
 assertEqual(extractOpenAiText({ output_text: 'OpenAI text' }), 'OpenAI text', 'OpenAI output_text extraction');
 assertEqual(extractOpenAiReasoning({
@@ -406,6 +489,15 @@ const openAiToolCalls = extractOpenAiToolCalls({
     }],
 });
 assertEqual(openAiToolCalls[0].input, '{"query":"React hooks","libraryName":"React"}', 'OpenAI tool call extraction');
+const grokCitationOnlyResults = extractOpenAiServerToolResults({
+    citations: [
+        'https://x.com/xai/status/123',
+        'https://x.ai/news/grok',
+    ],
+}, ['web_search', 'x_search']);
+assertEqual(grokCitationOnlyResults.length, 2, 'Grok citation-only native search groups');
+assertEqual(grokCitationOnlyResults.find((result) => result.name === 'x_search').results[0].url, 'https://x.com/xai/status/123', 'Grok X citation extraction');
+assertEqual(grokCitationOnlyResults.find((result) => result.name === 'search').results[0].url, 'https://x.ai/news/grok', 'Grok web citation extraction');
 assertEqual(extractChatCompletionText({ choices: [{ message: { content: 'Chat text' } }] }), 'Chat text', 'Chat extraction');
 assertEqual(extractChatCompletionReasoning({ choices: [{ message: { reasoning_content: 'Chat reasoning' } }] }), 'Chat reasoning', 'Chat reasoning extraction');
 assertEqual(extractChatCompletionFinishReason({ choices: [{ finish_reason: 'length' }] }), 'length', 'Chat finish reason extraction');

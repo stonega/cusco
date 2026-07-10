@@ -22,12 +22,19 @@ function formatToolForPrompt(tool) {
     ].filter(Boolean).join('\n');
 }
 
-export function buildAgentModeSystemPrompt(tools, { maxIterations = DEFAULT_AGENT_MAX_ITERATIONS } = {}) {
+export function buildAgentModeSystemPrompt(tools, {
+    maxIterations = DEFAULT_AGENT_MAX_ITERATIONS,
+    nativeSearchTools = [],
+} = {}) {
     const toolList = (tools ?? []).map(formatToolForPrompt).join('\n\n') || 'No tools are available.';
+    const nativeSearchInstruction = nativeSearchTools.length > 0
+        ? `Provider-managed search tools are enabled: ${nativeSearchTools.join(', ')}. Use them directly for current web or social information; do not request a Cusco search tool.`
+        : '';
 
     return [
         'Agent is enabled for this chat.',
         'You may solve the user request normally, or request one available tool when a tool result would materially help.',
+        nativeSearchInstruction,
         'Do not invent tool results. Do not request a tool unless the tool is listed below.',
         'Tools whose names start with mcp__ are configured MCP server tools exposed through Cusco. If the user asks to use an MCP server such as Context7 and a matching mcp__ tool is listed, use that tool instead of saying the MCP server is not configured.',
         'For MCP tools, pass JSON matching the listed input fields. Include every required or clearly relevant field from the input description.',

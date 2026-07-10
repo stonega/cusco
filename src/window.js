@@ -332,6 +332,14 @@ function normalizeProviderChunk(chunk) {
             usage: null,
         };
 
+    if (chunk.type === 'server_tool_results')
+        return {
+            type: 'server_tool_results',
+            text: '',
+            serverToolResults: Array.isArray(chunk.serverToolResults) ? chunk.serverToolResults : [],
+            usage: null,
+        };
+
     return {
         type: chunk.type === 'reasoning' ? 'reasoning' : 'text',
         text: String(chunk.text ?? chunk.content ?? ''),
@@ -408,7 +416,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._appSettings = new AppSettingsStore();
         this._memories = new MemoryManager({ store: new MemoryFileStore() });
         this._workspace = new WorkspaceManager({ store: new WorkspaceFileStore() });
-        this._tools = new ToolManager();
+        this._providerConfigs = new ProviderConfigStore();
+        this._tools = new ToolManager({
+            searchConfig: () => this._providerConfigs.createWebSearchFallbackConfig(),
+        });
         this._cron = new CronJobManager();
         this._mcp = new McpManager({ workspaceManager: this._workspace });
         this._pendingAttachments = [];
@@ -418,7 +429,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._scrollToBottomSourceId = 0;
         this._scrollToBottomPasses = 0;
         this._scrollToBottomAnimationSourceId = 0;
-        this._providerConfigs = new ProviderConfigStore();
         const { provider: defaultProvider, model: defaultModel } = this._providerConfigs.getActiveSelection();
 
         this._conversations = new ConversationManager({
@@ -1802,7 +1812,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             const dialog = new Adw.AlertDialog({
                 heading: `Run ${request.label}?`,
                 body: request.name === 'search'
-                    ? `Cusco will send this query to DuckDuckGo:\n${request.input}`
+                    ? `Cusco will send this query to Brave Search:\n${request.input}`
                     : request.name === 'image_gen'
                         ? `Cusco will send this image prompt to the selected provider:\n${request.input}`
                     : request.input,
@@ -2250,6 +2260,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         let reasoningText = '';
         let usage = null;
         const toolCalls = [];
+        const serverToolResults = [];
 
         for await (const chunk of activeProvider.streamChat(providerMessages, {
             ...providerConfig,
@@ -2273,6 +2284,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 reasoningText += normalizedChunk.text;
             else if (normalizedChunk.type === 'tool_calls')
                 toolCalls.push(...normalizedChunk.toolCalls);
+            else if (normalizedChunk.type === 'server_tool_results')
+                serverToolResults.push(...normalizedChunk.serverToolResults);
             else
                 responseText += normalizedChunk.text;
 
@@ -2282,6 +2295,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 reasoning: reasoningText,
                 usage,
                 toolCalls,
+                serverToolResults,
+                serverToolResultChunk: normalizedChunk.serverToolResults ?? [],
             });
         }
 
@@ -2291,6 +2306,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 reasoning: reasoningText,
                 usage,
                 toolCalls,
+                serverToolResults,
             };
 
         return responseText;
@@ -2440,8 +2456,19 @@ class CuscoWindow extends Adw.ApplicationWindow {
                         );
                     }
 
-                    if (state?.type !== 'usage' && state?.type !== 'tool_calls' && state?.type !== 'reasoning')
+                    if (state?.type === 'server_tool_results') {
+                        this._appendProviderSearchResults(
+                            conversation,
+                            state.serverToolResultChunk,
+                        );
+                    }
+
+                    if (state?.type !== 'usage'
+                        && state?.type !== 'tool_calls'
+                        && state?.type !== 'reasoning'
+                        && state?.type !== 'server_tool_results') {
                         this._updateAgentModeAssistantView(conversation, getAssistantView(), text);
+                    }
                 },
                 {
                     returnState: true,
@@ -2676,6 +2703,41 @@ class CuscoWindow extends Adw.ApplicationWindow {
             logError(error, 'Failed to run Agent tool request');
             return false;
         }
+    }
+
+    _appendProviderSearchResults(conversation, serverToolResults) {
+        for (const searchResult of serverToolResults ?? []) {
+            const isXSearch = searchResult?.name === 'x_search';
+            const request = {
+                name: isXSearch ? 'x_search' : 'search',
+                label: searchResult?.label ?? (isXSearch ? 'X Search' : 'Web Search'),
+                input: String(searchResult?.query ?? '').trim() || 'Provider-managed search',
+                permissionPolicy: 'allow',
+                requiresPermission: false,
+            };
+            const runningTool = this._appendRunningToolMessage(conversation.id, request, {
+                agentMode: true,
+            });
+            const results = Array.isArray(searchResult?.results) ? searchResult.results : [];
+            const result = {
+                ...request,
+                query: request.input,
+                results,
+                providerId: searchResult?.providerId ?? conversation.providerId,
+                providerName: searchResult?.providerName ?? '',
+                output: `${results.length} cited result${results.length === 1 ? '' : 's'} returned.`,
+            };
+
+            this._completeRunningToolMessage(
+                conversation.id,
+                runningTool,
+                result,
+                'completed',
+                { agentMode: true },
+            );
+        }
+
+        this._scrollToBottom();
     }
 
     _appendAgentToolCancellation(request, responseText, conversation, runtimeMessages) {
@@ -2976,9 +3038,17 @@ class CuscoWindow extends Adw.ApplicationWindow {
         }];
 
         if (options.agentMode) {
+            const nativeSearchTools = this._providerConfigs.getNativeSearchTools(
+                conversation.providerId,
+                conversation.modelId,
+            );
+            const cuscoTools = nativeSearchTools.length > 0
+                ? this._tools.listTools().filter((tool) => tool.name !== 'search')
+                : this._tools.listTools();
+
             systemMessages.push({
                 role: 'system',
-                content: buildAgentModeSystemPrompt(this._tools.listTools()),
+                content: buildAgentModeSystemPrompt(cuscoTools, { nativeSearchTools }),
             });
         }
 
