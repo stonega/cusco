@@ -138,6 +138,30 @@ assertEqual(openAiThinkingBody.reasoning.effort, 'high', 'OpenAI reasoning effor
 assertEqual(openAiThinkingBody.reasoning.summary, 'auto', 'OpenAI reasoning summary');
 assertEqual(openAiThinkingBody.max_output_tokens, 16000, 'OpenAI custom max output tokens');
 
+const openAiXHighThinkingBody = buildOpenAiResponsesBody(messages, 'gpt-test', {
+    provider: {
+        thinking: {
+            api: 'openai-responses',
+            levels: ['off', 'auto', 'low', 'medium', 'high', 'xhigh', 'max'],
+            summary: 'auto',
+        },
+    },
+    thinkingLevel: 'xhigh',
+});
+assertEqual(openAiXHighThinkingBody.reasoning.effort, 'xhigh', 'OpenAI xhigh reasoning effort');
+
+const openAiMaxThinkingBody = buildOpenAiResponsesBody(messages, 'gpt-test', {
+    provider: {
+        thinking: {
+            api: 'openai-responses',
+            levels: ['off', 'auto', 'low', 'medium', 'high', 'xhigh', 'max'],
+            summary: 'auto',
+        },
+    },
+    thinkingLevel: 'max',
+});
+assertEqual(openAiMaxThinkingBody.reasoning.effort, 'max', 'OpenAI max reasoning effort');
+
 const openAiImageBody = buildOpenAiResponsesBody(imageMessages, 'gpt-test');
 assertEqual(openAiImageBody.input[0].content[0].type, 'input_text', 'OpenAI image prompt text part');
 assertEqual(openAiImageBody.input[0].content[1].type, 'input_image', 'OpenAI image part');

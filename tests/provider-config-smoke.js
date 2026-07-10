@@ -101,6 +101,27 @@ const builtInModelsMissingContext = defaultStore.listProviders()
 if (builtInModelsMissingContext.length > 0)
     throw new Error(`Built-in chat models are missing context windows: ${builtInModelsMissingContext.join(', ')}`);
 
+if (defaultStore.getDefaultModel('openai').id !== 'gpt-5.6-sol')
+    throw new Error('OpenAI default GPT-5.6 Sol model was not configured');
+
+const openAiModelIds = defaultStore.getProvider('openai').models.map((model) => model.id);
+const expectedOpenAiGpt56ModelIds = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'];
+
+if (!expectedOpenAiGpt56ModelIds.every((modelId) => openAiModelIds.includes(modelId)))
+    throw new Error(`OpenAI GPT-5.6 model family was not configured: ${openAiModelIds.join(', ')}`);
+
+if (defaultStore.resolve('openai', 'gpt-5.6').model.id !== 'gpt-5.6-sol')
+    throw new Error('OpenAI GPT-5.6 alias should resolve to GPT-5.6 Sol');
+
+if (defaultStore.resolve('openai', 'gpt-5.6-terra').model.contextWindowTokens !== 1050000)
+    throw new Error('OpenAI GPT-5.6 context window should be 1.05M tokens');
+
+if (defaultStore.getThinkingLevels('openai', 'gpt-5.6-sol').join(',') !== 'off,auto,low,medium,high,xhigh,max')
+    throw new Error('OpenAI GPT-5.6 should expose all supported reasoning efforts');
+
+if (defaultStore.getThinkingLevels('openai', 'gpt-5.5').join(',') !== 'off,auto,low,medium,high')
+    throw new Error('OpenAI GPT-5.5 should keep the baseline OpenAI reasoning efforts');
+
 if (defaultStore.resolve('openai', 'gpt-5.4-mini').model.contextWindowTokens !== 400000)
     throw new Error('OpenAI GPT-5.4 mini context window should be 400K tokens');
 
@@ -125,12 +146,18 @@ if (defaultStore.getThinkingLevels('grok', 'grok-4.3').join(',') !== 'off,low,me
 const discoveredContextStore = new ProviderConfigStore(undefined, {
     settings: new MemorySettings({
         strings: {
-            'provider-discovered-models': '{"openai":[{"id":"gpt-5.4-mini"}],"grok":[{"id":"grok-4.3"}]}',
+            'provider-discovered-models': '{"openai":[{"id":"gpt-5.6"},{"id":"gpt-5.4-mini"}],"grok":[{"id":"grok-4.3"}]}',
         },
     }),
     apiKeyStore: new MemoryApiKeyStore(),
     envLookup: () => '',
 });
+
+if (discoveredContextStore.resolve('openai', 'gpt-5.6').model.id !== 'gpt-5.6-sol')
+    throw new Error('Discovered OpenAI GPT-5.6 alias should be normalized to GPT-5.6 Sol');
+
+if (discoveredContextStore.getThinkingLevels('openai', 'gpt-5.6-sol').join(',') !== 'off,auto,low,medium,high,xhigh,max')
+    throw new Error('Discovered OpenAI GPT-5.6 models should be enriched with reasoning support');
 
 if (discoveredContextStore.resolve('openai', 'gpt-5.4-mini').model.contextWindowTokens !== 400000)
     throw new Error('Discovered OpenAI models should be enriched with known context windows');

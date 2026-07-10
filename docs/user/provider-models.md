@@ -18,14 +18,16 @@ level. Models without thinking support keep the chat picker disabled.
 | `Low` | Request low reasoning effort or a low thinking budget. |
 | `Medium` | Request medium reasoning effort or a medium thinking budget. |
 | `High` | Request high reasoning effort or a high thinking budget. |
-| `Max` | Request DeepSeek's maximum reasoning effort. |
+| `X-High` | Request extra-high reasoning effort when the provider supports it. |
+| `Max` | Request maximum reasoning effort for quality-first workloads. |
 
 ## Built-In Models
 
 | Provider | Default model | Models | Thinking levels |
 |---|---|---|---|
-| OpenAI | `gpt-5.5` | `gpt-5.5`, `gpt-5.4-mini` | `Off`, `Auto`, `Low`, `Medium`, `High` |
-| OpenAI | `gpt-5.5` | `gpt-4.1` | None |
+| OpenAI | `gpt-5.6-sol` | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` | `Off`, `Auto`, `Low`, `Medium`, `High`, `X-High`, `Max` |
+| OpenAI | `gpt-5.6-sol` | `gpt-5.5`, `gpt-5.4-mini` | `Off`, `Auto`, `Low`, `Medium`, `High` |
+| OpenAI | `gpt-5.6-sol` | `gpt-4.1` | None |
 | Anthropic | `claude-sonnet-4-6` | `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001` | `Off`, `Auto`, `Low`, `Medium`, `High` |
 | Google Gemini | `gemini-3.5-flash` | `gemini-3.5-flash` | `Minimal`, `Auto`, `Low`, `Medium`, `High` |
 | Google Gemini | `gemini-3.5-flash` | `gemini-3.1-pro-preview` | `Auto`, `Low`, `Medium`, `High` |
@@ -45,6 +47,9 @@ from the built-in model metadata.
 
 | Provider | Model | Context window |
 |---|---|---|
+| OpenAI | `gpt-5.6-sol` | 1.05M tokens |
+| OpenAI | `gpt-5.6-terra` | 1.05M tokens |
+| OpenAI | `gpt-5.6-luna` | 1.05M tokens |
 | OpenAI | `gpt-5.5` | 1M tokens |
 | OpenAI | `gpt-5.4-mini` | 400K tokens |
 | OpenAI | `gpt-4.1` | 1M tokens |
@@ -83,6 +88,10 @@ an OpenAI-compatible image generation endpoint.
 
 ## Provider Notes
 
+- OpenAI uses `gpt-5.6-sol` as the default chat model. The documented
+  `gpt-5.6` alias is normalized to `gpt-5.6-sol`; Terra balances intelligence
+  and cost, and Luna is optimized for cost-sensitive workloads. Only the GPT-5.6
+  family exposes `X-High` and `Max` reasoning in Cusco.
 - Gemini is intentionally limited to `gemini-3.5-flash` and
   `gemini-3.1-pro-preview`. Persisted or discovered Gemini 2.x models are
   ignored, and the stale `gemini-3.1-pro` ID is migrated to
@@ -131,6 +140,8 @@ an OpenAI-compatible image generation endpoint.
 ## References
 
 - Gemini image generation guide: https://ai.google.dev/gemini-api/docs/image-generation
+- OpenAI model catalog: https://developers.openai.com/api/docs/models
+- OpenAI GPT-5.6 model guidance: https://developers.openai.com/api/docs/guides/latest-model
 - OpenAI image generation guide: https://developers.openai.com/api/docs/guides/images-vision
 - xAI chat completions API: https://docs.x.ai/developers/rest-api-reference/inference/chat
 - xAI image generation API: https://docs.x.ai/developers/rest-api-reference/inference/images

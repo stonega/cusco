@@ -22,6 +22,8 @@ const OPENAI_REASONING_EFFORTS = {
     low: 'low',
     medium: 'medium',
     high: 'high',
+    xhigh: 'xhigh',
+    max: 'max',
 };
 const ANTHROPIC_DEFAULT_THINKING_BUDGETS = {
     auto: 2048,

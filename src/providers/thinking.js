@@ -1,5 +1,5 @@
 export const DEFAULT_THINKING_LEVEL = 'auto';
-export const THINKING_LEVELS = ['off', 'minimal', 'auto', 'low', 'medium', 'high', 'max'];
+export const THINKING_LEVELS = ['off', 'minimal', 'auto', 'low', 'medium', 'high', 'xhigh', 'max'];
 export const THINKING_LEVEL_LABELS = {
     off: 'Off',
     minimal: 'Minimal',
@@ -7,6 +7,7 @@ export const THINKING_LEVEL_LABELS = {
     low: 'Low',
     medium: 'Medium',
     high: 'High',
+    xhigh: 'X-High',
     max: 'Max',
 };
 

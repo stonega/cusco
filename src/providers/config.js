@@ -254,6 +254,9 @@ function normalizeContextWindowTokens(value) {
 }
 
 const PROVIDER_MODEL_ID_ALIASES = {
+    openai: {
+        'gpt-5.6': 'gpt-5.6-sol',
+    },
     gemini: {
         'gemini-3.1-pro': 'gemini-3.1-pro-preview',
     },
@@ -382,6 +385,34 @@ function isProviderImageModelSupported(providerId, modelId, options = {}) {
     return supportedModelIds.has(id) || Boolean(options.custom && providerId === 'openai-compatible');
 }
 
+const OPENAI_GPT_56_THINKING = {
+    api: 'openai-responses',
+    levels: ['off', 'auto', 'low', 'medium', 'high', 'xhigh', 'max'],
+    summary: 'auto',
+};
+const OPENAI_MODEL_METADATA = {
+    'gpt-5.6-sol': {
+        id: 'gpt-5.6-sol',
+        name: 'GPT-5.6 Sol',
+        description: 'Frontier model for complex professional work.',
+        contextWindowTokens: 1050000,
+        thinking: OPENAI_GPT_56_THINKING,
+    },
+    'gpt-5.6-terra': {
+        id: 'gpt-5.6-terra',
+        name: 'GPT-5.6 Terra',
+        description: 'GPT-5.6 model that balances intelligence and cost.',
+        contextWindowTokens: 1050000,
+        thinking: OPENAI_GPT_56_THINKING,
+    },
+    'gpt-5.6-luna': {
+        id: 'gpt-5.6-luna',
+        name: 'GPT-5.6 Luna',
+        description: 'GPT-5.6 model optimized for cost-sensitive workloads.',
+        contextWindowTokens: 1050000,
+        thinking: OPENAI_GPT_56_THINKING,
+    },
+};
 const KIMI_MODEL_METADATA = {
     'kimi-k2.7-code': {
         id: 'kimi-k2.7-code',
@@ -490,6 +521,7 @@ const GROK_MODEL_METADATA = {
     },
 };
 const PROVIDER_MODEL_METADATA = {
+    openai: OPENAI_MODEL_METADATA,
     kimi: KIMI_MODEL_METADATA,
     deepseek: DEEPSEEK_MODEL_METADATA,
     grok: GROK_MODEL_METADATA,
@@ -497,6 +529,9 @@ const PROVIDER_MODEL_METADATA = {
 };
 const PROVIDER_MODEL_CONTEXT_WINDOW_TOKENS = {
     openai: {
+        'gpt-5.6-sol': 1050000,
+        'gpt-5.6-terra': 1050000,
+        'gpt-5.6-luna': 1050000,
         'gpt-5.5': 1000000,
         'gpt-5.4-mini': 400000,
         'gpt-4.1': 1000000,
@@ -688,7 +723,7 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         apiKeyConfigured: false,
         apiKeyEnvVar: 'OPENAI_API_KEY',
         baseUrl: 'https://api.openai.com/v1',
-        defaultModelId: 'gpt-5.5',
+        defaultModelId: 'gpt-5.6-sol',
         defaultImageModelId: 'gpt-image-2',
         thinking: {
             api: 'openai-responses',
@@ -696,6 +731,9 @@ export const DEFAULT_PROVIDER_CONFIGS = [
             summary: 'auto',
         },
         models: [
+            { ...OPENAI_MODEL_METADATA['gpt-5.6-sol'] },
+            { ...OPENAI_MODEL_METADATA['gpt-5.6-terra'] },
+            { ...OPENAI_MODEL_METADATA['gpt-5.6-luna'] },
             {
                 id: 'gpt-5.5',
                 name: 'GPT-5.5',
