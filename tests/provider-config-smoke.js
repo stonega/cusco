@@ -134,6 +134,38 @@ if (defaultStore.resolve('gemini', 'gemini-3.5-flash').model.contextWindowTokens
 if (defaultStore.resolve('grok', 'grok-4.3').model.contextWindowTokens !== 1000000)
     throw new Error('Grok 4.3 context window should be 1M tokens');
 
+const expectedNativeSearchTools = {
+    openai: 'web_search',
+    anthropic: 'web_search',
+    gemini: 'google_search',
+    grok: 'web_search,x_search',
+    zai: 'web_search',
+};
+
+for (const [providerId, expectedTools] of Object.entries(expectedNativeSearchTools)) {
+    const actualTools = defaultStore.getNativeSearchTools(providerId).join(',');
+
+    if (actualTools !== expectedTools)
+        throw new Error(`${providerId} native search tools were wrong: ${actualTools}`);
+}
+
+for (const providerId of ['kimi', 'deepseek', 'openai-compatible']) {
+    if (defaultStore.getNativeSearchTools(providerId).length > 0)
+        throw new Error(`${providerId} should use the Brave Search fallback`);
+}
+
+if (defaultStore.getProvider('grok').apiFormat !== 'openai-responses')
+    throw new Error('Grok should use the Responses API for native Web and X search');
+
+defaultStore.setWebSearchApiKey('brave-test-key');
+
+if (defaultStore.getWebSearchApiKeyStatus().source !== 'secret'
+    || defaultStore.createWebSearchFallbackConfig().apiKey !== 'brave-test-key') {
+    throw new Error('Brave Search fallback credentials were not stored in Secret Service');
+}
+
+defaultStore.clearWebSearchApiKey();
+
 if (defaultStore.getThinkingLevels('grok', 'grok-4.5').join(',') !== 'low,medium,high')
     throw new Error('Grok 4.5 should expose low/medium/high reasoning levels');
 

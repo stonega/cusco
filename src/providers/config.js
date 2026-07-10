@@ -696,6 +696,14 @@ const GEMINI_3_PRO_LEVEL_THINKING = {
     includeThoughts: true,
 };
 
+export const BRAVE_SEARCH_CONFIG = {
+    id: 'brave-search',
+    name: 'Brave Search',
+    apiKeyRequired: true,
+    apiKeyConfigured: false,
+    apiKeyEnvVar: 'BRAVE_SEARCH_API_KEY',
+};
+
 function parseDiscoveredModelSettings(value) {
     try {
         const parsed = JSON.parse(value || '{}');
@@ -723,6 +731,11 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         apiKeyConfigured: false,
         apiKeyEnvVar: 'OPENAI_API_KEY',
         baseUrl: 'https://api.openai.com/v1',
+        nativeSearch: {
+            api: 'openai-responses',
+            tools: ['web_search'],
+            includeSources: true,
+        },
         defaultModelId: 'gpt-5.6-sol',
         defaultImageModelId: 'gpt-image-2',
         thinking: {
@@ -770,6 +783,12 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         apiKeyConfigured: false,
         apiKeyEnvVar: 'ANTHROPIC_API_KEY',
         baseUrl: 'https://api.anthropic.com/v1',
+        nativeSearch: {
+            api: 'anthropic-messages',
+            version: 'web_search_20250305',
+            tools: ['web_search'],
+            maxUses: 5,
+        },
         defaultModelId: 'claude-sonnet-4-6',
         thinking: {
             api: 'anthropic-adaptive',
@@ -821,6 +840,10 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         apiKeyConfigured: false,
         apiKeyEnvVar: 'GEMINI_API_KEY',
         baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+        nativeSearch: {
+            api: 'gemini-generate-content',
+            tools: ['google_search'],
+        },
         defaultModelId: 'gemini-3.5-flash',
         defaultImageModelId: 'gemini-3.1-flash-image',
         models: [
@@ -888,17 +911,20 @@ export const DEFAULT_PROVIDER_CONFIGS = [
     {
         id: 'grok',
         name: 'Grok',
-        description: 'xAI Grok OpenAI-compatible API.',
+        description: 'xAI Grok Responses API.',
         themeColor: '#111111',
         implemented: true,
         enabled: false,
-        apiFormat: 'openai-chat-completions',
+        apiFormat: 'openai-responses',
         imageApiFormat: 'openai-images',
         apiKeyRequired: true,
         apiKeyConfigured: false,
         apiKeyEnvVar: 'XAI_API_KEY',
         baseUrl: 'https://api.x.ai/v1',
-        chatPath: '/chat/completions',
+        nativeSearch: {
+            api: 'openai-responses',
+            tools: ['web_search', 'x_search'],
+        },
         defaultModelId: 'grok-4.5',
         defaultImageModelId: 'grok-imagine-image-quality',
         models: [
@@ -927,6 +953,12 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         apiKeyEnvVar: 'ZAI_API_KEY',
         baseUrl: 'https://api.z.ai/api/paas/v4',
         chatPath: '/chat/completions',
+        nativeSearch: {
+            api: 'zai-chat-completions',
+            tools: ['web_search'],
+            searchEngine: 'search-prime',
+            count: 5,
+        },
         defaultModelId: 'glm-5.2',
         defaultImageModelId: 'glm-image',
         models: [
@@ -970,6 +1002,12 @@ export class ProviderConfigStore {
         this._activeModelId = '';
         this._defaultImageProviderId = '';
         this._defaultImageModelId = '';
+        this._webSearchConfig = { ...BRAVE_SEARCH_CONFIG };
+        this._webSearchApiKeyStatus = {
+            configured: false,
+            source: null,
+            error: null,
+        };
         this._configs = configs.map((config) => ({
             ...config,
             models: config.models.map((model) => ({ ...model })),
@@ -987,6 +1025,9 @@ export class ProviderConfigStore {
             this._apiKeyStatuses.set(config.id, status);
             config.apiKeyConfigured = status.configured;
         }
+
+        this._webSearchApiKeyStatus = this._resolveApiKeyStatus(this._webSearchConfig);
+        this._webSearchConfig.apiKeyConfigured = this._webSearchApiKeyStatus.configured;
 
         return this.listProviders();
     }
@@ -1019,6 +1060,49 @@ export class ProviderConfigStore {
                 customImageModels: (provider.customImageModels ?? []).map((model) => ({ ...model })),
                 discoveredImageModels: (provider.discoveredImageModels ?? []).map((model) => ({ ...model })),
             }));
+    }
+
+    getNativeSearchTools(providerId, modelId = '') {
+        const { provider, model } = this.resolve(providerId, modelId);
+        const configuration = model?.nativeSearch === false
+            ? null
+            : model?.nativeSearch ?? provider?.nativeSearch;
+
+        return Array.isArray(configuration?.tools)
+            ? configuration.tools.map(String)
+            : [];
+    }
+
+    getWebSearchApiKeyStatus() {
+        return { ...this._webSearchApiKeyStatus };
+    }
+
+    setWebSearchApiKey(apiKey) {
+        const normalizedApiKey = String(apiKey ?? '').trim();
+
+        if (!normalizedApiKey)
+            return this.clearWebSearchApiKey();
+
+        this._apiKeyStore.store(
+            this._webSearchConfig.id,
+            this._webSearchConfig.name,
+            normalizedApiKey,
+        );
+        this.refreshApiKeyStatus();
+        return this.getWebSearchApiKeyStatus();
+    }
+
+    clearWebSearchApiKey() {
+        this._apiKeyStore.clear(this._webSearchConfig.id);
+        this.refreshApiKeyStatus();
+        return this.getWebSearchApiKeyStatus();
+    }
+
+    createWebSearchFallbackConfig() {
+        return {
+            ...this._webSearchConfig,
+            apiKey: this._getApiKey(this._webSearchConfig),
+        };
     }
 
     getProvider(providerId) {

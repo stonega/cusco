@@ -101,6 +101,21 @@ function getApiKeySubtitle(providerConfigs, provider) {
     return `Store a key in Secret Service or set ${provider.apiKeyEnvVar}.`;
 }
 
+function getWebSearchApiKeySubtitle(providerConfigs) {
+    const status = providerConfigs.getWebSearchApiKeyStatus();
+
+    if (status.source === 'secret')
+        return 'Stored in Secret Service.';
+
+    if (status.source === 'environment')
+        return 'BRAVE_SEARCH_API_KEY is available in the environment.';
+
+    if (status.error)
+        return 'Secret Service is unavailable; BRAVE_SEARCH_API_KEY can still be used.';
+
+    return 'Used when the selected model does not provide native web search.';
+}
+
 function canDiscoverModels(provider) {
     return Boolean(provider.apiFormat)
         && provider.supportsModelDiscovery !== false
@@ -511,6 +526,69 @@ function createImageGenerationSettingsGroup(providerConfigs, onChanged, syncAllR
     return { group, sync };
 }
 
+function createWebSearchSettingsGroup(providerConfigs, onChanged, syncAllRows) {
+    const group = new Adw.PreferencesGroup({
+        title: 'Web Search',
+        description: 'Supported models use their provider-native search. Brave Search is the fallback for other models and explicit /search commands.',
+    });
+    const apiKeyRow = new Adw.PasswordEntryRow({
+        title: 'Brave Search API key',
+    });
+    const clearKeyButton = new Gtk.Button({
+        icon_name: 'edit-clear-symbolic',
+        tooltip_text: 'Clear stored Brave Search key',
+        valign: Gtk.Align.CENTER,
+    });
+    const statusRow = new Adw.ActionRow({
+        title: 'Fallback credentials',
+    });
+
+    apiKeyRow.set_show_apply_button(true);
+    clearKeyButton.add_css_class('flat');
+    apiKeyRow.add_suffix(clearKeyButton);
+
+    apiKeyRow.connect('apply', () => {
+        const apiKey = apiKeyRow.get_text().trim();
+
+        if (!apiKey)
+            return;
+
+        try {
+            providerConfigs.setWebSearchApiKey(apiKey);
+            apiKeyRow.set_text('');
+            syncAllRows();
+            onChanged();
+        } catch (error) {
+            syncAllRows();
+            logError(error, 'Failed to store Brave Search API key');
+        }
+    });
+
+    clearKeyButton.connect('clicked', () => {
+        try {
+            providerConfigs.clearWebSearchApiKey();
+            apiKeyRow.set_text('');
+            syncAllRows();
+            onChanged();
+        } catch (error) {
+            syncAllRows();
+            logError(error, 'Failed to clear Brave Search API key');
+        }
+    });
+
+    const sync = () => {
+        const status = providerConfigs.getWebSearchApiKeyStatus();
+
+        statusRow.set_subtitle(getWebSearchApiKeySubtitle(providerConfigs));
+        clearKeyButton.set_sensitive(status.source === 'secret');
+    };
+
+    group.add(apiKeyRow);
+    group.add(statusRow);
+    sync();
+    return { group, sync };
+}
+
 export function createProviderSettingsPage(providerConfigs, onChanged) {
     providerConfigs.refreshApiKeyStatus();
 
@@ -526,15 +604,18 @@ export function createProviderSettingsPage(providerConfigs, onChanged) {
 
     const providerRows = [];
     let imageGenerationSettings = null;
+    let webSearchSettings = null;
     const syncAllRows = () => {
         providerConfigs.refreshApiKeyStatus();
         imageGenerationSettings?.sync();
+        webSearchSettings?.sync();
 
         for (const providerRow of providerRows)
             providerRow.sync();
     };
 
     imageGenerationSettings = createImageGenerationSettingsGroup(providerConfigs, onChanged, syncAllRows);
+    webSearchSettings = createWebSearchSettingsGroup(providerConfigs, onChanged, syncAllRows);
 
     for (const provider of providerConfigs.listProviders()) {
         const providerRow = createProviderRow(providerConfigs, provider.id, onChanged, syncAllRows);
@@ -543,6 +624,7 @@ export function createProviderSettingsPage(providerConfigs, onChanged) {
     }
 
     page.add(group);
+    page.add(webSearchSettings.group);
     page.add(imageGenerationSettings.group);
     return page;
 }

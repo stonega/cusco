@@ -356,10 +356,10 @@ async function* displayStream(text, cancellable = null) {
 
 function normalizeProviderResponse(response) {
     if (typeof response === 'string')
-        return { text: response, reasoning: '', toolCalls: [] };
+        return { text: response, reasoning: '', toolCalls: [], serverToolResults: [] };
 
     if (!response || typeof response !== 'object')
-        return { text: '', reasoning: '', toolCalls: [] };
+        return { text: '', reasoning: '', toolCalls: [], serverToolResults: [] };
 
     return {
         text: String(response.text ?? ''),
@@ -372,6 +372,16 @@ function normalizeProviderResponse(response) {
                 name: String(toolCall?.name ?? '').trim(),
                 input: String(toolCall?.input ?? ''),
             })).filter((toolCall) => toolCall.name)
+            : [],
+        serverToolResults: Array.isArray(response.serverToolResults)
+            ? response.serverToolResults.map((result) => ({
+                name: result?.name === 'x_search' ? 'x_search' : 'search',
+                label: String(result?.label ?? (result?.name === 'x_search' ? 'X Search' : 'Web Search')),
+                query: String(result?.query ?? ''),
+                results: deduplicateSearchResults(result?.results ?? []),
+                providerId: String(result?.providerId ?? ''),
+                providerName: String(result?.providerName ?? ''),
+            }))
             : [],
     };
 }
@@ -612,6 +622,67 @@ function geminiToolDefinitions(tools = []) {
         : [];
 }
 
+function nativeSearchConfiguration(options = {}, api = '') {
+    if (options.disableNativeSearch)
+        return null;
+
+    const tools = options.tools ?? [];
+
+    if (!tools.some((tool) => tool?.name === 'search'))
+        return null;
+
+    const configuration = options.model?.nativeSearch === false
+        ? null
+        : options.model?.nativeSearch ?? options.provider?.nativeSearch ?? options.config?.nativeSearch;
+
+    if (!configuration || configuration.api !== api)
+        return null;
+
+    return configuration;
+}
+
+function clientToolsForSearchConfiguration(tools = [], configuration = null) {
+    return configuration
+        ? tools.filter((tool) => tool?.name !== 'search')
+        : tools;
+}
+
+function openAiNativeSearchToolDefinitions(configuration) {
+    return (configuration?.tools ?? []).map((type) => ({ type }));
+}
+
+function anthropicNativeSearchToolDefinitions(configuration) {
+    if (!configuration)
+        return [];
+
+    return [{
+        type: configuration.version ?? 'web_search_20250305',
+        name: 'web_search',
+        max_uses: configuration.maxUses ?? 5,
+    }];
+}
+
+function geminiNativeSearchToolDefinitions(configuration) {
+    return configuration ? [{ googleSearch: {} }] : [];
+}
+
+function zaiNativeSearchToolDefinitions(configuration) {
+    if (!configuration)
+        return [];
+
+    return [{
+        type: 'web_search',
+        web_search: {
+            enable: true,
+            search_engine: configuration.searchEngine ?? 'search-prime',
+            search_result: true,
+            count: configuration.count ?? 5,
+            search_recency_filter: 'noLimit',
+            content_size: 'high',
+        },
+    }];
+}
+
 function parseToolArgumentsInput(argumentsText) {
     const text = String(argumentsText ?? '').trim();
 
@@ -647,6 +718,275 @@ function toolInputFromValue(value) {
     }
 
     return String(value ?? '');
+}
+
+function resultTitleFromUrl(url) {
+    try {
+        return GLib.Uri.parse(url, GLib.UriFlags.NONE).get_host() ?? url;
+    } catch (_error) {
+        return url;
+    }
+}
+
+function normalizeSearchResult(result) {
+    const url = String(result?.url ?? result?.link ?? result?.uri ?? '').trim();
+
+    if (!url)
+        return null;
+
+    return {
+        title: String(result?.title ?? result?.name ?? resultTitleFromUrl(url)).trim() || resultTitleFromUrl(url),
+        url,
+        snippet: String(result?.snippet ?? result?.description ?? result?.content ?? result?.cited_text ?? '').trim(),
+        ...(result?.publishedAt || result?.publish_date || result?.page_age
+            ? { publishedAt: String(result.publishedAt ?? result.publish_date ?? result.page_age) }
+            : {}),
+    };
+}
+
+function deduplicateSearchResults(results) {
+    const seenUrls = new Set();
+
+    return results
+        .map(normalizeSearchResult)
+        .filter((result) => {
+            if (!result || seenUrls.has(result.url))
+                return false;
+
+            seenUrls.add(result.url);
+            return true;
+        });
+}
+
+function openAiResponseCitations(response) {
+    const results = [];
+
+    for (const citation of response?.citations ?? []) {
+        if (typeof citation === 'string')
+            results.push({ url: citation });
+        else
+            results.push(citation);
+    }
+
+    for (const item of response?.output ?? []) {
+        for (const content of item?.content ?? []) {
+            for (const annotation of content?.annotations ?? []) {
+                const citation = annotation?.url_citation ?? annotation;
+
+                if (citation?.url) {
+                    results.push({
+                        url: citation.url,
+                        title: citation.title,
+                        snippet: citation.cited_text,
+                    });
+                }
+            }
+        }
+    }
+
+    return deduplicateSearchResults(results);
+}
+
+function searchCallArguments(item) {
+    const action = item?.action ?? {};
+    let args = item?.arguments ?? action;
+
+    if (typeof args === 'string') {
+        try {
+            args = JSON.parse(args);
+        } catch (_error) {
+            args = { query: args };
+        }
+    }
+
+    const queries = Array.isArray(args?.queries)
+        ? args.queries
+        : Array.isArray(action?.queries)
+            ? action.queries
+            : [];
+    const query = String(args?.query ?? action?.query ?? '').trim();
+
+    return {
+        query: queries.map(String).filter(Boolean).join(' · ') || query,
+        sources: deduplicateSearchResults([
+            ...(Array.isArray(args?.sources) ? args.sources : []),
+            ...(Array.isArray(action?.sources) ? action.sources : []),
+        ]),
+    };
+}
+
+function isXResult(result) {
+    return /^https?:\/\/(?:www\.)?x\.com\//i.test(result?.url ?? '');
+}
+
+export function extractOpenAiServerToolResults(response, nativeSearchTools = []) {
+    const calls = (response?.output ?? []).filter((item) => (
+        item?.type === 'web_search_call' || item?.type === 'x_search_call'
+    ));
+    const citations = openAiResponseCitations(response);
+
+    if (calls.length === 0 && citations.length === 0)
+        return [];
+
+    // xAI's Responses API always exposes a top-level `citations` array, but
+    // does not guarantee a separate search-call item for every server-side
+    // invocation. Preserve those citations as tool results even in that
+    // shape so the native search is visible in Cusco's transcript/UI.
+    if (calls.length === 0) {
+        const configuredTools = nativeSearchTools
+            .map(String)
+            .filter((tool) => tool === 'web_search' || tool === 'x_search');
+
+        if (configuredTools.length === 1) {
+            const name = configuredTools[0] === 'x_search' ? 'x_search' : 'search';
+
+            return [{
+                name,
+                label: name === 'x_search' ? 'X Search' : 'Web Search',
+                query: '',
+                results: citations,
+            }];
+        }
+
+        const xResults = citations.filter(isXResult);
+        const webResults = citations.filter((result) => !isXResult(result));
+        const groups = [];
+
+        if (webResults.length > 0)
+            groups.push({ name: 'search', label: 'Web Search', results: webResults });
+
+        if (xResults.length > 0)
+            groups.push({ name: 'x_search', label: 'X Search', results: xResults });
+
+        return groups.length > 0
+            ? groups.map((group) => ({ ...group, query: '' }))
+            : [{ name: 'search', label: 'Web Search', query: '', results: citations }];
+    }
+
+    const hasWebSearch = calls.some((item) => item.type === 'web_search_call');
+    const hasXSearch = calls.some((item) => item.type === 'x_search_call');
+    const grouped = new Map();
+
+    for (const call of calls) {
+        const name = call.type === 'x_search_call' ? 'x_search' : 'search';
+        const current = grouped.get(name) ?? { queries: [], results: [] };
+        const args = searchCallArguments(call);
+
+        if (args.query)
+            current.queries.push(args.query);
+
+        current.results.push(...args.sources);
+        grouped.set(name, current);
+    }
+
+    return [...grouped.entries()].map(([name, value]) => {
+        let fallbackResults = citations;
+
+        if (hasWebSearch && hasXSearch)
+            fallbackResults = citations.filter((result) => name === 'x_search' ? isXResult(result) : !isXResult(result));
+
+        return {
+            name,
+            label: name === 'x_search' ? 'X Search' : 'Web Search',
+            query: [...new Set(value.queries)].join(' · '),
+            results: deduplicateSearchResults(value.results.length > 0 ? value.results : fallbackResults),
+        };
+    });
+}
+
+export function extractAnthropicServerToolResults(response) {
+    const uses = new Map((response?.content ?? [])
+        .filter((content) => content?.type === 'server_tool_use' && content?.name === 'web_search')
+        .map((content) => [String(content.id ?? ''), content]));
+    const results = [];
+
+    for (const content of response?.content ?? []) {
+        if (content?.type !== 'web_search_tool_result')
+            continue;
+
+        const use = uses.get(String(content.tool_use_id ?? ''));
+        const items = Array.isArray(content.content) ? content.content : [];
+
+        results.push({
+            name: 'search',
+            label: 'Web Search',
+            query: String(use?.input?.query ?? '').trim(),
+            results: deduplicateSearchResults(items.filter((item) => item?.type === 'web_search_result')),
+        });
+    }
+
+    if (results.length === 0 && uses.size > 0) {
+        for (const use of uses.values()) {
+            results.push({
+                name: 'search',
+                label: 'Web Search',
+                query: String(use?.input?.query ?? '').trim(),
+                results: [],
+            });
+        }
+    }
+
+    return results;
+}
+
+export function extractGeminiServerToolResults(response) {
+    const metadata = response?.candidates?.[0]?.groundingMetadata
+        ?? response?.candidates?.[0]?.grounding_metadata;
+
+    if (!metadata)
+        return [];
+
+    const queries = metadata.webSearchQueries ?? metadata.web_search_queries ?? [];
+    const chunks = metadata.groundingChunks ?? metadata.grounding_chunks ?? [];
+    const results = chunks.map((chunk) => {
+        const web = chunk?.web ?? chunk?.retrievedContext ?? chunk?.retrieved_context;
+
+        return web ? {
+            url: web.uri ?? web.url,
+            title: web.title,
+            snippet: web.text,
+        } : null;
+    }).filter(Boolean);
+
+    if (queries.length === 0 && results.length === 0)
+        return [];
+
+    return [{
+        name: 'search',
+        label: 'Google Search',
+        query: queries.map(String).filter(Boolean).join(' · '),
+        results: deduplicateSearchResults(results),
+    }];
+}
+
+export function extractChatCompletionServerToolResults(response) {
+    const items = response?.web_search ?? response?.webSearch ?? [];
+
+    if (!Array.isArray(items) || items.length === 0)
+        return [];
+
+    return [{
+        name: 'search',
+        label: 'Web Search',
+        query: '',
+        results: deduplicateSearchResults(items),
+    }];
+}
+
+function appendSearchSources(text, serverToolResults) {
+    const sourceResults = deduplicateSearchResults(
+        (serverToolResults ?? []).flatMap((result) => result.results ?? []),
+    );
+    const missingSources = sourceResults.filter((result) => !String(text ?? '').includes(result.url));
+
+    if (missingSources.length === 0)
+        return String(text ?? '');
+
+    const sourceList = missingSources
+        .map((result) => `- [${result.title}](${result.url})`)
+        .join('\n');
+
+    return `${String(text ?? '').trim()}\n\nSources:\n${sourceList}`.trim();
 }
 
 export function extractOpenAiToolCalls(response) {
@@ -1002,17 +1342,27 @@ export function buildOpenAiResponsesBody(messages, modelId, options = {}) {
         max_output_tokens: normalizeMaxOutputTokens(options.maxOutputTokens),
     };
 
-    const reasoning = buildOpenAiReasoningConfig(options.provider ?? options.config, options.model, options.thinkingLevel);
+    const provider = options.provider ?? options.config;
+    const reasoning = buildOpenAiReasoningConfig(provider, options.model, options.thinkingLevel)
+        ?? buildOpenAiCompatibleThinkingConfig(provider, options.model, options.thinkingLevel)?.reasoning;
 
     if (reasoning)
         body.reasoning = reasoning;
 
-    const tools = openAiResponsesToolDefinitions(options.tools);
+    const nativeSearch = nativeSearchConfiguration(options, 'openai-responses');
+    const clientTools = clientToolsForSearchConfiguration(options.tools, nativeSearch);
+    const tools = [
+        ...openAiNativeSearchToolDefinitions(nativeSearch),
+        ...openAiResponsesToolDefinitions(clientTools),
+    ];
 
     if (tools.length > 0) {
         body.tools = tools;
         body.tool_choice = 'auto';
     }
+
+    if (nativeSearch?.includeSources)
+        body.include = ['web_search_call.action.sources'];
 
     return body;
 }
@@ -1024,8 +1374,14 @@ export function buildOpenAiCompatibleChatBody(messages, modelId, options = {}) {
         max_tokens: normalizeMaxOutputTokens(options.maxOutputTokens),
         stream: false,
     };
-    const thinking = buildOpenAiCompatibleThinkingConfig(options.provider ?? options.config, options.model, options.thinkingLevel);
-    const tools = openAiCompatibleToolDefinitions(options.tools);
+    const provider = options.provider ?? options.config;
+    const thinking = buildOpenAiCompatibleThinkingConfig(provider, options.model, options.thinkingLevel);
+    const nativeSearch = nativeSearchConfiguration(options, 'zai-chat-completions');
+    const clientTools = clientToolsForSearchConfiguration(options.tools, nativeSearch);
+    const tools = [
+        ...zaiNativeSearchToolDefinitions(nativeSearch),
+        ...openAiCompatibleToolDefinitions(clientTools),
+    ];
 
     if (thinking)
         Object.assign(body, thinking);
@@ -1057,7 +1413,12 @@ export function buildAnthropicMessagesBody(messages, modelId, options = {}) {
             body.max_tokens = thinking.budget_tokens + 1024;
     }
 
-    const tools = anthropicToolDefinitions(options.tools);
+    const nativeSearch = nativeSearchConfiguration(options, 'anthropic-messages');
+    const clientTools = clientToolsForSearchConfiguration(options.tools, nativeSearch);
+    const tools = [
+        ...anthropicNativeSearchToolDefinitions(nativeSearch),
+        ...anthropicToolDefinitions(clientTools),
+    ];
 
     if (tools.length > 0)
         body.tools = tools;
@@ -1076,10 +1437,24 @@ export function buildGeminiGenerateContentBody(messages, options = {}) {
     if (thinking)
         payload.generationConfig.thinkingConfig = thinking;
 
-    const tools = geminiToolDefinitions(options.tools);
+    const nativeSearch = nativeSearchConfiguration(options, 'gemini-generate-content');
+    const clientTools = clientToolsForSearchConfiguration(options.tools, nativeSearch);
+    const tools = [
+        ...geminiNativeSearchToolDefinitions(nativeSearch),
+        ...geminiToolDefinitions(clientTools),
+    ];
 
     if (tools.length > 0)
         payload.tools = tools;
+
+    if (nativeSearch) {
+        payload.toolConfig = {
+            includeServerSideToolInvocations: true,
+            ...(clientTools.length > 0
+                ? { functionCallingConfig: { mode: 'VALIDATED' } }
+                : {}),
+        };
+    }
 
     return payload;
 }
@@ -1122,13 +1497,19 @@ export function extractOpenAiFinishReason(response) {
         ?? '';
 }
 
-export function extractOpenAiResponse(response) {
+export function extractOpenAiResponse(response, options = {}) {
+    const serverToolResults = extractOpenAiServerToolResults(
+        response,
+        options.provider?.nativeSearch?.tools ?? options.nativeSearchTools ?? [],
+    );
+
     return {
-        text: extractOpenAiText(response),
+        text: appendSearchSources(extractOpenAiText(response), serverToolResults),
         reasoning: extractOpenAiReasoning(response),
         usage: extractOpenAiUsage(response),
         finishReason: extractOpenAiFinishReason(response),
         toolCalls: extractOpenAiToolCalls(response),
+        serverToolResults,
     };
 }
 
@@ -1154,12 +1535,15 @@ export function extractChatCompletionFinishReason(response) {
 }
 
 export function extractChatCompletionResponse(response) {
+    const serverToolResults = extractChatCompletionServerToolResults(response);
+
     return {
-        text: extractChatCompletionText(response),
+        text: appendSearchSources(extractChatCompletionText(response), serverToolResults),
         reasoning: extractChatCompletionReasoning(response),
         usage: extractChatCompletionUsage(response),
         finishReason: extractChatCompletionFinishReason(response),
         toolCalls: extractChatCompletionToolCalls(response),
+        serverToolResults,
     };
 }
 
@@ -1185,12 +1569,15 @@ export function extractAnthropicFinishReason(response) {
 }
 
 export function extractAnthropicResponse(response) {
+    const serverToolResults = extractAnthropicServerToolResults(response);
+
     return {
-        text: extractAnthropicText(response),
+        text: appendSearchSources(extractAnthropicText(response), serverToolResults),
         reasoning: extractAnthropicReasoning(response),
         usage: extractAnthropicUsage(response),
         finishReason: extractAnthropicFinishReason(response),
         toolCalls: extractAnthropicToolCalls(response),
+        serverToolResults,
     };
 }
 
@@ -1216,12 +1603,15 @@ export function extractGeminiFinishReason(response) {
 }
 
 export function extractGeminiResponse(response) {
+    const serverToolResults = extractGeminiServerToolResults(response);
+
     return {
-        text: extractGeminiText(response),
+        text: appendSearchSources(extractGeminiText(response), serverToolResults),
         reasoning: extractGeminiReasoning(response),
         usage: extractGeminiUsage(response),
         finishReason: extractGeminiFinishReason(response),
         toolCalls: extractGeminiToolCalls(response),
+        serverToolResults,
     };
 }
 
@@ -1375,8 +1765,13 @@ class RemoteProvider extends ChatProvider {
                 options,
             ));
 
-            if (!response.text && !response.reasoning && !response.usage && response.toolCalls.length === 0)
+            if (!response.text
+                && !response.reasoning
+                && !response.usage
+                && response.toolCalls.length === 0
+                && response.serverToolResults.length === 0) {
                 throw new Error(`${this.name} returned an empty response`);
+            }
 
             if (response.usage) {
                 yield {
@@ -1389,6 +1784,17 @@ class RemoteProvider extends ChatProvider {
                 yield {
                     type: 'reasoning',
                     text: response.reasoning,
+                };
+            }
+
+            if (response.serverToolResults.length > 0) {
+                yield {
+                    type: 'server_tool_results',
+                    serverToolResults: response.serverToolResults.map((result) => ({
+                        ...result,
+                        providerId: this.id,
+                        providerName: this.name,
+                    })),
                 };
             }
 
@@ -1426,6 +1832,7 @@ export class OpenAiResponsesProvider extends RemoteProvider {
                 provider: this._config,
                 model: options.model,
                 tools: options.tools,
+                disableNativeSearch: options.disableNativeSearch,
                 thinkingLevel: options.thinkingLevel,
                 maxOutputTokens: options.maxOutputTokens,
             }),
@@ -1436,7 +1843,7 @@ export class OpenAiResponsesProvider extends RemoteProvider {
             },
         );
 
-        return extractOpenAiResponse(response);
+        return extractOpenAiResponse(response, options);
     }
 }
 
@@ -1449,6 +1856,7 @@ export class OpenAiCompatibleChatProvider extends RemoteProvider {
                 provider: this._config,
                 model: options.model,
                 tools: options.tools,
+                disableNativeSearch: options.disableNativeSearch,
                 thinkingLevel: options.thinkingLevel,
                 maxOutputTokens: options.maxOutputTokens,
             }),
@@ -1475,6 +1883,7 @@ export class AnthropicMessagesProvider extends RemoteProvider {
                 provider: this._config,
                 model: options.model,
                 tools: options.tools,
+                disableNativeSearch: options.disableNativeSearch,
                 thinkingLevel: options.thinkingLevel,
                 maxOutputTokens: options.maxOutputTokens,
             }),
@@ -1496,6 +1905,7 @@ export class GeminiGenerateContentProvider extends RemoteProvider {
             provider: this._config,
             model: options.model,
             tools: options.tools,
+            disableNativeSearch: options.disableNativeSearch,
             thinkingLevel: options.thinkingLevel,
             maxOutputTokens: options.maxOutputTokens,
         }), {

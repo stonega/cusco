@@ -37,6 +37,15 @@ const TOOL_DISPLAY_PRESETS = {
             cancelled: 'Search stopped',
         },
     },
+    x_search: {
+        label: 'X Search',
+        actions: {
+            running: 'Searching X',
+            completed: 'Searched X',
+            failed: 'X search failed',
+            cancelled: 'X search stopped',
+        },
+    },
     calc: {
         label: 'Calculator',
         actions: {
@@ -119,7 +128,7 @@ function targetForTool(name, toolCall) {
     if (name === 'file_list' || name === 'file_read')
         return normalizeString(toolCall?.path, normalizeString(toolCall?.input));
 
-    if (name === 'search')
+    if (name === 'search' || name === 'x_search')
         return normalizeString(toolCall?.query, normalizeString(toolCall?.input));
 
     if (name === 'image_gen')
@@ -145,8 +154,12 @@ function detailForTool(name, toolCall) {
     if (name === 'file_read' && toolCall?.size !== undefined && toolCall?.size !== null)
         return `${toolCall.size} bytes${toolCall.truncated ? ' (truncated)' : ''}`;
 
-    if (name === 'search' && Array.isArray(toolCall?.results))
-        return `${toolCall.results.length} result${toolCall.results.length === 1 ? '' : 's'}`;
+    if ((name === 'search' || name === 'x_search') && Array.isArray(toolCall?.results)) {
+        const resultCount = `${toolCall.results.length} result${toolCall.results.length === 1 ? '' : 's'}`;
+        const provider = normalizeString(toolCall?.providerName, normalizeString(toolCall?.providerId));
+
+        return [resultCount, provider].filter(Boolean).join(' · ');
+    }
 
     if (name === 'image_gen')
         return normalizeString(toolCall?.detail, [

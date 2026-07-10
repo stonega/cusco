@@ -26,12 +26,20 @@ if (!summarizeStructuredData('[{"name":"A","count":1}]').includes('fields: name,
     throw new Error('JSON structured data summary was not produced');
 
 const searchResults = extractSearchResults({
-    AbstractText: 'Cusco summary',
-    AbstractURL: 'https://example.com/cusco',
-    Heading: 'Cusco',
-    RelatedTopics: [
-        { Text: 'Extra - result', FirstURL: 'https://example.com/extra' },
-    ],
+    web: {
+        results: [
+            {
+                title: 'Cusco',
+                url: 'https://example.com/cusco',
+                description: 'Cusco summary',
+            },
+            {
+                title: 'Extra',
+                url: 'https://example.com/extra',
+                description: 'Extra result',
+            },
+        ],
+    },
 });
 
 if (searchResults.length !== 2 || searchResults[0].url !== 'https://example.com/cusco')

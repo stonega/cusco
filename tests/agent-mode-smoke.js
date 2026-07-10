@@ -13,6 +13,10 @@ import { ToolManager } from '../src/tools/tools.js';
 const tools = new ToolManager();
 const prompt = buildAgentModeSystemPrompt(tools.listTools(), { maxIterations: 2 });
 const defaultPrompt = buildAgentModeSystemPrompt(tools.listTools());
+const nativeSearchPrompt = buildAgentModeSystemPrompt(
+    tools.listTools().filter((tool) => tool.name !== 'search'),
+    { nativeSearchTools: ['web_search', 'x_search'] },
+);
 
 if (DEFAULT_AGENT_MAX_ITERATIONS < 100
     || !defaultPrompt.includes(`at most ${DEFAULT_AGENT_MAX_ITERATIONS} tool-use iterations`)) {
@@ -25,6 +29,11 @@ if (!prompt.includes('Agent is enabled')
     || !prompt.includes('mcp__')
     || !prompt.includes('MCP server tools exposed through Cusco')) {
     throw new Error('Agent Mode prompt did not describe the tool protocol');
+}
+
+if (!nativeSearchPrompt.includes('Provider-managed search tools are enabled: web_search, x_search')
+    || nativeSearchPrompt.includes('- search: Web Search')) {
+    throw new Error('Agent Mode prompt did not route search to provider-managed tools');
 }
 
 const parsedCall = parseAgentToolCall('<cusco_tool_call>{"name":"calc","input":"2 + 2"}</cusco_tool_call>');

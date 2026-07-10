@@ -50,7 +50,7 @@ const BUILT_IN_TOOLS = {
     search: {
         name: 'search',
         label: 'Web Search',
-        description: 'Search the web through DuckDuckGo and return cited results.',
+        description: 'Search the web and return cited results. Models with native search use their provider; other models use Brave Search.',
         inputDescription: 'A concise web search query.',
         permissionPolicy: TOOL_PERMISSION_ASK,
         requiresPermission: true,
@@ -333,38 +333,15 @@ export function summarizeStructuredData(input) {
     throw userVisibleError('Structured data must be valid JSON or CSV-like text.');
 }
 
-function flattenRelatedTopics(topics, output = []) {
-    for (const topic of topics ?? []) {
-        if (Array.isArray(topic.Topics)) {
-            flattenRelatedTopics(topic.Topics, output);
-            continue;
-        }
-
-        if (topic.FirstURL && topic.Text) {
-            output.push({
-                title: topic.Text.split(' - ')[0],
-                url: topic.FirstURL,
-                snippet: topic.Text,
-            });
-        }
-    }
-
-    return output;
-}
-
 export function extractSearchResults(response) {
-    const results = [];
-
-    if (response?.AbstractText && response?.AbstractURL) {
-        results.push({
-            title: response.Heading || response.AbstractSource || response.AbstractURL,
-            url: response.AbstractURL,
-            snippet: response.AbstractText,
-        });
-    }
-
-    for (const relatedTopic of flattenRelatedTopics(response?.RelatedTopics))
-        results.push(relatedTopic);
+    const results = Array.isArray(response?.web?.results)
+        ? response.web.results.map((result) => ({
+            title: String(result?.title ?? result?.url ?? '').trim(),
+            url: String(result?.url ?? '').trim(),
+            snippet: String(result?.description ?? '').replace(/<[^>]+>/g, '').trim(),
+            ...(result?.age ? { publishedAt: String(result.age) } : {}),
+        }))
+        : [];
 
     const seenUrls = new Set();
     return results.filter((result) => {
@@ -376,19 +353,37 @@ export function extractSearchResults(response) {
     }).slice(0, 5);
 }
 
-async function fetchJson(url, { timeoutSeconds = DEFAULT_SEARCH_TIMEOUT_SECONDS, cancellable = null } = {}) {
+async function fetchJson(url, {
+    timeoutSeconds = DEFAULT_SEARCH_TIMEOUT_SECONDS,
+    cancellable = null,
+    headers = {},
+} = {}) {
     const session = new Soup.Session({
         timeout: timeoutSeconds,
     });
     const message = Soup.Message.new('GET', url);
+
+    for (const [name, value] of Object.entries(headers))
+        message.request_headers.append(name, value);
+
     const bytes = await sendAndRead(session, message, cancellable);
     const text = new TextDecoder().decode(bytes.get_data());
     const status = message.get_status();
 
-    if (status < 200 || status >= 300)
-        throw userVisibleError(`Web search failed with HTTP ${status}.`);
+    if (status === 401 || status === 403)
+        throw userVisibleError('Brave Search rejected the configured API key.');
 
-    return JSON.parse(text);
+    if (status === 429)
+        throw userVisibleError('Brave Search rate limit exceeded. Try again later.');
+
+    if (status < 200 || status >= 300)
+        throw userVisibleError(`Brave Search failed with HTTP ${status}.`);
+
+    try {
+        return JSON.parse(text);
+    } catch (_error) {
+        throw userVisibleError('Brave Search returned an invalid response.');
+    }
 }
 
 export async function searchWeb(query, options = {}) {
@@ -397,13 +392,30 @@ export async function searchWeb(query, options = {}) {
     if (!normalizedQuery)
         throw userVisibleError('Search query cannot be empty.');
 
-    const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(normalizedQuery)}&format=json&no_html=1&skip_disambig=1`;
-    const response = await fetchJson(url, options);
+    const apiKey = String(options.apiKey ?? GLib.getenv('BRAVE_SEARCH_API_KEY') ?? '').trim();
+
+    if (!apiKey)
+        throw userVisibleError('Configure Brave Search credentials in Settings before searching.');
+
+    const url = [
+        'https://api.search.brave.com/res/v1/web/search',
+        `?q=${encodeURIComponent(normalizedQuery)}`,
+        '&count=5&safesearch=moderate&text_decorations=false',
+    ].join('');
+    const response = await fetchJson(url, {
+        ...options,
+        headers: {
+            Accept: 'application/json',
+            'X-Subscription-Token': apiKey,
+        },
+    });
     const results = extractSearchResults(response);
 
     return {
         query: normalizedQuery,
         results,
+        providerId: 'brave-search',
+        providerName: 'Brave Search',
     };
 }
 
@@ -827,12 +839,13 @@ export function formatToolResultForTranscript(result) {
     if (result.name === 'data')
         return `Structured data summary\n\n${result.output}`;
 
-    if (result.name === 'search') {
+    if (result.name === 'search' || result.name === 'x_search') {
         const citations = result.results.map((item, index) => (
             `${index + 1}. ${item.title}\n${item.url}\n${item.snippet}`
         )).join('\n\n');
+        const searchLabel = result.name === 'x_search' ? 'X search' : 'Web search';
 
-        return `Web search results for "${result.input}"\n\n${citations || 'No cited results returned.'}`;
+        return `${searchLabel} results for "${result.input}"\n\n${citations || 'No cited results returned.'}`;
     }
 
     if (result.name === 'file_list')
@@ -863,8 +876,9 @@ export function formatToolResultForTranscript(result) {
 }
 
 export class ToolManager {
-    constructor() {
+    constructor(options = {}) {
         this._registeredTools = new Map();
+        this._searchConfig = options.searchConfig ?? (() => ({}));
     }
 
     registerTool(tool) {
@@ -1006,11 +1020,19 @@ export class ToolManager {
                 ...request,
                 output: summarizeStructuredData(request.input),
             };
-        case 'search':
+        case 'search': {
+            const searchConfig = typeof this._searchConfig === 'function'
+                ? this._searchConfig()
+                : this._searchConfig;
+
             return {
                 ...request,
-                ...(await searchWeb(request.input, options)),
+                ...(await searchWeb(request.input, {
+                    ...(searchConfig ?? {}),
+                    ...options,
+                })),
             };
+        }
         case 'file_list':
             return {
                 ...request,

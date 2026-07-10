@@ -25,6 +25,10 @@ chat_sources = files(
   'chat/usage.js',
 )
 
+composer_sources = files(
+  'composer/references.js',
+)
+
 provider_sources = files(
   'providers/config.js',
   'providers/imageGeneration.js',
@@ -94,6 +98,11 @@ install_data(
 install_data(
   chat_sources,
   install_dir: pkgdatadir / 'chat',
+)
+
+install_data(
+  composer_sources,
+  install_dir: pkgdatadir / 'composer',
 )
 
 install_data(
