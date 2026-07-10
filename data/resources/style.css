@@ -160,6 +160,35 @@
     background-color: transparent;
 }
 
+.cusco-composer-suggestions {
+    padding: 2px;
+    border: 1px solid alpha(@window_fg_color, 0.16);
+    border-radius: 12px;
+    background-color: @popover_bg_color;
+    box-shadow: 0 4px 14px alpha(black, 0.18);
+}
+
+.cusco-composer-suggestions list,
+.cusco-composer-suggestions row {
+    background-color: transparent;
+}
+
+.cusco-composer-suggestions row:selected {
+    background-color: alpha(@accent_bg_color, 0.18);
+}
+
+.cusco-composer-reference-skill {
+    color: #3584e4;
+}
+
+.cusco-composer-reference-file {
+    color: #2ec27e;
+}
+
+.cusco-composer-reference-command {
+    color: #e5a50a;
+}
+
 .cusco-attachment-row {
     margin-left: 2px;
     margin-right: 2px;
@@ -193,8 +222,8 @@
 }
 
 .cusco-pending-message-row {
-    margin-left: 2px;
-    margin-right: 2px;
+    margin-left: 16px;
+    margin-right: 16px;
 }
 
 .cusco-pending-message-scroller,
@@ -203,17 +232,17 @@
 }
 
 .cusco-pending-message {
-    padding: 5px 7px;
-    border-radius: 7px;
-    border: 1px solid alpha(@accent_color, 0.28);
-    background-color: alpha(@accent_color, 0.12);
+    padding: 6px 8px;
+    border-radius: 8px;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    border: 1px solid alpha(@window_fg_color, 0.14);
+    background-color: @view_bg_color;
 }
 
 .cusco-pending-message-status {
-    padding: 2px 6px;
-    border-radius: 999px;
-    background-color: alpha(@accent_color, 0.20);
-    color: @window_fg_color;
+    padding: 0 2px;
+    color: alpha(@window_fg_color, 0.62);
 }
 
 .cusco-pending-message-text {
@@ -289,6 +318,8 @@
 .cusco-high-contrast .cusco-tool-output-preview,
 .cusco-high-contrast .cusco-tool-image-preview,
 .cusco-high-contrast .cusco-composer-attachment-preview,
+.cusco-high-contrast .cusco-composer-suggestions,
+.cusco-high-contrast .cusco-pending-message,
 .cusco-high-contrast .cusco-tool-result-status {
     border: 1px solid @window_fg_color;
 }

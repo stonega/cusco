@@ -28,6 +28,12 @@ import {
 import { ConversationManager } from './chat/conversation.js';
 import { copyTextToClipboard, createArtifactCard, createMessageContent } from './chat/messageView.js';
 import { estimateConversationUsage } from './chat/usage.js';
+import {
+    filterComposerSuggestions,
+    findComposerTrigger,
+    HomeFileIndex,
+    listPathExecutables,
+} from './composer/references.js';
 import { createCronCreateTool, CronJobManager } from './cron/manager.js';
 import { MemoryManager } from './memory/memory.js';
 import { McpManager } from './mcp/manager.js';
@@ -87,6 +93,10 @@ const IMAGE_ATTACHMENT_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '
 const MAX_ATTACHMENT_TEXT_CHARS = 20000;
 const COMPOSER_ATTACHMENT_THUMBNAIL_WIDTH = 36;
 const COMPOSER_ATTACHMENT_THUMBNAIL_HEIGHT = 28;
+const COMPOSER_SUGGESTION_LIMIT = 8;
+const PENDING_MESSAGE_COMPOSER_OVERLAP = 14;
+const PENDING_MESSAGE_STACK_SPAN = 5;
+const PENDING_MESSAGE_STACK_STEP = 4;
 const KNOT_ICON_CURVES = [
     [15, 219.379, 56.5, 207.379, 186.6, 201.8, 431, 259],
     [431, 259, 736.5, 330.5, 706.5, 70.3797, 706.5, 70.3797],
@@ -105,6 +115,66 @@ const BASE_RESPONSE_SYSTEM_PROMPT = [
     'If more work remains, keep going within the available output budget instead of asking the user to say "continue".',
     'Ask a follow-up only when required information is missing or the user must choose between options.',
 ].join(' ');
+
+const COMPOSER_REFERENCE_STYLES = {
+    light: {
+        skill: { background: '#d8ecff', foreground: '#1c71d8' },
+        file: { background: '#dcf4e3', foreground: '#18794e' },
+        command: { background: '#f8e5c2', foreground: '#8f5e00' },
+    },
+    dark: {
+        skill: { background: '#1f3b55', foreground: '#99c1f1' },
+        file: { background: '#1d4434', foreground: '#8ff0a4' },
+        command: { background: '#4c3b1e', foreground: '#f8e45c' },
+    },
+};
+
+function composerReferenceKindForTrigger(trigger) {
+    return {
+        '$': 'skill',
+        '@': 'file',
+        '#': 'command',
+    }[trigger] ?? '';
+}
+
+function textBufferOffsetForStringIndex(text, index) {
+    return [...String(text ?? '').slice(0, index)].length;
+}
+
+function composerReferenceRanges(text, references) {
+    const ranges = [];
+
+    for (const reference of references) {
+        const token = String(reference?.insertText ?? '');
+
+        if (!token)
+            continue;
+
+        let index = text.indexOf(token);
+
+        while (index >= 0) {
+            ranges.push({
+                reference,
+                startOffset: textBufferOffsetForStringIndex(text, index),
+                endOffset: textBufferOffsetForStringIndex(text, index + token.length),
+            });
+            index = text.indexOf(token, index + token.length);
+        }
+    }
+
+    return ranges;
+}
+
+function normalizeComposerReferences(references) {
+    return Array.isArray(references)
+        ? references.map((reference) => ({
+            kind: String(reference?.kind ?? ''),
+            value: String(reference?.value ?? ''),
+            title: String(reference?.title ?? ''),
+            insertText: String(reference?.insertText ?? ''),
+        })).filter((reference) => reference.kind && reference.value && reference.insertText)
+        : [];
+}
 
 function trimFixedNumber(value, fractionDigits) {
     return value.toFixed(fractionDigits).replace(/\.?0+$/, '');
@@ -423,6 +493,17 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._cron = new CronJobManager();
         this._mcp = new McpManager({ workspaceManager: this._workspace });
         this._pendingAttachments = [];
+        this._composerReferences = [];
+        this._composerSuggestionItems = [];
+        this._activeComposerTrigger = null;
+        this._dismissedComposerTrigger = '';
+        this._pathCommandSuggestions = null;
+        this._homeFileIndex = new HomeFileIndex({
+            onChanged: () => {
+                if (this._activeComposerTrigger?.trigger === '@')
+                    this._refreshComposerSuggestions();
+            },
+        });
         this._cronJobIndex = new Map();
         this._cronLogSyncTimeoutId = 0;
         this._followLatestMessage = false;
@@ -462,6 +543,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this.connect('close-request', () => {
             this._stopActiveConversation();
             this._stopCronLogSync();
+            this._homeFileIndex.stop();
+
+            if (this._composerStyleManagerSignalId) {
+                Adw.StyleManager.get_default().disconnect(this._composerStyleManagerSignalId);
+                this._composerStyleManagerSignalId = 0;
+            }
+
             this._mcp.shutdown();
             return false;
         });
@@ -516,6 +604,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         keyController.set_propagation_phase(Gtk.PropagationPhase.CAPTURE);
         keyController.connect('key-pressed', (_controller, keyval) => {
+            if (keyval === Gdk.KEY_Escape && this._isComposerSuggestionPanelVisible()) {
+                this._dismissComposerSuggestions();
+                return true;
+            }
+
             if (keyval === Gdk.KEY_Escape && this._activeChatCancellable) {
                 this._stopActiveConversation();
                 return true;
@@ -775,6 +868,22 @@ class CuscoWindow extends Adw.ApplicationWindow {
         composerMetaRow.append(this._scrollToBottomButton);
 
         this._composerBuffer = new Gtk.TextBuffer();
+        this._composerReferenceTags = new Map();
+
+        for (const kind of ['skill', 'file', 'command']) {
+            const tag = new Gtk.TextTag({
+                name: `composer-reference-${kind}`,
+                weight: Pango.Weight.BOLD,
+            });
+            this._composerBuffer.get_tag_table().add(tag);
+            this._composerReferenceTags.set(kind, tag);
+        }
+
+        this._syncComposerReferenceTagStyles();
+        this._composerStyleManagerSignalId = Adw.StyleManager.get_default().connect(
+            'notify::dark',
+            () => this._syncComposerReferenceTagStyles(),
+        );
         this._composer = new Gtk.TextView({
             buffer: this._composerBuffer,
             accepts_tab: false,
@@ -863,6 +972,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         const sendMessage = () => {
             const text = this._getComposerText().trim();
+            const references = this._getComposerReferences();
             const hasAttachments = this._pendingAttachments.length > 0;
 
             if (!text && !hasAttachments)
@@ -871,7 +981,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (this._activeChatCancellable) {
                 if (text) {
                     this._setComposerText('');
-                    this._enqueuePendingUserMessage(text);
+                    this._enqueuePendingUserMessage(text, references);
                 } else if (hasAttachments) {
                     this._showToast('Attachments can be sent after the current response finishes.');
                 }
@@ -879,7 +989,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             }
 
             this._setComposerText('');
-            this._sendMessage(text).catch((error) => {
+            this._sendMessage(text, references).catch((error) => {
                 logError(error, 'Failed to stream provider response');
                 this._appendSystemError(getProviderErrorMessage(error));
             });
@@ -887,6 +997,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         const composerKeyController = new Gtk.EventControllerKey();
         composerKeyController.connect('key-pressed', (_controller, keyval, _keycode, state) => {
+            if (this._handleComposerSuggestionKey(keyval))
+                return true;
+
+            if (this._deleteComposerReferenceAtCursor(keyval))
+                return true;
+
             const isEnter = keyval === Gdk.KEY_Return || keyval === Gdk.KEY_KP_Enter;
             const shiftPressed = (state & Gdk.ModifierType.SHIFT_MASK) !== 0;
             const controlPressed = (state & Gdk.ModifierType.CONTROL_MASK) !== 0;
@@ -903,6 +1019,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._syncComposerPlaceholder();
             this._syncComposerUsageChart();
             this._syncComposerHint();
+            this._syncComposerReferenceTags();
+            this._refreshComposerSuggestions();
+        });
+        this._composerBuffer.connect('mark-set', (_buffer, _location, mark) => {
+            if (mark.get_name() === 'insert')
+                this._refreshComposerSuggestions();
         });
         this._syncComposerPlaceholder();
         this._syncComposerUsageChart();
@@ -910,10 +1032,45 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         composerRow.append(composerOverlay);
 
+        const composerSuggestionPanel = this._createComposerSuggestionPanel();
+        const composerDeckLayout = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 0,
+            hexpand: true,
+        });
+        const composerSpace = new Gtk.Box({ hexpand: true });
+        this._composerDeckSizeGroup = new Gtk.SizeGroup({ mode: Gtk.SizeGroupMode.VERTICAL });
+        this._composerDeckSizeGroup.add_widget(composerRow);
+        this._composerDeckSizeGroup.add_widget(composerSpace);
+        composerDeckLayout.append(composerSuggestionPanel);
+        composerDeckLayout.append(this._pendingUserMessagesRow);
+        composerDeckLayout.append(composerSpace);
+
+        const composerDeck = new Gtk.Overlay({
+            child: composerDeckLayout,
+            hexpand: true,
+        });
+        composerDeck.add_css_class('cusco-composer-deck');
+        composerDeck.add_overlay(composerRow);
+        composerDeck.set_measure_overlay(composerRow, false);
+        composerDeck.connect('get-child-position', (overlay, child, allocation) => {
+            if (child !== composerRow)
+                return false;
+
+            const hasPendingMessages = this._pendingUserMessagesRow.get_visible();
+            const contentHeight = composerSuggestionPanel.get_height()
+                + this._pendingUserMessagesRow.get_height();
+            const overlap = hasPendingMessages ? PENDING_MESSAGE_COMPOSER_OVERLAP : 0;
+            allocation.x = 0;
+            allocation.y = Math.max(0, contentHeight - overlap);
+            allocation.width = overlay.get_width();
+            allocation.height = composerSpace.get_height() + overlap;
+            return true;
+        });
+
         composerShell.append(composerMetaRow);
         composerShell.append(this._attachmentRow);
-        composerShell.append(this._pendingUserMessagesRow);
-        composerShell.append(composerRow);
+        composerShell.append(composerDeck);
 
         main.set_child(this._scroller);
         main.add_overlay(this._emptyConversationState);
@@ -968,14 +1125,412 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return this._composerBuffer.get_text(start, end, true);
     }
 
-    _setComposerText(text) {
+    _setComposerText(text, { preserveReferences = false } = {}) {
         if (!this._composerBuffer)
             return;
 
+        if (!preserveReferences)
+            this._composerReferences = [];
+
+        this._updatingComposerReferences = true;
         this._composerBuffer.set_text(String(text ?? ''), -1);
         const [, end] = this._composerBuffer.get_bounds();
         this._composerBuffer.place_cursor(end);
+        this._updatingComposerReferences = false;
+        this._syncComposerReferenceTags();
+        this._refreshComposerSuggestions();
         this._syncComposerPlaceholder();
+    }
+
+    _createComposerSuggestionPanel() {
+        const panel = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 4,
+            margin_bottom: 6,
+        });
+        panel.add_css_class('cusco-composer-suggestions');
+
+        this._composerSuggestionHeading = new Gtk.Label({
+            xalign: 0,
+            margin_start: 10,
+            margin_end: 10,
+            margin_top: 7,
+        });
+        this._composerSuggestionHeading.add_css_class('caption');
+        this._composerSuggestionHeading.add_css_class('dim-label');
+        panel.append(this._composerSuggestionHeading);
+
+        this._composerSuggestionList = new Gtk.ListBox({
+            selection_mode: Gtk.SelectionMode.SINGLE,
+            activate_on_single_click: true,
+        });
+        this._composerSuggestionList.add_css_class('boxed-list');
+        this._composerSuggestionList.connect('row-activated', (_list, row) => {
+            if (row?.composerSuggestion)
+                this._insertComposerSuggestion(row.composerSuggestion);
+        });
+
+        this._composerSuggestionScroller = new Gtk.ScrolledWindow({
+            child: this._composerSuggestionList,
+            hscrollbar_policy: Gtk.PolicyType.NEVER,
+            vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+            max_content_height: 310,
+            propagate_natural_height: true,
+        });
+        panel.append(this._composerSuggestionScroller);
+
+        this._composerSuggestionStatus = new Gtk.Label({
+            xalign: 0,
+            margin_start: 10,
+            margin_end: 10,
+            margin_top: 5,
+            margin_bottom: 8,
+            visible: false,
+        });
+        this._composerSuggestionStatus.add_css_class('dim-label');
+        panel.append(this._composerSuggestionStatus);
+
+        this._composerSuggestionRevealer = new Gtk.Revealer({
+            transition_type: Gtk.RevealerTransitionType.SLIDE_UP,
+            transition_duration: 140,
+            reveal_child: false,
+        });
+        this._composerSuggestionRevealer.set_child(panel);
+        return this._composerSuggestionRevealer;
+    }
+
+    _syncComposerReferenceTagStyles() {
+        if (!this._composerReferenceTags)
+            return;
+
+        const palette = Adw.StyleManager.get_default().get_dark()
+            ? COMPOSER_REFERENCE_STYLES.dark
+            : COMPOSER_REFERENCE_STYLES.light;
+
+        for (const [kind, tag] of this._composerReferenceTags) {
+            tag.set_property('background', palette[kind].background);
+            tag.set_property('foreground', palette[kind].foreground);
+        }
+    }
+
+    _getComposerReferences() {
+        const text = this._getComposerText();
+        this._composerReferences = this._composerReferences.filter((reference) => (
+            reference.insertText && text.includes(reference.insertText)
+        ));
+        return this._composerReferences.map((reference) => ({ ...reference }));
+    }
+
+    _syncComposerReferenceTags() {
+        if (!this._composerBuffer || !this._composerReferenceTags)
+            return;
+
+        const [start, end] = this._composerBuffer.get_bounds();
+
+        for (const tag of this._composerReferenceTags.values())
+            this._composerBuffer.remove_tag(tag, start, end);
+
+        const text = this._getComposerText();
+        const references = this._getComposerReferences();
+
+        for (const range of composerReferenceRanges(text, references)) {
+            const tag = this._composerReferenceTags.get(range.reference.kind);
+
+            if (!tag)
+                continue;
+
+            this._composerBuffer.apply_tag(
+                tag,
+                this._composerBuffer.get_iter_at_offset(range.startOffset),
+                this._composerBuffer.get_iter_at_offset(range.endOffset),
+            );
+        }
+    }
+
+    _skillSuggestionItems() {
+        return this._workspace.enabledSkills.map((skill) => ({
+            kind: 'skill',
+            value: skill.id,
+            title: skill.name,
+            subtitle: skill.description || skill.path,
+            searchText: `${skill.name} ${skill.description ?? ''}`,
+            insertText: `$${skill.name}`,
+        }));
+    }
+
+    _itemsForComposerTrigger(trigger) {
+        switch (trigger) {
+        case '$':
+            return this._skillSuggestionItems();
+        case '@':
+            this._homeFileIndex.start();
+            return this._homeFileIndex.items;
+        case '#':
+            this._pathCommandSuggestions ??= listPathExecutables();
+            return this._pathCommandSuggestions;
+        default:
+            return [];
+        }
+    }
+
+    _composerTriggerKey(trigger) {
+        return trigger
+            ? `${trigger.trigger}:${trigger.startOffset}:${trigger.query}`
+            : '';
+    }
+
+    _refreshComposerSuggestions() {
+        if (this._updatingComposerReferences || !this._composerBuffer || !this._composerSuggestionRevealer)
+            return;
+
+        const text = this._getComposerText();
+        const cursor = this._composerBuffer.get_iter_at_mark(this._composerBuffer.get_insert()).get_offset();
+        const trigger = findComposerTrigger(text, cursor);
+        const triggerKey = this._composerTriggerKey(trigger);
+
+        if (!trigger || triggerKey === this._dismissedComposerTrigger) {
+            this._activeComposerTrigger = null;
+            this._hideComposerSuggestions();
+            return;
+        }
+
+        this._dismissedComposerTrigger = '';
+        this._activeComposerTrigger = trigger;
+        const items = this._itemsForComposerTrigger(trigger.trigger);
+        this._composerSuggestionItems = filterComposerSuggestions(
+            items,
+            trigger.query,
+            COMPOSER_SUGGESTION_LIMIT,
+        );
+        this._renderComposerSuggestions();
+    }
+
+    _renderComposerSuggestions() {
+        if (!this._composerSuggestionList || !this._activeComposerTrigger)
+            return;
+
+        this._clearBox(this._composerSuggestionList);
+        const kind = composerReferenceKindForTrigger(this._activeComposerTrigger.trigger);
+        const heading = {
+            skill: 'Skills',
+            file: 'Files in Home',
+            command: 'Commands on PATH',
+        }[kind];
+        this._composerSuggestionHeading.set_label(
+            this._activeComposerTrigger.query
+                ? `${heading} matching “${this._activeComposerTrigger.query}”`
+                : heading,
+        );
+
+        for (const item of this._composerSuggestionItems) {
+            const row = new Gtk.ListBoxRow({
+                activatable: true,
+                selectable: true,
+            });
+            row.composerSuggestion = item;
+
+            const content = new Gtk.Box({
+                orientation: Gtk.Orientation.HORIZONTAL,
+                spacing: 10,
+                margin_top: 7,
+                margin_bottom: 7,
+                margin_start: 9,
+                margin_end: 9,
+            });
+            const prefix = new Gtk.Label({
+                label: this._activeComposerTrigger.trigger,
+                width_chars: 2,
+                valign: Gtk.Align.CENTER,
+            });
+            prefix.add_css_class('title-4');
+            prefix.add_css_class(`cusco-composer-reference-${kind}`);
+            const labels = new Gtk.Box({
+                orientation: Gtk.Orientation.VERTICAL,
+                spacing: 1,
+                hexpand: true,
+            });
+            const title = new Gtk.Label({
+                label: item.title,
+                xalign: 0,
+                ellipsize: Pango.EllipsizeMode.END,
+            });
+            const subtitle = new Gtk.Label({
+                label: item.subtitle,
+                xalign: 0,
+                ellipsize: Pango.EllipsizeMode.MIDDLE,
+            });
+            subtitle.add_css_class('caption');
+            subtitle.add_css_class('dim-label');
+            labels.append(title);
+            labels.append(subtitle);
+            content.append(prefix);
+            content.append(labels);
+            row.set_child(content);
+            this._composerSuggestionList.append(row);
+        }
+
+        const hasItems = this._composerSuggestionItems.length > 0;
+        const isIndexingFiles = kind === 'file' && this._homeFileIndex.loading;
+        this._composerSuggestionScroller.set_visible(hasItems);
+        this._composerSuggestionStatus.set_visible(!hasItems || isIndexingFiles);
+        this._composerSuggestionStatus.set_label(hasItems && isIndexingFiles
+            ? 'More files are still being indexed…'
+            : isIndexingFiles
+                ? 'Searching your Home folder…'
+                : `No matching ${kind}s`);
+        this._composerSuggestionRevealer.set_reveal_child(true);
+
+        if (hasItems)
+            this._composerSuggestionList.select_row(this._composerSuggestionList.get_row_at_index(0));
+    }
+
+    _isComposerSuggestionPanelVisible() {
+        return Boolean(this._composerSuggestionRevealer?.get_reveal_child());
+    }
+
+    _hideComposerSuggestions() {
+        this._composerSuggestionRevealer?.set_reveal_child(false);
+        this._composerSuggestionItems = [];
+    }
+
+    _dismissComposerSuggestions() {
+        this._dismissedComposerTrigger = this._composerTriggerKey(this._activeComposerTrigger);
+        this._activeComposerTrigger = null;
+        this._hideComposerSuggestions();
+        this.focusComposer();
+    }
+
+    _handleComposerSuggestionKey(keyval) {
+        if (!this._isComposerSuggestionPanelVisible())
+            return false;
+
+        if (keyval === Gdk.KEY_Escape) {
+            this._dismissComposerSuggestions();
+            return true;
+        }
+
+        const isPrevious = keyval === Gdk.KEY_Up;
+        const isNext = keyval === Gdk.KEY_Down;
+
+        if ((isPrevious || isNext) && this._composerSuggestionItems.length > 0) {
+            const selectedRow = this._composerSuggestionList.get_selected_row();
+            const selectedIndex = selectedRow?.get_index() ?? 0;
+            const delta = isPrevious ? -1 : 1;
+            const nextIndex = (selectedIndex + delta + this._composerSuggestionItems.length)
+                % this._composerSuggestionItems.length;
+            this._composerSuggestionList.select_row(
+                this._composerSuggestionList.get_row_at_index(nextIndex),
+            );
+            return true;
+        }
+
+        const isSelect = keyval === Gdk.KEY_Tab
+            || keyval === Gdk.KEY_ISO_Left_Tab
+            || keyval === Gdk.KEY_Return
+            || keyval === Gdk.KEY_KP_Enter;
+
+        if (isSelect) {
+            const suggestion = this._composerSuggestionList.get_selected_row()?.composerSuggestion;
+
+            if (!suggestion)
+                return false;
+
+            this._insertComposerSuggestion(suggestion);
+            return true;
+        }
+
+        return false;
+    }
+
+    _insertComposerSuggestion(suggestion) {
+        const trigger = this._activeComposerTrigger;
+
+        if (!trigger || !suggestion?.insertText)
+            return;
+
+        const textCharacters = [...this._getComposerText()];
+        const hasWhitespaceAfter = trigger.endOffset < textCharacters.length
+            && /\s/u.test(textCharacters[trigger.endOffset]);
+        const replacement = `${suggestion.insertText}${hasWhitespaceAfter ? '' : ' '}`;
+        const replacementLength = [...replacement].length;
+        this._updatingComposerReferences = true;
+        this._composerBuffer.begin_user_action();
+        this._composerBuffer.delete(
+            this._composerBuffer.get_iter_at_offset(trigger.startOffset),
+            this._composerBuffer.get_iter_at_offset(trigger.endOffset),
+        );
+        this._composerBuffer.insert(
+            this._composerBuffer.get_iter_at_offset(trigger.startOffset),
+            replacement,
+            -1,
+        );
+        this._composerBuffer.place_cursor(
+            this._composerBuffer.get_iter_at_offset(trigger.startOffset + replacementLength),
+        );
+        this._composerBuffer.end_user_action();
+
+        const reference = {
+            kind: suggestion.kind,
+            value: suggestion.value,
+            title: suggestion.title,
+            insertText: suggestion.insertText,
+        };
+        const alreadyTracked = this._composerReferences.some((item) => (
+            item.kind === reference.kind
+            && item.value === reference.value
+            && item.insertText === reference.insertText
+        ));
+
+        if (!alreadyTracked)
+            this._composerReferences.push(reference);
+
+        this._updatingComposerReferences = false;
+        this._activeComposerTrigger = null;
+        this._dismissedComposerTrigger = '';
+        this._hideComposerSuggestions();
+        this._syncComposerReferenceTags();
+        this.focusComposer();
+    }
+
+    _deleteComposerReferenceAtCursor(keyval) {
+        const isBackspace = keyval === Gdk.KEY_BackSpace;
+        const isDelete = keyval === Gdk.KEY_Delete || keyval === Gdk.KEY_KP_Delete;
+
+        if ((!isBackspace && !isDelete) || !this._composerBuffer)
+            return false;
+
+        const [hasSelection] = this._composerBuffer.get_selection_bounds();
+
+        if (hasSelection)
+            return false;
+
+        const text = this._getComposerText();
+        const characters = [...text];
+        const cursor = this._composerBuffer.get_iter_at_mark(this._composerBuffer.get_insert()).get_offset();
+        const range = composerReferenceRanges(text, this._getComposerReferences()).find((candidate) => (
+            isBackspace
+                ? cursor > candidate.startOffset && cursor <= candidate.endOffset
+                : cursor >= candidate.startOffset && cursor < candidate.endOffset
+        ));
+
+        if (!range)
+            return false;
+
+        let endOffset = range.endOffset;
+
+        if (characters[endOffset] === ' ')
+            endOffset += 1;
+
+        this._updatingComposerReferences = true;
+        this._composerBuffer.delete(
+            this._composerBuffer.get_iter_at_offset(range.startOffset),
+            this._composerBuffer.get_iter_at_offset(endOffset),
+        );
+        this._composerBuffer.place_cursor(this._composerBuffer.get_iter_at_offset(range.startOffset));
+        this._updatingComposerReferences = false;
+        this._syncComposerReferenceTags();
+        this._refreshComposerSuggestions();
+        return true;
     }
 
     _syncComposerPlaceholder() {
@@ -1104,11 +1659,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         row.add_css_class('cusco-pending-message-row');
 
-        this._pendingUserMessagesList = new Gtk.Box({
-            orientation: Gtk.Orientation.VERTICAL,
-            spacing: 6,
+        this._pendingUserMessagesList = new Gtk.Grid({
+            row_homogeneous: true,
             hexpand: true,
         });
+        this._pendingUserMessagesList.add_css_class('cusco-pending-message-stack');
 
         const scroller = new Gtk.ScrolledWindow({
             child: this._pendingUserMessagesList,
@@ -1133,7 +1688,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return this._pendingUserMessagesByConversation.get(conversationId) ?? [];
     }
 
-    _enqueuePendingUserMessage(text, conversationId = this._pendingConversationId()) {
+    _enqueuePendingUserMessage(
+        text,
+        references = [],
+        conversationId = this._pendingConversationId(),
+    ) {
         const content = String(text ?? '').trim();
 
         if (!content || !conversationId)
@@ -1143,6 +1702,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             id: GLib.uuid_string_random(),
             conversationId,
             content,
+            references: normalizeComposerReferences(references),
             createdAt: new Date().toISOString(),
         };
         const messages = [...this._getPendingUserMessages(conversationId), message];
@@ -1215,8 +1775,15 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._clearBox(this._pendingUserMessagesList);
         const messages = conversation?.id ? this._getPendingUserMessages(conversation.id) : [];
 
-        for (const message of messages)
-            this._pendingUserMessagesList.append(this._createPendingUserMessageCard(message));
+        messages.forEach((message, index) => {
+            this._pendingUserMessagesList.attach(
+                this._createPendingUserMessageCard(message),
+                0,
+                index * PENDING_MESSAGE_STACK_STEP,
+                1,
+                PENDING_MESSAGE_STACK_SPAN,
+            );
+        });
 
         this._pendingUserMessagesRow.set_visible(messages.length > 0);
     }
@@ -1534,7 +2101,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const messages = [];
 
         for (const pendingMessage of pendingMessages) {
-            const userMessage = createMessage('user', pendingMessage.content);
+            const references = normalizeComposerReferences(pendingMessage.references);
+            const attachments = this._createAttachmentsForComposerReferences(references);
+            const userMessage = createMessage(
+                'user',
+                this._formatUserMessageContent(pendingMessage.content, attachments),
+                {
+                    attachments,
+                    metadata: { composerReferences: references },
+                },
+            );
 
             this._conversations.appendMessage(conversation.id, userMessage);
             this._addMessageIfActiveConversation(conversation.id, userMessage);
@@ -1609,7 +2185,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return sentMessages;
     }
 
-    async _sendMessage(text) {
+    async _sendMessage(text, references = []) {
         const conversation = this._conversations.activeConversation ?? this._conversations.createConversation();
 
         if (!this._ensureConversationProviderAvailable(conversation))
@@ -1620,11 +2196,19 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (!cancellable)
             return;
 
-        const attachments = this._consumePendingAttachments();
+        const normalizedReferences = normalizeComposerReferences(references);
+        const pendingAttachments = this._consumePendingAttachments();
+        const attachments = this._createAttachmentsForComposerReferences(
+            normalizedReferences,
+            pendingAttachments,
+        );
         const userMessage = createMessage(
             'user',
             this._formatUserMessageContent(text, attachments),
-            { attachments },
+            {
+                attachments,
+                metadata: { composerReferences: normalizedReferences },
+            },
         );
 
         try {
@@ -1969,6 +2553,36 @@ class CuscoWindow extends Adw.ApplicationWindow {
             content: text.slice(0, MAX_ATTACHMENT_TEXT_CHARS),
             truncated: text.length > MAX_ATTACHMENT_TEXT_CHARS,
         };
+    }
+
+    _createAttachmentsForComposerReferences(references, existingAttachments = []) {
+        const attachments = existingAttachments.map((attachment) => ({ ...attachment }));
+        const attachedPaths = new Set(attachments.map((attachment) => attachment.path).filter(Boolean));
+
+        for (const reference of normalizeComposerReferences(references)) {
+            if (reference.kind !== 'file' || attachedPaths.has(reference.value))
+                continue;
+
+            if (!GLib.file_test(reference.value, GLib.FileTest.EXISTS)) {
+                this._showToast(`${reference.title || 'Referenced file'} no longer exists.`);
+                continue;
+            }
+
+            if (isImageAttachmentName(reference.value) && !this._activeProviderSupportsImageAttachments()) {
+                this._showToast(this._activeImageAttachmentUnsupportedMessage());
+                continue;
+            }
+
+            try {
+                attachments.push(this._createAttachmentFromPath(reference.value));
+                attachedPaths.add(reference.value);
+            } catch (error) {
+                logError(error, `Failed to read referenced file ${reference.value}`);
+                this._showToast(`Could not read ${reference.title || GLib.path_get_basename(reference.value)}.`);
+            }
+        }
+
+        return attachments;
     }
 
     _consumePendingAttachments() {
@@ -3028,7 +3642,46 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _injectSkillContext(conversation) {
-        return this._workspace.getSkillsForConversation(conversation);
+        const skills = this._workspace.getSkillsForConversation(conversation);
+        const loadedIds = new Set(skills.map((skill) => skill.id));
+        const currentTurnUserMessages = [];
+
+        for (let index = conversation.messages.length - 1; index >= 0; index -= 1) {
+            const message = conversation.messages[index];
+
+            if (message.role === 'assistant')
+                break;
+
+            if (message.role === 'user')
+                currentTurnUserMessages.push(message);
+        }
+
+        const references = currentTurnUserMessages.flatMap((message) => (
+            normalizeComposerReferences(message.metadata?.composerReferences)
+        ));
+
+        for (const reference of references) {
+            if (reference.kind !== 'skill' || loadedIds.has(reference.value))
+                continue;
+
+            const record = this._workspace.getSkill(reference.value);
+
+            if (!record?.enabled || record.loadError)
+                continue;
+
+            try {
+                const skill = this._workspace.loadSkill(reference.value);
+
+                if (skill?.content && !skill.loadError) {
+                    skills.push(skill);
+                    loadedIds.add(skill.id);
+                }
+            } catch (error) {
+                logError(error, `Failed to load referenced skill ${reference.value}`);
+            }
+        }
+
+        return skills;
     }
 
     _buildProviderMessages(conversation, skills, options = {}) {
@@ -3530,7 +4183,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const nextText = `${before}${beforeSeparator}${content}${afterSeparator}${after}`;
         const nextCursorPosition = before.length + beforeSeparator.length + content.length;
 
-        this._setComposerText(nextText);
+        this._setComposerText(nextText, { preserveReferences: true });
         this._composerBuffer.place_cursor(this._composerBuffer.get_iter_at_offset(nextCursorPosition));
         this.focusComposer();
     }
