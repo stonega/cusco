@@ -35,6 +35,8 @@ import {
     listPathExecutables,
 } from './composer/references.js';
 import { createCronCreateTool, CronJobManager } from './cron/manager.js';
+import { ComputerUseService } from './computerUse/service.js';
+import { createComputerUseTools } from './computerUse/tools.js';
 import { MemoryManager } from './memory/memory.js';
 import { McpManager } from './mcp/manager.js';
 import { ProviderConfigStore } from './providers/config.js';
@@ -490,6 +492,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._tools = new ToolManager({
             searchConfig: () => this._providerConfigs.createWebSearchFallbackConfig(),
         });
+        this._computerUse = new ComputerUseService({
+            settings: this._appSettings,
+            onActiveChanged: (active) => this._syncComputerUseStatus(active),
+            onStopRequested: () => this._stopComputerUseAndReturn(),
+        });
         this._cron = new CronJobManager();
         this._mcp = new McpManager({ workspaceManager: this._workspace });
         this._pendingAttachments = [];
@@ -522,6 +529,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._tools.registerTool(createCronCreateTool(this._cron, {
             onJobCreated: async (job) => this._handleCronJobChanged(job),
         }));
+        this._syncComputerUseTools();
 
         if (this._conversations.allConversations.length === 0) {
             this._conversations.createConversation({
@@ -551,6 +559,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             }
 
             this._mcp.shutdown();
+            this._computerUse.shutdown();
             return false;
         });
         this._buildUi();
@@ -586,6 +595,17 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         const chatView = new Adw.ToolbarView();
         chatView.add_top_bar(headerBar);
+        this._computerUseStatusButton = new Gtk.Button({
+            label: 'Computer use active · Stop and return to Cusco',
+            tooltip_text: 'Stop computer use and focus Cusco',
+            halign: Gtk.Align.CENTER,
+            margin_top: 4,
+            margin_bottom: 4,
+            visible: false,
+        });
+        this._computerUseStatusButton.add_css_class('cusco-computer-use-status');
+        this._computerUseStatusButton.connect('clicked', () => this._stopComputerUseAndReturn());
+        chatView.add_bottom_bar(this._computerUseStatusButton);
         chatView.set_content(this._createChatSurface());
         split.set_end_child(chatView);
 
@@ -1836,8 +1856,33 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._workspace,
             this._mcp,
             (change) => this._handleProviderSettingsChanged(change),
-            options,
+            { ...options, computerUse: this._computerUse },
         );
+    }
+
+    _syncComputerUseTools() {
+        this._tools.clearRegisteredTools((tool) => tool.name.startsWith('computer_'));
+
+        if (!this._appSettings.computerUseEnabled)
+            return;
+
+        for (const tool of createComputerUseTools(this._computerUse))
+            this._tools.registerTool(tool);
+    }
+
+    _syncComputerUseStatus(active) {
+        this._computerUseStatusButton?.set_visible(Boolean(active));
+    }
+
+    _stopComputerUseAndReturn() {
+        const stoppedComputerUse = this._computerUse.stop();
+        const stoppedConversation = this._stopActiveConversation();
+
+        this.present();
+        this.focusComposer();
+
+        if (stoppedComputerUse || stoppedConversation)
+            this._showToast('Computer use stopped.');
     }
 
     _showToast(title) {
@@ -2023,6 +2068,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _handleProviderSettingsChanged(change = {}) {
         this._mcp.reloadConfig();
+        if (change?.computerUseChanged)
+            this._syncComputerUseTools();
         const conversation = this._conversations.activeConversation;
 
         if (conversation && !this._providerConfigs.isProviderAvailable(conversation.providerId)) {
@@ -3280,7 +3327,18 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             runtimeMessages.push(
                 { role: 'assistant', content: responseText },
-                { role: 'user', content: createAgentToolResultPrompt(request, transcriptText) },
+                {
+                    role: 'user',
+                    content: createAgentToolResultPrompt(request, transcriptText),
+                    attachments: result.imagePath
+                        ? [{
+                            kind: 'image',
+                            path: result.imagePath,
+                            name: GLib.path_get_basename(result.imagePath),
+                            mimeType: result.mimeType ?? 'image/png',
+                        }]
+                        : [],
+                },
             );
             return true;
         } catch (error) {
@@ -3394,6 +3452,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _finishActiveTurn(cancellable) {
+        this._computerUse.finishTurn(cancellable);
+
         if (this._activeChatCancellable === cancellable) {
             this._activeChatCancellable = null;
             this._activeTurnConversationId = null;

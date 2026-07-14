@@ -14,6 +14,8 @@ import { markdownToPangoMarkup, parseMarkdownBlocks } from '../src/chat/markdown
 import { createMessageContent } from '../src/chat/messageView.js';
 import { estimateConversationUsage } from '../src/chat/usage.js';
 import { createCronCreateTool, CronJobManager } from '../src/cron/manager.js';
+import { ComputerUseService } from '../src/computerUse/service.js';
+import { createComputerUseTools } from '../src/computerUse/tools.js';
 import { MemoryManager } from '../src/memory/memory.js';
 import { defaultMcpConfigFilePath, parseMcpConfigFile } from '../src/mcp/config.js';
 import { parseWwwAuthenticate, SecretServiceMcpTokenStore } from '../src/mcp/auth.js';
@@ -32,6 +34,7 @@ import { MemoryApiKeyStore, SecretServiceApiKeyStore } from '../src/secrets/apiK
 import { ConversationSearchIndex, installSearchProvider } from '../src/searchProvider.js';
 import { createAppInfoSettingsPage } from '../src/settings/appInfoSettings.js';
 import { AppSettingsStore, createApplicationSettingsPage } from '../src/settings/appSettings.js';
+import { createComputerUseSettingsGroup } from '../src/settings/computerUseSettings.js';
 import { createMemorySettingsPage } from '../src/settings/memorySettings.js';
 import { createMcpSettingsPage } from '../src/settings/mcpSettings.js';
 import { createProviderSettingsPage, presentProviderSettingsDialog } from '../src/settings/providerSettings.js';
@@ -142,6 +145,11 @@ if (typeof ConversationSearchIndex !== 'function' || typeof installSearchProvide
 
 if (typeof createApplicationSettingsPage !== 'function')
     throw new Error('createApplicationSettingsPage did not import as a function');
+
+if (typeof createComputerUseSettingsGroup !== 'function'
+    || typeof ComputerUseService !== 'function'
+    || typeof createComputerUseTools !== 'function')
+    throw new Error('Computer-use modules did not import');
 
 if (typeof createAppInfoSettingsPage !== 'function')
     throw new Error('createAppInfoSettingsPage did not import as a function');

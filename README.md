@@ -18,6 +18,7 @@ Cusco is a native GNOME AI chat application built with GJS, GTK 4, and libadwait
 - Built-in tools for web search, calculator, structured data summaries, file context, and image attachment notes.
 - Workspace preferences for prompt snippets, agent profiles, conversation folders/tags, plugin tool descriptors, and optional MCP server configs.
 - Installed SKILL support from `~/.agents/skills`, with a top-level Skills preferences page and per-chat skill selection.
+- Optional Linux-only computer use for window capture, pointer/keyboard actions, and GNOME workspace switching on Wayland.
 - GNOME integration through app actions, keyboard shortcuts, notifications, adaptive layout, high contrast/reduced motion settings, desktop actions, and Shell search provider support.
 
 ## Current Status
@@ -87,6 +88,8 @@ Some smoke tests skip automatically when the current environment has no display 
 - [Architecture](docs/design/architecture.md)
 - [Setup](docs/implementation/setup.md)
 - [User Getting Started](docs/user/getting-started.md)
+- [Computer Use](docs/user/computer-use.md)
+- [Computer-Use Architecture](docs/implementation/computer-use.md)
 - [Provider Models](docs/user/provider-models.md)
 
 ## License

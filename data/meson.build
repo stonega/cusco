@@ -24,6 +24,11 @@ install_data(
   install_dir: datadir / 'gnome-shell' / 'search-providers',
 )
 
+install_subdir(
+  'gnome-shell/extensions/cusco-computer-use@stonega',
+  install_dir: datadir / 'gnome-shell' / 'extensions',
+)
+
 app_icon_file = application_id + '.png'
 foreach icon_size : ['64x64', '128x128', '256x256', '512x512']
   install_data(

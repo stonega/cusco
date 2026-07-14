@@ -1,0 +1,8 @@
+.cusco-computer-use-indicator {
+  -st-icon-style: symbolic;
+  color: #42e6f5;
+}
+
+.cusco-computer-use-indicator:hover {
+  color: #8ff3fa;
+}

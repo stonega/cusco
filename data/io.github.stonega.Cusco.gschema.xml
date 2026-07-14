@@ -91,6 +91,31 @@
       <summary>Reduced motion enabled</summary>
       <description>Whether Cusco should avoid nonessential motion.</description>
     </key>
+    <key name="computer-use-enabled" type="b">
+      <default>false</default>
+      <summary>Computer use enabled</summary>
+      <description>Whether Cusco exposes Linux GNOME computer-use tools to agents.</description>
+    </key>
+    <key name="computer-use-capture-enabled" type="b">
+      <default>true</default>
+      <summary>Computer use screen capture enabled</summary>
+      <description>Whether computer use may capture a selected GNOME window.</description>
+    </key>
+    <key name="computer-use-input-enabled" type="b">
+      <default>false</default>
+      <summary>Computer use input enabled</summary>
+      <description>Whether computer use may send pointer and keyboard input.</description>
+    </key>
+    <key name="computer-use-workspace-switching-enabled" type="b">
+      <default>true</default>
+      <summary>Computer use workspace switching enabled</summary>
+      <description>Whether computer use may activate another GNOME workspace.</description>
+    </key>
+    <key name="computer-use-action-timeout-seconds" type="u">
+      <default>30</default>
+      <summary>Computer use action timeout</summary>
+      <description>Maximum number of seconds allowed for one computer-use operation.</description>
+    </key>
     <key name="custom-openai-compatible-base-url" type="s">
       <default>''</default>
       <summary>Custom API base URL</summary>

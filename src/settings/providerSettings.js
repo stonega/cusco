@@ -671,7 +671,16 @@ export function presentProviderSettingsDialog(
         dialog.add(createMemorySettingsPage(dialog, memoryManager, onChanged));
 
     if (workspaceManager) {
-        dialog.add(createWorkspaceSettingsPage(dialog, workspaceManager, mcpManager, onChanged));
+        dialog.add(createWorkspaceSettingsPage(
+            dialog,
+            workspaceManager,
+            mcpManager,
+            onChanged,
+            {
+                appSettings,
+                computerUse: options.computerUse ?? null,
+            },
+        ));
         dialog.add(createSkillsSettingsPage(dialog, workspaceManager, onChanged));
     }
 

@@ -4,6 +4,7 @@ import Pango from 'gi://Pango?version=1.0';
 
 import { findPromptVariables, formatPromptVariables } from '../workspace/promptVariables.js';
 import { createMcpConfigGroup } from './mcpSettings.js';
+import { createComputerUseSettingsGroup } from './computerUseSettings.js';
 
 const ADD_PROMPT_HELPER_TEXT = [
     'Write the reusable prompt here.',
@@ -236,7 +237,13 @@ function addSkillRows(group, workspaceManager, refresh) {
     return rows;
 }
 
-export function createWorkspaceSettingsPage(parent, workspaceManager, mcpManagerOrOnChanged = null, maybeOnChanged = null) {
+export function createWorkspaceSettingsPage(
+    parent,
+    workspaceManager,
+    mcpManagerOrOnChanged = null,
+    maybeOnChanged = null,
+    options = {},
+) {
     const mcpManager = typeof mcpManagerOrOnChanged === 'function'
         ? null
         : mcpManagerOrOnChanged;
@@ -254,6 +261,14 @@ export function createWorkspaceSettingsPage(parent, workspaceManager, mcpManager
 
         onChanged();
     };
+
+    if (options.appSettings) {
+        page.add(createComputerUseSettingsGroup(
+            options.appSettings,
+            options.computerUse ?? null,
+            onChanged,
+        ));
+    }
 
     const promptsGroup = new Adw.PreferencesGroup({
         title: 'Prompt Library',

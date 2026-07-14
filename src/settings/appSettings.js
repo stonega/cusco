@@ -25,6 +25,11 @@ const PERSISTENT_SETTINGS_KEYS = [
     'code-theme',
     'high-contrast-enabled',
     'reduced-motion-enabled',
+    'computer-use-enabled',
+    'computer-use-capture-enabled',
+    'computer-use-input-enabled',
+    'computer-use-workspace-switching-enabled',
+    'computer-use-action-timeout-seconds',
 ];
 
 const DEFAULT_SEND_WITH_ENTER = true;
@@ -33,8 +38,15 @@ const DEFAULT_RESPONSE_TIMEOUT_SECONDS = 45;
 const DEFAULT_PROVIDER_FALLBACK_ENABLED = false;
 const DEFAULT_HIGH_CONTRAST_ENABLED = false;
 const DEFAULT_REDUCED_MOTION_ENABLED = false;
+const DEFAULT_COMPUTER_USE_ENABLED = false;
+const DEFAULT_COMPUTER_USE_CAPTURE_ENABLED = true;
+const DEFAULT_COMPUTER_USE_INPUT_ENABLED = false;
+const DEFAULT_COMPUTER_USE_WORKSPACE_SWITCHING_ENABLED = true;
+const DEFAULT_COMPUTER_USE_ACTION_TIMEOUT_SECONDS = 30;
 const MIN_RESPONSE_TIMEOUT_SECONDS = 5;
 const MAX_RESPONSE_TIMEOUT_SECONDS = 300;
+const MIN_COMPUTER_USE_ACTION_TIMEOUT_SECONDS = 5;
+const MAX_COMPUTER_USE_ACTION_TIMEOUT_SECONDS = 120;
 const FALLBACK_SETTINGS_VERSION = 1;
 const FALLBACK_BOOLEAN_DEFAULTS = {
     'send-with-enter': DEFAULT_SEND_WITH_ENTER,
@@ -42,9 +54,14 @@ const FALLBACK_BOOLEAN_DEFAULTS = {
     'provider-fallback-enabled': DEFAULT_PROVIDER_FALLBACK_ENABLED,
     'high-contrast-enabled': DEFAULT_HIGH_CONTRAST_ENABLED,
     'reduced-motion-enabled': DEFAULT_REDUCED_MOTION_ENABLED,
+    'computer-use-enabled': DEFAULT_COMPUTER_USE_ENABLED,
+    'computer-use-capture-enabled': DEFAULT_COMPUTER_USE_CAPTURE_ENABLED,
+    'computer-use-input-enabled': DEFAULT_COMPUTER_USE_INPUT_ENABLED,
+    'computer-use-workspace-switching-enabled': DEFAULT_COMPUTER_USE_WORKSPACE_SWITCHING_ENABLED,
 };
 const FALLBACK_UINT_DEFAULTS = {
     'response-timeout-seconds': DEFAULT_RESPONSE_TIMEOUT_SECONDS,
+    'computer-use-action-timeout-seconds': DEFAULT_COMPUTER_USE_ACTION_TIMEOUT_SECONDS,
 };
 const FALLBACK_STRING_DEFAULTS = {
     'thinking-level': DEFAULT_THINKING_LEVEL,
@@ -263,6 +280,16 @@ function clampTimeoutSeconds(value) {
     return Math.min(MAX_RESPONSE_TIMEOUT_SECONDS, Math.max(MIN_RESPONSE_TIMEOUT_SECONDS, seconds));
 }
 
+function clampComputerUseActionTimeoutSeconds(value) {
+    const seconds = Number.isFinite(value)
+        ? Math.round(value)
+        : DEFAULT_COMPUTER_USE_ACTION_TIMEOUT_SECONDS;
+    return Math.min(
+        MAX_COMPUTER_USE_ACTION_TIMEOUT_SECONDS,
+        Math.max(MIN_COMPUTER_USE_ACTION_TIMEOUT_SECONDS, seconds),
+    );
+}
+
 export class AppSettingsStore {
     constructor(options = {}) {
         const settingsContext = options.settings === undefined
@@ -284,6 +311,11 @@ export class AppSettingsStore {
         this._codeTheme = DEFAULT_CODE_THEME_ID;
         this._highContrastEnabled = DEFAULT_HIGH_CONTRAST_ENABLED;
         this._reducedMotionEnabled = DEFAULT_REDUCED_MOTION_ENABLED;
+        this._computerUseEnabled = DEFAULT_COMPUTER_USE_ENABLED;
+        this._computerUseCaptureEnabled = DEFAULT_COMPUTER_USE_CAPTURE_ENABLED;
+        this._computerUseInputEnabled = DEFAULT_COMPUTER_USE_INPUT_ENABLED;
+        this._computerUseWorkspaceSwitchingEnabled = DEFAULT_COMPUTER_USE_WORKSPACE_SWITCHING_ENABLED;
+        this._computerUseActionTimeoutSeconds = DEFAULT_COMPUTER_USE_ACTION_TIMEOUT_SECONDS;
         this._loadPersistentState();
     }
 
@@ -365,6 +397,59 @@ export class AppSettingsStore {
         this._reducedMotionEnabled = Boolean(value);
         this._setBoolean('reduced-motion-enabled', this._reducedMotionEnabled);
         return this._reducedMotionEnabled;
+    }
+
+    get computerUseEnabled() {
+        return this._computerUseEnabled;
+    }
+
+    setComputerUseEnabled(value) {
+        this._computerUseEnabled = Boolean(value);
+        this._setBoolean('computer-use-enabled', this._computerUseEnabled);
+        return this._computerUseEnabled;
+    }
+
+    get computerUseCaptureEnabled() {
+        return this._computerUseCaptureEnabled;
+    }
+
+    setComputerUseCaptureEnabled(value) {
+        this._computerUseCaptureEnabled = Boolean(value);
+        this._setBoolean('computer-use-capture-enabled', this._computerUseCaptureEnabled);
+        return this._computerUseCaptureEnabled;
+    }
+
+    get computerUseInputEnabled() {
+        return this._computerUseInputEnabled;
+    }
+
+    setComputerUseInputEnabled(value) {
+        this._computerUseInputEnabled = Boolean(value);
+        this._setBoolean('computer-use-input-enabled', this._computerUseInputEnabled);
+        return this._computerUseInputEnabled;
+    }
+
+    get computerUseWorkspaceSwitchingEnabled() {
+        return this._computerUseWorkspaceSwitchingEnabled;
+    }
+
+    setComputerUseWorkspaceSwitchingEnabled(value) {
+        this._computerUseWorkspaceSwitchingEnabled = Boolean(value);
+        this._setBoolean(
+            'computer-use-workspace-switching-enabled',
+            this._computerUseWorkspaceSwitchingEnabled,
+        );
+        return this._computerUseWorkspaceSwitchingEnabled;
+    }
+
+    get computerUseActionTimeoutSeconds() {
+        return this._computerUseActionTimeoutSeconds;
+    }
+
+    setComputerUseActionTimeoutSeconds(value) {
+        this._computerUseActionTimeoutSeconds = clampComputerUseActionTimeoutSeconds(value);
+        this._setUint('computer-use-action-timeout-seconds', this._computerUseActionTimeoutSeconds);
+        return this._computerUseActionTimeoutSeconds;
     }
 
     _hasSettingsKey(key) {
@@ -454,6 +539,22 @@ export class AppSettingsStore {
         this._codeTheme = normalizeCodeTheme(this._getString('code-theme', this._codeTheme));
         this._highContrastEnabled = this._getBoolean('high-contrast-enabled', this._highContrastEnabled);
         this._reducedMotionEnabled = this._getBoolean('reduced-motion-enabled', this._reducedMotionEnabled);
+        this._computerUseEnabled = this._getBoolean('computer-use-enabled', this._computerUseEnabled);
+        this._computerUseCaptureEnabled = this._getBoolean(
+            'computer-use-capture-enabled',
+            this._computerUseCaptureEnabled,
+        );
+        this._computerUseInputEnabled = this._getBoolean(
+            'computer-use-input-enabled',
+            this._computerUseInputEnabled,
+        );
+        this._computerUseWorkspaceSwitchingEnabled = this._getBoolean(
+            'computer-use-workspace-switching-enabled',
+            this._computerUseWorkspaceSwitchingEnabled,
+        );
+        this._computerUseActionTimeoutSeconds = clampComputerUseActionTimeoutSeconds(
+            this._getUint('computer-use-action-timeout-seconds', this._computerUseActionTimeoutSeconds),
+        );
     }
 }
 

@@ -29,6 +29,11 @@ composer_sources = files(
   'composer/references.js',
 )
 
+computer_use_sources = files(
+  'computerUse/service.js',
+  'computerUse/tools.js',
+)
+
 provider_sources = files(
   'providers/config.js',
   'providers/imageGeneration.js',
@@ -58,6 +63,7 @@ cron_sources = files(
 settings_sources = files(
   'settings/appInfoSettings.js',
   'settings/appSettings.js',
+  'settings/computerUseSettings.js',
   'settings/memorySettings.js',
   'settings/mcpSettings.js',
   'settings/providerSettings.js',
@@ -103,6 +109,11 @@ install_data(
 install_data(
   composer_sources,
   install_dir: pkgdatadir / 'composer',
+)
+
+install_data(
+  computer_use_sources,
+  install_dir: pkgdatadir / 'computerUse',
 )
 
 install_data(

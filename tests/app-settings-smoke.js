@@ -54,9 +54,14 @@ const settings = new MemorySettings({
         'provider-fallback-enabled': true,
         'high-contrast-enabled': true,
         'reduced-motion-enabled': false,
+        'computer-use-enabled': true,
+        'computer-use-capture-enabled': true,
+        'computer-use-input-enabled': false,
+        'computer-use-workspace-switching-enabled': true,
     },
     uints: {
         'response-timeout-seconds': 90,
+        'computer-use-action-timeout-seconds': 35,
     },
     strings: {
         'thinking-level': 'high',
@@ -86,6 +91,13 @@ if (appSettings.codeTheme !== initialCodeTheme)
 if (appSettings.highContrastEnabled !== true || appSettings.reducedMotionEnabled !== false)
     throw new Error('Accessibility preferences were not loaded');
 
+if (!appSettings.computerUseEnabled
+    || !appSettings.computerUseCaptureEnabled
+    || appSettings.computerUseInputEnabled
+    || !appSettings.computerUseWorkspaceSwitchingEnabled
+    || appSettings.computerUseActionTimeoutSeconds !== 35)
+    throw new Error('Computer-use preferences were not loaded');
+
 appSettings.setSendWithEnter(true);
 appSettings.setAutoModeEnabled(false);
 appSettings.setResponseTimeoutSeconds(2);
@@ -94,6 +106,11 @@ appSettings.setThinkingLevel('low');
 appSettings.setCodeTheme(nextCodeTheme);
 appSettings.setHighContrastEnabled(false);
 appSettings.setReducedMotionEnabled(true);
+appSettings.setComputerUseEnabled(false);
+appSettings.setComputerUseCaptureEnabled(false);
+appSettings.setComputerUseInputEnabled(true);
+appSettings.setComputerUseWorkspaceSwitchingEnabled(false);
+appSettings.setComputerUseActionTimeoutSeconds(500);
 
 if (settings.get_boolean('send-with-enter') !== true)
     throw new Error('Send-with-enter preference was not persisted');
@@ -115,6 +132,13 @@ if (settings.get_string('code-theme') !== nextCodeTheme)
 
 if (settings.get_boolean('high-contrast-enabled') !== false || settings.get_boolean('reduced-motion-enabled') !== true)
     throw new Error('Accessibility preferences were not persisted');
+
+if (settings.get_boolean('computer-use-enabled') !== false
+    || settings.get_boolean('computer-use-capture-enabled') !== false
+    || settings.get_boolean('computer-use-input-enabled') !== true
+    || settings.get_boolean('computer-use-workspace-switching-enabled') !== false
+    || settings.get_uint('computer-use-action-timeout-seconds') !== 120)
+    throw new Error('Computer-use preferences were not clamped and persisted');
 
 const partialSettings = new MemorySettings({
     uints: {
