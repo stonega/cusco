@@ -371,6 +371,7 @@ function removeDirectory(path) {
 export class ComputerUseService {
     constructor(options = {}) {
         this._settings = options.settings;
+        this._environmentStatus = options.environmentStatus ?? environmentStatus;
         this._onActiveChanged = options.onActiveChanged ?? (() => {});
         this._onStopRequested = options.onStopRequested ?? (() => {});
         this._accessibility = options.accessibility === undefined
@@ -434,7 +435,7 @@ export class ComputerUseService {
     }
 
     async status() {
-        const environment = environmentStatus();
+        const environment = this._environmentStatus();
 
         if (!environment.supported)
             return { ...environment, available: false, registered: false };
@@ -476,7 +477,7 @@ export class ComputerUseService {
         if (this._registered)
             return;
 
-        const environment = environmentStatus();
+        const environment = this._environmentStatus();
         if (!environment.supported)
             throw createUserError(environment.reason);
 

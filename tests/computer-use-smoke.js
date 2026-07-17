@@ -321,6 +321,7 @@ const computerUseSettings = {
 const computerUse = new ComputerUseService({
     proxy: fakeProxy,
     accessibility: fakeAccessibility,
+    environmentStatus: () => ({ supported: true, reason: '' }),
     cacheDirectory: GLib.build_filenamev([
         GLib.get_tmp_dir(),
         `cusco-computer-use-test-${GLib.uuid_string_random()}`,
