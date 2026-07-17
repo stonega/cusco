@@ -14,9 +14,17 @@ const PROVIDER_ICON_FILES = {
 };
 
 function getProviderId(providerOrId) {
-    return typeof providerOrId === 'string'
+    const providerId = typeof providerOrId === 'string'
         ? providerOrId
         : providerOrId?.id;
+
+    if (providerOrId?.customizable
+        || providerId === 'openai-compatible'
+        || providerId?.startsWith('openai-compatible-')) {
+        return 'openai-compatible';
+    }
+
+    return providerId;
 }
 
 export function getProviderIconPath(providerOrId) {

@@ -171,6 +171,8 @@
 .cusco-composer-suggestions list,
 .cusco-composer-suggestions row {
     background-color: transparent;
+    border-radius: 0;
+    box-shadow: none;
 }
 
 .cusco-composer-suggestions row:selected {
@@ -289,20 +291,6 @@
 .cusco-status-dot-idle,
 .cusco-status-dot-disabled {
     background-color: alpha(@window_fg_color, 0.34);
-}
-
-button.cusco-computer-use-status {
-    color: #062f34;
-    background: #42e6f5;
-    border-color: #42e6f5;
-    font-weight: 700;
-}
-
-button.cusco-computer-use-status:hover,
-button.cusco-computer-use-status:active {
-    color: #062f34;
-    background: #8ff3fa;
-    border-color: #8ff3fa;
 }
 
 .cusco-message-bubble {

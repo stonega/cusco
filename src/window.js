@@ -13,11 +13,16 @@ import {
     createAgentToolFailurePrompt,
     createAgentToolResultPrompt,
     DEFAULT_AGENT_MAX_ITERATIONS,
-    formatAgentToolCall,
     isPartialAgentToolCall,
     parseAgentToolCall,
+    pruneComputerUseObservationImages,
 } from './chat/agentMode.js';
 import { extractArtifactsFromMarkdown } from './chat/artifacts.js';
+import {
+    createFileAttachment,
+    fileAttachmentSummary,
+    hideBinaryAttachmentData,
+} from './chat/attachments.js';
 import {
     AUTO_COMPACTION_MAX_SUMMARY_OUTPUT_TOKENS,
     buildCompactedMessageList,
@@ -26,7 +31,12 @@ import {
     prepareContextCompaction,
 } from './chat/compaction.js';
 import { ConversationManager } from './chat/conversation.js';
-import { copyTextToClipboard, createArtifactCard, createMessageContent } from './chat/messageView.js';
+import {
+    applyReferenceTextStyles,
+    copyTextToClipboard,
+    createArtifactCard,
+    createMessageContent,
+} from './chat/messageView.js';
 import { estimateConversationUsage } from './chat/usage.js';
 import {
     filterComposerSuggestions,
@@ -50,6 +60,7 @@ import {
 import { normalizeTokenUsage } from './providers/usage.js';
 import { createBundledIcon, getBundledImagePath } from './bundledIcons.js';
 import { AppSettingsStore } from './settings/appSettings.js';
+import { presentArchivedChatsWindow } from './settings/archivedChats.js';
 import { presentProviderSettingsDialog } from './settings/providerSettings.js';
 import { ConversationFileStore } from './storage/conversationStore.js';
 import { MemoryFileStore } from './storage/memoryStore.js';
@@ -88,6 +99,7 @@ const KNOT_ICON_STROKE_WIDTH = 35;
 const KNOT_ICON_SAMPLE_STEPS = 28;
 const KNOT_ICON_ANIMATION_SECONDS = 1;
 const LONG_RESPONSE_NOTIFICATION_DELAY_MS = 10000;
+const COMPUTER_USE_ACCENT_COLOR = '#42e6f5';
 const SCROLL_TO_BOTTOM_ANIMATION_MS = 180;
 const SCROLL_TO_BOTTOM_ANIMATION_INTERVAL_MS = 16;
 // SVG is XML text; most model image endpoints do not accept it as a vision input.
@@ -120,14 +132,14 @@ const BASE_RESPONSE_SYSTEM_PROMPT = [
 
 const COMPOSER_REFERENCE_STYLES = {
     light: {
-        skill: { background: '#d8ecff', foreground: '#1c71d8' },
-        file: { background: '#dcf4e3', foreground: '#18794e' },
-        command: { background: '#f8e5c2', foreground: '#8f5e00' },
+        skill: { background: '#c5e1f8', foreground: '#1c71d8' },
+        file: { background: '#c8ead1', foreground: '#18794e' },
+        command: { background: '#f0d5a0', foreground: '#8f5e00' },
     },
     dark: {
-        skill: { background: '#1f3b55', foreground: '#99c1f1' },
-        file: { background: '#1d4434', foreground: '#8ff0a4' },
-        command: { background: '#4c3b1e', foreground: '#f8e45c' },
+        skill: { background: '#234a68', foreground: '#99c1f1' },
+        file: { background: '#204b37', foreground: '#8ff0a4' },
+        command: { background: '#533f1b', foreground: '#f8e45c' },
     },
 };
 
@@ -382,6 +394,64 @@ function getProviderErrorMessage(error) {
     return 'The active provider failed while streaming.';
 }
 
+export function shouldSendLongResponseNotification(window) {
+    return !Boolean(window.get_property('is-active'));
+}
+
+export function composerHintPresentation(sendWithEnter, isBusy, computerUseActive) {
+    const sendShortcut = sendWithEnter ? 'Enter' : 'Ctrl+Enter';
+
+    if (computerUseActive) {
+        return {
+            markup: `<span alpha="55%">${sendShortcut} queues · </span><span foreground="${COMPUTER_USE_ACCENT_COLOR}" weight="bold">Esc to quit</span>`,
+        };
+    }
+
+    return {
+        label: isBusy
+            ? `${sendShortcut} queues · Esc to stop`
+            : `${sendShortcut} ↵ to send`,
+    };
+}
+
+export function formatConversationUpdatedAt(updatedAt, currentTime = new Date()) {
+    if (updatedAt === null || updatedAt === undefined || updatedAt === '')
+        return '';
+
+    const updatedDate = updatedAt instanceof Date ? updatedAt : new Date(updatedAt);
+    const currentDate = currentTime instanceof Date ? currentTime : new Date(currentTime);
+
+    if (Number.isNaN(updatedDate.getTime()))
+        return '';
+
+    const isToday = !Number.isNaN(currentDate.getTime())
+        && updatedDate.getFullYear() === currentDate.getFullYear()
+        && updatedDate.getMonth() === currentDate.getMonth()
+        && updatedDate.getDate() === currentDate.getDate();
+
+    if (isToday) {
+        const elapsedMinutes = Math.max(
+            0,
+            Math.floor((currentDate.getTime() - updatedDate.getTime()) / 60000),
+        );
+
+        if (elapsedMinutes < 1)
+            return 'Just now';
+
+        if (elapsedMinutes < 60)
+            return `${elapsedMinutes} ${elapsedMinutes === 1 ? 'min' : 'mins'} ago`;
+
+        const elapsedHours = Math.floor(elapsedMinutes / 60);
+        return `${elapsedHours} ${elapsedHours === 1 ? 'hour' : 'hours'} ago`;
+    }
+
+    return updatedDate.toLocaleDateString(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+    });
+}
+
 function normalizeProviderChunk(chunk) {
     if (typeof chunk === 'string')
         return { type: 'text', text: chunk };
@@ -409,6 +479,16 @@ function normalizeProviderChunk(chunk) {
             type: 'server_tool_results',
             text: '',
             serverToolResults: Array.isArray(chunk.serverToolResults) ? chunk.serverToolResults : [],
+            usage: null,
+        };
+
+    if (chunk.type === 'status')
+        return {
+            type: 'status',
+            text: String(chunk.text ?? ''),
+            status: String(chunk.status ?? ''),
+            attempt: Number(chunk.attempt) || 0,
+            maxAttempts: Number(chunk.maxAttempts) || 0,
             usage: null,
         };
 
@@ -475,6 +555,132 @@ function displayBodyWithoutImageAttachmentLines(body, message) {
         .trim();
 }
 
+export const ModelPicker = GObject.registerClass({
+    GTypeName: 'CuscoModelPicker',
+    Signals: {
+        changed: {},
+    },
+}, class ModelPicker extends Gtk.MenuButton {
+    _init(params = {}) {
+        super._init({
+            direction: Gtk.ArrowType.DOWN,
+            valign: Gtk.Align.CENTER,
+            ...params,
+        });
+
+        this._activeId = null;
+        this._rows = new Map();
+        this._modelList = new Gtk.ListBox({
+            activate_on_single_click: true,
+            selection_mode: Gtk.SelectionMode.SINGLE,
+        });
+        this._modelList.add_css_class('navigation-sidebar');
+        this._modelList.connect('row-activated', (_list, row) => {
+            this.set_active_id(row._modelId);
+            this._modelPopover.popdown();
+        });
+
+        const scroller = new Gtk.ScrolledWindow({
+            child: this._modelList,
+            hscrollbar_policy: Gtk.PolicyType.NEVER,
+            vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+            max_content_height: 420,
+            propagate_natural_height: true,
+            propagate_natural_width: true,
+        });
+        this._modelPopover = new Gtk.Popover({
+            autohide: true,
+            has_arrow: false,
+            position: Gtk.PositionType.BOTTOM,
+        });
+        this._modelPopover.set_child(scroller);
+        this.set_popover(this._modelPopover);
+        this.add_css_class('cusco-model-picker');
+    }
+
+    append(id, name) {
+        const modelId = String(id ?? '').trim();
+
+        if (!modelId || this._rows.has(modelId))
+            return;
+
+        const modelName = String(name ?? modelId);
+        const row = new Gtk.ListBoxRow({
+            activatable: true,
+            selectable: true,
+        });
+        const content = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 12,
+            margin_top: 7,
+            margin_bottom: 7,
+            margin_start: 12,
+            margin_end: 12,
+        });
+        const label = new Gtk.Label({
+            label: modelName,
+            ellipsize: Pango.EllipsizeMode.NONE,
+            hexpand: true,
+            single_line_mode: true,
+            tooltip_text: modelName,
+            xalign: 0,
+        });
+        const check = new Gtk.Image({
+            icon_name: 'object-select-symbolic',
+            opacity: 0,
+        });
+
+        content.append(label);
+        content.append(check);
+        row.set_child(content);
+        row._modelId = modelId;
+        row._modelName = modelName;
+        row._check = check;
+        this._rows.set(modelId, row);
+        this._modelList.append(row);
+    }
+
+    remove_all() {
+        for (let child = this._modelList.get_first_child(); child;) {
+            const next = child.get_next_sibling();
+            this._modelList.remove(child);
+            child = next;
+        }
+
+        this._rows.clear();
+        this._activeId = null;
+        this.set_label('');
+        this.set_tooltip_text(null);
+    }
+
+    get_active_id() {
+        return this._activeId;
+    }
+
+    set_active_id(id) {
+        const modelId = id === null || id === undefined ? null : String(id);
+        const row = modelId ? this._rows.get(modelId) : null;
+
+        if (modelId && !row)
+            return false;
+
+        if (modelId === this._activeId)
+            return true;
+
+        this._activeId = modelId;
+        this.set_label(row?._modelName ?? '');
+        this.set_tooltip_text(row?._modelName ?? null);
+
+        for (const [rowModelId, modelRow] of this._rows)
+            modelRow._check.set_opacity(rowModelId === modelId ? 1 : 0);
+
+        this._modelList.select_row(row ?? null);
+        this.queue_resize();
+        this.emit('changed');
+        return true;
+    }
+});
+
 export const CuscoWindow = GObject.registerClass(
 class CuscoWindow extends Adw.ApplicationWindow {
     _init(application) {
@@ -501,14 +707,17 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._mcp = new McpManager({ workspaceManager: this._workspace });
         this._pendingAttachments = [];
         this._composerReferences = [];
+        this._userMessageReferenceContents = new Set();
         this._composerSuggestionItems = [];
+        this._composerSuggestionRefreshSourceId = 0;
+        this._composerSuggestionRowsKey = '';
         this._activeComposerTrigger = null;
         this._dismissedComposerTrigger = '';
         this._pathCommandSuggestions = null;
         this._homeFileIndex = new HomeFileIndex({
             onChanged: () => {
                 if (this._activeComposerTrigger?.trigger === '@')
-                    this._refreshComposerSuggestions();
+                    this._scheduleComposerSuggestionRefresh();
             },
         });
         this._cronJobIndex = new Map();
@@ -531,7 +740,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         }));
         this._syncComputerUseTools();
 
-        if (this._conversations.allConversations.length === 0) {
+        if (this._conversations.conversations.length === 0) {
             this._conversations.createConversation({
                 title: 'Welcome to Cusco',
                 thinkingLevel: this._appSettings.thinkingLevel,
@@ -552,6 +761,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._stopActiveConversation();
             this._stopCronLogSync();
             this._homeFileIndex.stop();
+
+            if (this._composerSuggestionRefreshSourceId) {
+                GLib.Source.remove(this._composerSuggestionRefreshSourceId);
+                this._composerSuggestionRefreshSourceId = 0;
+            }
 
             if (this._composerStyleManagerSignalId) {
                 Adw.StyleManager.get_default().disconnect(this._composerStyleManagerSignalId);
@@ -595,17 +809,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         const chatView = new Adw.ToolbarView();
         chatView.add_top_bar(headerBar);
-        this._computerUseStatusButton = new Gtk.Button({
-            label: 'Computer use active · Stop and return to Cusco',
-            tooltip_text: 'Stop computer use and focus Cusco',
-            halign: Gtk.Align.CENTER,
-            margin_top: 4,
-            margin_bottom: 4,
-            visible: false,
-        });
-        this._computerUseStatusButton.add_css_class('cusco-computer-use-status');
-        this._computerUseStatusButton.connect('clicked', () => this._stopComputerUseAndReturn());
-        chatView.add_bottom_bar(this._computerUseStatusButton);
         chatView.set_content(this._createChatSurface());
         split.set_end_child(chatView);
 
@@ -760,7 +963,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         this._providerPicker = this._createProviderPicker();
         this._providerConfigButton = this._createProviderConfigButton();
-        this._modelPicker = new Gtk.ComboBoxText();
+        this._modelPicker = new ModelPicker();
         this._thinkingLevelPicker = new Gtk.ComboBoxText({
             tooltip_text: 'Thinking level',
             valign: Gtk.Align.CENTER,
@@ -902,7 +1105,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._syncComposerReferenceTagStyles();
         this._composerStyleManagerSignalId = Adw.StyleManager.get_default().connect(
             'notify::dark',
-            () => this._syncComposerReferenceTagStyles(),
+            () => {
+                this._syncComposerReferenceTagStyles();
+                this._syncUserMessageReferenceStyles();
+            },
         );
         this._composer = new Gtk.TextView({
             buffer: this._composerBuffer,
@@ -1040,11 +1246,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._syncComposerUsageChart();
             this._syncComposerHint();
             this._syncComposerReferenceTags();
-            this._refreshComposerSuggestions();
+            this._scheduleComposerSuggestionRefresh();
         });
         this._composerBuffer.connect('mark-set', (_buffer, _location, mark) => {
             if (mark.get_name() === 'insert')
-                this._refreshComposerSuggestions();
+                this._scheduleComposerSuggestionRefresh();
         });
         this._syncComposerPlaceholder();
         this._syncComposerUsageChart();
@@ -1118,6 +1324,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         this._refreshConversationList();
         this._renderActiveConversation();
+        this.focusComposer();
     }
 
     createNewConversation() {
@@ -1223,14 +1430,33 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (!this._composerReferenceTags)
             return;
 
-        const palette = Adw.StyleManager.get_default().get_dark()
-            ? COMPOSER_REFERENCE_STYLES.dark
-            : COMPOSER_REFERENCE_STYLES.light;
+        const palette = this._composerReferenceStyles();
 
         for (const [kind, tag] of this._composerReferenceTags) {
             tag.set_property('background', palette[kind].background);
             tag.set_property('foreground', palette[kind].foreground);
         }
+    }
+
+    _composerReferenceStyles() {
+        return Adw.StyleManager.get_default().get_dark()
+            ? COMPOSER_REFERENCE_STYLES.dark
+            : COMPOSER_REFERENCE_STYLES.light;
+    }
+
+    _syncUserMessageReferenceStyles() {
+        const palette = this._composerReferenceStyles();
+
+        for (const content of this._userMessageReferenceContents) {
+            if (!content.get_parent()) {
+                this._userMessageReferenceContents.delete(content);
+                continue;
+            }
+
+            content.updateReferenceStyles?.(palette);
+        }
+
+        this._renderPendingUserMessages();
     }
 
     _getComposerReferences() {
@@ -1299,7 +1525,26 @@ class CuscoWindow extends Adw.ApplicationWindow {
             : '';
     }
 
+    _scheduleComposerSuggestionRefresh() {
+        if (this._composerSuggestionRefreshSourceId)
+            return;
+
+        this._composerSuggestionRefreshSourceId = GLib.idle_add(
+            GLib.PRIORITY_DEFAULT_IDLE,
+            () => {
+                this._composerSuggestionRefreshSourceId = 0;
+                this._refreshComposerSuggestions();
+                return GLib.SOURCE_REMOVE;
+            },
+        );
+    }
+
     _refreshComposerSuggestions() {
+        if (this._composerSuggestionRefreshSourceId) {
+            GLib.Source.remove(this._composerSuggestionRefreshSourceId);
+            this._composerSuggestionRefreshSourceId = 0;
+        }
+
         if (this._updatingComposerReferences || !this._composerBuffer || !this._composerSuggestionRevealer)
             return;
 
@@ -1317,11 +1562,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._dismissedComposerTrigger = '';
         this._activeComposerTrigger = trigger;
         const items = this._itemsForComposerTrigger(trigger.trigger);
-        this._composerSuggestionItems = filterComposerSuggestions(
-            items,
-            trigger.query,
-            COMPOSER_SUGGESTION_LIMIT,
-        );
+        this._composerSuggestionItems = trigger.trigger === '@'
+            ? this._homeFileIndex.search(trigger.query, COMPOSER_SUGGESTION_LIMIT)
+            : filterComposerSuggestions(
+                items,
+                trigger.query,
+                COMPOSER_SUGGESTION_LIMIT,
+            );
         this._renderComposerSuggestions();
     }
 
@@ -1329,7 +1576,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (!this._composerSuggestionList || !this._activeComposerTrigger)
             return;
 
-        this._clearBox(this._composerSuggestionList);
         const kind = composerReferenceKindForTrigger(this._activeComposerTrigger.trigger);
         const heading = {
             skill: 'Skills',
@@ -1342,51 +1588,61 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 : heading,
         );
 
-        for (const item of this._composerSuggestionItems) {
-            const row = new Gtk.ListBoxRow({
-                activatable: true,
-                selectable: true,
-            });
-            row.composerSuggestion = item;
+        const rowsKey = `${kind}:${this._composerSuggestionItems
+            .map((item) => `${item.kind}\u0000${item.value}\u0000${item.title}\u0000${item.subtitle}`)
+            .join('\u0001')}`;
 
-            const content = new Gtk.Box({
-                orientation: Gtk.Orientation.HORIZONTAL,
-                spacing: 10,
-                margin_top: 7,
-                margin_bottom: 7,
-                margin_start: 9,
-                margin_end: 9,
-            });
-            const prefix = new Gtk.Label({
-                label: this._activeComposerTrigger.trigger,
-                width_chars: 2,
-                valign: Gtk.Align.CENTER,
-            });
-            prefix.add_css_class('title-4');
-            prefix.add_css_class(`cusco-composer-reference-${kind}`);
-            const labels = new Gtk.Box({
-                orientation: Gtk.Orientation.VERTICAL,
-                spacing: 1,
-                hexpand: true,
-            });
-            const title = new Gtk.Label({
-                label: item.title,
-                xalign: 0,
-                ellipsize: Pango.EllipsizeMode.END,
-            });
-            const subtitle = new Gtk.Label({
-                label: item.subtitle,
-                xalign: 0,
-                ellipsize: Pango.EllipsizeMode.MIDDLE,
-            });
-            subtitle.add_css_class('caption');
-            subtitle.add_css_class('dim-label');
-            labels.append(title);
-            labels.append(subtitle);
-            content.append(prefix);
-            content.append(labels);
-            row.set_child(content);
-            this._composerSuggestionList.append(row);
+        if (rowsKey !== this._composerSuggestionRowsKey) {
+            this._clearBox(this._composerSuggestionList);
+
+            for (const item of this._composerSuggestionItems) {
+                const row = new Gtk.ListBoxRow({
+                    activatable: true,
+                    selectable: true,
+                });
+                row.composerSuggestion = item;
+
+                const content = new Gtk.Box({
+                    orientation: Gtk.Orientation.HORIZONTAL,
+                    spacing: 10,
+                    margin_top: 7,
+                    margin_bottom: 7,
+                    margin_start: 9,
+                    margin_end: 9,
+                });
+                const prefix = new Gtk.Label({
+                    label: this._activeComposerTrigger.trigger,
+                    width_chars: 2,
+                    valign: Gtk.Align.CENTER,
+                });
+                prefix.add_css_class('title-4');
+                prefix.add_css_class(`cusco-composer-reference-${kind}`);
+                const labels = new Gtk.Box({
+                    orientation: Gtk.Orientation.VERTICAL,
+                    spacing: 1,
+                    hexpand: true,
+                });
+                const title = new Gtk.Label({
+                    label: item.title,
+                    xalign: 0,
+                    ellipsize: Pango.EllipsizeMode.END,
+                });
+                const subtitle = new Gtk.Label({
+                    label: item.subtitle,
+                    xalign: 0,
+                    ellipsize: Pango.EllipsizeMode.MIDDLE,
+                });
+                subtitle.add_css_class('caption');
+                subtitle.add_css_class('dim-label');
+                labels.append(title);
+                labels.append(subtitle);
+                content.append(prefix);
+                content.append(labels);
+                row.set_child(content);
+                this._composerSuggestionList.append(row);
+            }
+
+            this._composerSuggestionRowsKey = rowsKey;
         }
 
         const hasItems = this._composerSuggestionItems.length > 0;
@@ -1400,7 +1656,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 : `No matching ${kind}s`);
         this._composerSuggestionRevealer.set_reveal_child(true);
 
-        if (hasItems)
+        if (hasItems && !this._composerSuggestionList.get_selected_row())
             this._composerSuggestionList.select_row(this._composerSuggestionList.get_row_at_index(0));
     }
 
@@ -1411,6 +1667,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
     _hideComposerSuggestions() {
         this._composerSuggestionRevealer?.set_reveal_child(false);
         this._composerSuggestionItems = [];
+        this._composerSuggestionRowsKey = '';
     }
 
     _dismissComposerSuggestions() {
@@ -1661,14 +1918,23 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._composerUsageChart.queue_draw();
     }
 
-    _syncComposerHint(isBusy = false) {
+    _syncComposerHint(isBusy = false, computerUseActive = this._computerUse?.active ?? false) {
         if (!this._composerHint)
             return;
 
-        const sendShortcut = this._appSettings.sendWithEnter ? 'Enter' : 'Ctrl+Enter';
-        this._composerHint.set_label(isBusy
-            ? `${sendShortcut} queues · Esc to stop`
-            : `${sendShortcut} ↵ to send`);
+        const presentation = composerHintPresentation(
+            this._appSettings.sendWithEnter,
+            isBusy,
+            computerUseActive,
+        );
+
+        if (presentation.markup) {
+            this._composerHint.remove_css_class('dim-label');
+            this._composerHint.set_markup(presentation.markup);
+        } else {
+            this._composerHint.add_css_class('dim-label');
+            this._composerHint.set_label(presentation.label);
+        }
     }
 
     _createPendingUserMessagesRow() {
@@ -1770,6 +2036,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
             valign: Gtk.Align.CENTER,
         });
         label.add_css_class('cusco-pending-message-text');
+        applyReferenceTextStyles(
+            label,
+            message.references,
+            this._composerReferenceStyles(),
+        );
 
         const removeButton = new Gtk.Button({
             icon_name: 'window-close-symbolic',
@@ -1856,8 +2127,26 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._workspace,
             this._mcp,
             (change) => this._handleProviderSettingsChanged(change),
-            { ...options, computerUse: this._computerUse },
+            {
+                ...options,
+                computerUse: this._computerUse,
+                archivedChatCount: this._conversations.archivedConversations.length,
+                onOpenArchivedChats: (parent, onCountChanged) => (
+                    this._showArchivedChatsWindow(parent, onCountChanged)
+                ),
+            },
         );
+    }
+
+    _showArchivedChatsWindow(parent = this, onCountChanged = () => {}) {
+        presentArchivedChatsWindow(parent, this._conversations, () => {
+            if (this._conversations.conversations.length === 0)
+                this._conversations.createConversation();
+
+            this._refreshConversationList();
+            this._renderActiveConversation();
+            onCountChanged(this._conversations.archivedConversations.length);
+        });
     }
 
     _syncComputerUseTools() {
@@ -1871,7 +2160,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _syncComputerUseStatus(active) {
-        this._computerUseStatusButton?.set_visible(Boolean(active));
+        this._syncComposerHint(Boolean(this._activeChatCancellable), Boolean(active));
     }
 
     _stopComputerUseAndReturn() {
@@ -1995,7 +2284,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         this._conversations.deleteConversation(conversation.id);
 
-        if (this._conversations.allConversations.length === 0)
+        if (this._conversations.conversations.length === 0)
             this._conversations.createConversation();
 
         this._refreshConversationList();
@@ -2590,16 +2879,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
             };
         }
 
-        const [, contents] = GLib.file_get_contents(path);
-        const text = new TextDecoder().decode(contents);
-
-        return {
-            kind: 'file',
-            name,
-            path,
-            content: text.slice(0, MAX_ATTACHMENT_TEXT_CHARS),
-            truncated: text.length > MAX_ATTACHMENT_TEXT_CHARS,
-        };
+        return createFileAttachment(path, {
+            maxTextCharacters: MAX_ATTACHMENT_TEXT_CHARS,
+        });
     }
 
     _createAttachmentsForComposerReferences(references, existingAttachments = []) {
@@ -2768,12 +3050,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (attachment.kind === 'image')
                 return `Image attachment: ${attachment.name}`;
 
-            return [
-                `File attachment: ${attachment.name}${attachment.truncated ? ' (truncated)' : ''}`,
-                '```text',
-                attachment.content,
-                '```',
-            ].join('\n');
+            return fileAttachmentSummary(attachment);
         }).join('\n\n');
 
         return [text, attachmentText].filter(Boolean).join('\n\n');
@@ -2832,6 +3109,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     providerMessages,
                     cancellable,
                     (text, _chunk, state) => {
+                        if (state?.type === 'status') {
+                            assistantView.set_status(state.status);
+                            this._scrollToBottom();
+                            return;
+                        }
+
                         if (state?.type === 'usage')
                             assistantView.set_usage(state.usage);
 
@@ -2939,7 +3222,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         })) {
             const normalizedChunk = normalizeProviderChunk(chunk);
 
-            if (normalizedChunk.type === 'usage')
+            if (normalizedChunk.type === 'status') {
+                // Status updates are transient UI state, not assistant content.
+            } else if (normalizedChunk.type === 'usage')
                 usage = normalizedChunk.usage;
             else if (normalizedChunk.type === 'reasoning')
                 reasoningText += normalizedChunk.text;
@@ -2958,6 +3243,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 toolCalls,
                 serverToolResults,
                 serverToolResultChunk: normalizedChunk.serverToolResults ?? [],
+                status: normalizedChunk.type === 'status' ? normalizedChunk.text : '',
+                statusKind: normalizedChunk.status ?? '',
+                attempt: normalizedChunk.attempt ?? 0,
+                maxAttempts: normalizedChunk.maxAttempts ?? 0,
             });
         }
 
@@ -3105,6 +3394,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 runtimeMessages,
                 cancellable,
                 (text, _chunk, state) => {
+                    if (state?.type === 'status') {
+                        setAssistantStatus(state.status);
+                        this._scrollToBottom();
+                        return;
+                    }
+
                     if (state?.type === 'usage')
                         getAssistantView()?.set_usage?.(state.usage);
 
@@ -3150,9 +3445,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 let ranAnyTool = false;
 
                 for (const nativeToolCall of responseState.toolCalls) {
-                    const runtimeToolCallText = responseText || formatAgentToolCall(nativeToolCall);
+                    const runtimeNativeToolCall = {
+                        ...nativeToolCall,
+                        id: String(nativeToolCall.id ?? '').trim()
+                            || `cusco_${GLib.uuid_string_random().replaceAll('-', '')}`,
+                    };
+                    const runtimeToolCallText = responseText;
                     const request = this._createAgentToolRequest(
-                        nativeToolCall,
+                        runtimeNativeToolCall,
                         runtimeToolCallText,
                         conversation,
                         runtimeMessages,
@@ -3168,6 +3468,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                         conversation,
                         runtimeMessages,
                         cancellable,
+                        runtimeNativeToolCall,
                     ) || ranAnyTool;
                 }
 
@@ -3272,7 +3573,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
         }
     }
 
-    async _runAgentToolRequest(request, responseText, conversation, runtimeMessages, cancellable = null) {
+    async _runAgentToolRequest(
+        request,
+        responseText,
+        conversation,
+        runtimeMessages,
+        cancellable = null,
+        nativeToolCall = null,
+    ) {
         if (isCancellableCancelled(cancellable)) {
             this._appendAgentToolCancellation(request, responseText, conversation, runtimeMessages);
             return false;
@@ -3325,21 +3633,48 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (result.cancelled)
                 return false;
 
-            runtimeMessages.push(
-                { role: 'assistant', content: responseText },
-                {
-                    role: 'user',
-                    content: createAgentToolResultPrompt(request, transcriptText),
-                    attachments: result.imagePath
-                        ? [{
-                            kind: 'image',
-                            path: result.imagePath,
-                            name: GLib.path_get_basename(result.imagePath),
-                            mimeType: result.mimeType ?? 'image/png',
-                        }]
-                        : [],
-                },
-            );
+            if (result.imagePath
+                && (request.name === 'computer_observe'
+                    || request.name === 'computer_observe_region'
+                    || request.name === 'computer_step')) {
+                pruneComputerUseObservationImages(runtimeMessages);
+            }
+
+            const modelImagePath = result.modelImagePath ?? result.imagePath;
+            const attachments = modelImagePath
+                ? [{
+                    kind: 'image',
+                    path: modelImagePath,
+                    name: GLib.path_get_basename(modelImagePath),
+                    mimeType: result.mimeType ?? 'image/png',
+                }]
+                : [];
+
+            if (nativeToolCall) {
+                runtimeMessages.push(
+                    {
+                        role: 'assistant',
+                        content: responseText,
+                        toolCalls: [nativeToolCall],
+                    },
+                    {
+                        role: 'tool',
+                        content: transcriptText,
+                        toolCallId: nativeToolCall.id,
+                        toolName: nativeToolCall.name,
+                        attachments,
+                    },
+                );
+            } else {
+                runtimeMessages.push(
+                    { role: 'assistant', content: responseText },
+                    {
+                        role: 'user',
+                        content: createAgentToolResultPrompt(request, transcriptText),
+                        attachments,
+                    },
+                );
+            }
             return true;
         } catch (error) {
             if (wasOperationCancelled(error, cancellable)) {
@@ -3633,7 +3968,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _shouldSendLongResponseNotification() {
-        return !this.is_active();
+        return shouldSendLongResponseNotification(this);
     }
 
     _stopLongResponseNotification() {
@@ -3761,7 +4096,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             systemMessages.push({
                 role: 'system',
-                content: buildAgentModeSystemPrompt(cuscoTools, { nativeSearchTools }),
+                content: buildAgentModeSystemPrompt(cuscoTools, {
+                    nativeSearchTools,
+                    nativeToolCalling: true,
+                }),
             });
         }
 
@@ -4012,7 +4350,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const menuButton = new Gtk.MenuButton({
             tooltip_text: 'Chat options',
             valign: Gtk.Align.CENTER,
-            icon_name: 'pan-down-symbolic',
         });
         const popover = new Gtk.Popover();
         const content = new Gtk.Box({
@@ -4023,6 +4360,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
             margin_start: 10,
             margin_end: 10,
         });
+
+        menuButton.set_child(createBundledIcon(MORE_VERTICAL_ICON_FILE, 'view-more-symbolic'));
 
         this._memoryToggleButton = new Gtk.Switch({
             tooltip_text: 'Use memories for this chat',
@@ -4415,10 +4754,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _createConversationRow(conversation, hoverTarget = null) {
-        const providerConfig = this._providerConfigs.resolve(conversation.providerId, conversation.modelId);
-        const cronJob = this._isCronConversation(conversation)
-            ? this._cronJobIndex.get(conversation.cronJobId)
-            : null;
         const rowBox = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 6,
@@ -4460,23 +4795,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
         }
         titleRow.append(title);
 
-        const organizationLabel = [
-            conversation.folderId ? `Folder ${conversation.folderId}` : '',
-            ...(conversation.tags ?? []).map((tag) => `#${tag}`),
-        ].filter(Boolean).join(' ');
         const subtitle = new Gtk.Label({
-            label: this._isCronConversation(conversation)
-                ? [
-                    cronJob ? (cronJob.enabled ? 'Enabled' : 'Disabled') : 'Missing crontab entry',
-                    cronJob?.schedule ?? '',
-                    organizationLabel,
-                ].filter(Boolean).join(' / ')
-                : [
-                    conversation.archived ? 'Archived' : '',
-                    conversation.agentModeEnabled ? 'Agent' : '',
-                    `${providerConfig.provider.name} / ${providerConfig.model?.name ?? 'No model'}`,
-                    organizationLabel,
-                ].filter(Boolean).join(' / '),
+            label: formatConversationUpdatedAt(conversation.updatedAt ?? conversation.createdAt),
             xalign: 0,
             ellipsize: Pango.EllipsizeMode.END,
         });
@@ -4529,6 +4849,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 this._confirmDeleteCronJobConversation(conversation.id);
             }, { destructive: true });
         } else {
+            addMenuItem('folder-documents-symbolic', 'Archive chat', () => {
+                this._archiveConversation(conversation.id);
+            });
             addMenuItem('document-save-symbolic', 'Export chat', () => {
                 this._exportConversation(conversation.id);
             });
@@ -4593,6 +4916,22 @@ class CuscoWindow extends Adw.ApplicationWindow {
         button.set_child(content);
         button.connect('clicked', onClicked);
         return button;
+    }
+
+    _archiveConversation(conversationId) {
+        const conversation = this._conversations.getConversation(conversationId);
+
+        if (!conversation || conversation.archived)
+            return;
+
+        this._conversations.archiveConversation(conversationId);
+
+        if (this._conversations.conversations.length === 0)
+            this._conversations.createConversation();
+
+        this._refreshConversationList();
+        this._renderActiveConversation();
+        this._showToast('Chat archived');
     }
 
     _renameConversation(conversationId) {
@@ -4693,7 +5032,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             this._conversations.deleteConversation(conversationId);
 
-            if (this._conversations.allConversations.length === 0)
+            if (this._conversations.conversations.length === 0)
                 this._conversations.createConversation();
 
             this._refreshConversationList();
@@ -4731,6 +5070,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _renderActiveConversation() {
         const conversation = this._conversations.activeConversation;
+        this._userMessageReferenceContents.clear();
         this._clearBox(this._messages);
         this._appendMessageBottomSpacer();
         this._lastAssistantMessageView = null;
@@ -5435,12 +5775,23 @@ class CuscoWindow extends Adw.ApplicationWindow {
         bubble.add_css_class(kind === 'user' ? 'cusco-message-user' : 'cusco-message-assistant');
 
         const imageAttachmentPreviews = this._createMessageImageAttachmentPreviews(message, kind);
-        const displayBody = displayBodyWithoutImageAttachmentLines(body, message);
+        const displayBody = hideBinaryAttachmentData(
+            displayBodyWithoutImageAttachmentLines(body, message),
+            message?.attachments,
+        );
+        const messageReferences = kind === 'user'
+            ? normalizeComposerReferences(message?.metadata?.composerReferences)
+            : [];
         const bodyContent = createMessageContent(displayBody || ' ', this._messageContentOptions({
             role: kind,
             artifacts: message?.artifacts ?? [],
             parentWindow: this,
+            references: messageReferences,
+            referenceStyles: this._composerReferenceStyles(),
         }));
+
+        if (messageReferences.length > 0)
+            this._userMessageReferenceContents.add(bodyContent);
         let currentBodyText = String(displayBody ?? '');
         let loadingRow = null;
         let hasToolResults = false;

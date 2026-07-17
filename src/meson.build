@@ -17,6 +17,7 @@ configure_file(
 chat_sources = files(
   'chat/agentMode.js',
   'chat/artifacts.js',
+  'chat/attachments.js',
   'chat/codeThemes.js',
   'chat/compaction.js',
   'chat/conversation.js',
@@ -30,6 +31,8 @@ composer_sources = files(
 )
 
 computer_use_sources = files(
+  'computerUse/accessibility.js',
+  'computerUse/imageViews.js',
   'computerUse/service.js',
   'computerUse/tools.js',
 )
@@ -61,6 +64,7 @@ cron_sources = files(
 )
 
 settings_sources = files(
+  'settings/archivedChats.js',
   'settings/appInfoSettings.js',
   'settings/appSettings.js',
   'settings/computerUseSettings.js',

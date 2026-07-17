@@ -41,6 +41,21 @@ workspace.setCache('models:openai', ['gpt-5.5'], { ttlSeconds: 60 });
 if (workspace.searchPrompts('clearly')[0].id !== prompt.id)
     throw new Error('Prompt library search failed');
 
+const updatedPrompt = workspace.updatePrompt(prompt.id, {
+    title: 'Summarize',
+    content: 'Summarize {{topic}} clearly.',
+    tags: ['writing', 'summary'],
+});
+
+if (updatedPrompt.id !== prompt.id
+    || updatedPrompt.createdAt !== prompt.createdAt
+    || updatedPrompt.title !== 'Summarize'
+    || updatedPrompt.content !== 'Summarize {{topic}} clearly.'
+    || updatedPrompt.tags.join(',') !== 'writing,summary'
+    || workspace.searchPrompts('summary')[0]?.id !== prompt.id) {
+    throw new Error('Prompt library edit failed');
+}
+
 if (!profile.id || !folder.id || !pluginTool.id || !mcpServer.id)
     throw new Error('Workspace records were not created');
 
@@ -53,6 +68,12 @@ const reloaded = new WorkspaceManager({
 
 if (reloaded.prompts.length !== 1 || reloaded.pluginTools.length !== 1 || reloaded.mcpServers.length !== 1)
     throw new Error('Workspace data was not persisted');
+
+if (reloaded.prompts[0].title !== 'Summarize'
+    || reloaded.prompts[0].content !== 'Summarize {{topic}} clearly.'
+    || reloaded.prompts[0].tags.join(',') !== 'writing,summary') {
+    throw new Error('Edited prompt was not persisted');
+}
 
 const conversations = new ConversationManager({
     providerId: 'openai',

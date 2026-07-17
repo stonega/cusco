@@ -125,8 +125,56 @@ if (defaultStore.getThinkingLevels('openai', 'gpt-5.5').join(',') !== 'off,auto,
 if (defaultStore.resolve('openai', 'gpt-5.4-mini').model.contextWindowTokens !== 400000)
     throw new Error('OpenAI GPT-5.4 mini context window should be 400K tokens');
 
-if (defaultStore.resolve('anthropic', 'claude-haiku-4-5-20251001').model.contextWindowTokens !== 200000)
+if (defaultStore.resolve('anthropic', 'claude-haiku-4-5-20251001').model.id !== 'claude-haiku-4-5'
+    || defaultStore.resolve('anthropic', 'claude-haiku-4-5').model.contextWindowTokens !== 200000) {
     throw new Error('Claude Haiku 4.5 context window should be 200K tokens');
+}
+
+const anthropicProvider = defaultStore.getProvider('anthropic');
+const expectedAnthropicModelIds = [
+    'claude-fable-5',
+    'claude-opus-4-8',
+    'claude-sonnet-5',
+    'claude-haiku-4-5',
+];
+
+if (anthropicProvider.models.map((model) => model.id).join(',') !== expectedAnthropicModelIds.join(','))
+    throw new Error(`Anthropic model list was not limited to current models: ${anthropicProvider.models.map((model) => model.id).join(', ')}`);
+
+if (defaultStore.getDefaultModel('anthropic').id !== 'claude-sonnet-5')
+    throw new Error('Claude Sonnet 5 should be the default Anthropic model');
+
+if (defaultStore.getThinkingLevels('anthropic', 'claude-fable-5').join(',') !== 'low,medium,high,xhigh,max')
+    throw new Error('Claude Fable 5 should expose always-on adaptive thinking efforts');
+
+for (const modelId of ['claude-opus-4-8', 'claude-sonnet-5']) {
+    if (defaultStore.getThinkingLevels('anthropic', modelId).join(',') !== 'off,low,medium,high,xhigh,max')
+        throw new Error(`${modelId} should expose adaptive thinking and every supported effort`);
+
+    if (defaultStore.getDefaultThinkingLevel('anthropic', modelId) !== 'high')
+        throw new Error(`${modelId} should default to the documented high effort`);
+}
+
+if (defaultStore.getThinkingLevels('anthropic', 'claude-haiku-4-5').join(',') !== 'off,auto,low,medium,high')
+    throw new Error('Claude Haiku 4.5 should keep manual extended-thinking budgets');
+
+const staleAnthropicSettings = new MemorySettings({
+    strings: {
+        'provider-default-models': '{"anthropic":"claude-sonnet-4-6"}',
+        'provider-discovered-models': '{"anthropic":[{"id":"claude-opus-4-8"},{"id":"claude-sonnet-4-6"},{"id":"claude-haiku-4-5-20251001"}]}',
+    },
+});
+const staleAnthropicStore = new ProviderConfigStore(undefined, {
+    settings: staleAnthropicSettings,
+    apiKeyStore: new MemoryApiKeyStore({ anthropic: 'anthropic-key' }),
+    envLookup: () => '',
+});
+
+if (staleAnthropicStore.getProvider('anthropic').models.map((model) => model.id).join(',') !== expectedAnthropicModelIds.join(','))
+    throw new Error('Stale Anthropic settings did not migrate to the current four-model catalog');
+
+if (staleAnthropicStore.getDefaultModel('anthropic').id !== 'claude-sonnet-5')
+    throw new Error('Stale Anthropic default should fall back to Claude Sonnet 5');
 
 if (defaultStore.resolve('gemini', 'gemini-3.5-flash').model.contextWindowTokens !== 1048576)
     throw new Error('Gemini 3.5 Flash context window should match the documented input token limit');
@@ -149,10 +197,13 @@ for (const [providerId, expectedTools] of Object.entries(expectedNativeSearchToo
         throw new Error(`${providerId} native search tools were wrong: ${actualTools}`);
 }
 
-for (const providerId of ['kimi', 'deepseek', 'openai-compatible']) {
+for (const providerId of ['kimi', 'deepseek']) {
     if (defaultStore.getNativeSearchTools(providerId).length > 0)
         throw new Error(`${providerId} should use the Brave Search fallback`);
 }
+
+if (defaultStore.listProviders().some((provider) => provider.customizable))
+    throw new Error('An empty custom provider placeholder should not appear before the user adds one');
 
 if (defaultStore.getProvider('grok').apiFormat !== 'openai-responses')
     throw new Error('Grok should use the Responses API for native Web and X search');
@@ -354,19 +405,27 @@ if (staleGeminiImageStore.getDefaultImageModel('gemini').id !== 'gemini-3-pro-im
 
 const kimiProvider = defaultStore.getProvider('kimi');
 const kimiModelIds = kimiProvider.models.map((model) => model.id);
-const expectedKimiModelIds = ['kimi-k2.7-code', 'kimi-k2.7-code-highspeed', 'kimi-k2.6'];
+const expectedKimiModelIds = ['kimi-k3', 'kimi-k2.7-code', 'kimi-k2.7-code-highspeed', 'kimi-k2.6'];
 
-if (defaultStore.getDefaultModel('kimi').id !== 'kimi-k2.7-code')
-    throw new Error('Kimi default model should be Kimi K2.7 Code');
+if (defaultStore.getDefaultModel('kimi').id !== 'kimi-k3')
+    throw new Error('Kimi default model should be Kimi K3');
 
 if (kimiModelIds.join(',') !== expectedKimiModelIds.join(','))
     throw new Error(`Kimi model list was not limited to supported models: ${kimiModelIds.join(', ')}`);
 
-if (!kimiProvider.models.every((model) => model.description.includes('Context 256k')))
+if (!kimiProvider.models.every((model) => model.description.includes('Context')))
     throw new Error('Kimi model details should include context length descriptions');
 
-if (!kimiProvider.models.every((model) => model.contextWindowTokens === 256000))
-    throw new Error('Kimi model metadata should include 256K context windows');
+if (defaultStore.resolve('kimi', 'kimi-k3').model.contextWindowTokens !== 1000000)
+    throw new Error('Kimi K3 metadata should include its 1M context window');
+
+if (kimiProvider.models.filter((model) => model.id !== 'kimi-k3').some((model) => model.contextWindowTokens !== 256000))
+    throw new Error('Kimi K2 model metadata should retain 256K context windows');
+
+if (defaultStore.getThinkingLevels('kimi', 'kimi-k3').join(',') !== 'max'
+    || defaultStore.getDefaultThinkingLevel('kimi', 'kimi-k3') !== 'max') {
+    throw new Error('Kimi K3 should expose only its always-on Max thinking effort');
+}
 
 if (defaultStore.getThinkingLevels('kimi', 'kimi-k2.7-code').join(',') !== 'auto')
     throw new Error('Kimi K2.7 Code should expose always-on thinking');
@@ -395,14 +454,14 @@ const staleKimiModelIds = staleKimiStore.getProvider('kimi').models.map((model) 
 if (staleKimiModelIds.some((modelId) => modelId === 'kimi-k2.5' || modelId.startsWith('moonshot-')))
     throw new Error('Unsupported Kimi model was loaded from persisted settings');
 
-if (staleKimiStore.getDefaultModel('kimi').id !== 'kimi-k2.7-code')
-    throw new Error('Stale Kimi default model should fall back to supported Kimi K2.7 Code');
+if (staleKimiStore.getDefaultModel('kimi').id !== 'kimi-k3')
+    throw new Error('Stale Kimi default model should fall back to Kimi K3');
 
 if (staleKimiStore.getThinkingLevels('kimi', 'kimi-k2.6').join(',') !== 'off,auto')
     throw new Error('Persisted Kimi models should be enriched with thinking support');
 
-if (!staleKimiStore.getProvider('kimi').models.every((model) => model.contextWindowTokens === 256000))
-    throw new Error('Persisted Kimi models should be enriched with context windows');
+if (staleKimiStore.resolve('kimi', 'kimi-k3').model.contextWindowTokens !== 1000000)
+    throw new Error('Persisted Kimi models should be enriched with Kimi K3 metadata');
 
 const kimiDiscoveryStore = new ProviderConfigStore(undefined, {
     settings: null,
@@ -425,14 +484,14 @@ const discoveredKimiModelIds = kimiDiscoveryStore.getProvider('kimi').models.map
 if (discoveredKimiModelIds.join(',') !== expectedKimiModelIds.join(','))
     throw new Error(`Kimi discovery did not filter unsupported models: ${discoveredKimiModelIds.join(', ')}`);
 
-if (!kimiDiscoveryStore.getProvider('kimi').models[1].description.includes('180 tokens/s'))
+if (!kimiDiscoveryStore.getProvider('kimi').models.find((model) => model.id === 'kimi-k2.7-code-highspeed').description.includes('180 tokens/s'))
     throw new Error('Kimi discovery did not enrich model details');
 
 if (kimiDiscoveryStore.getThinkingLevels('kimi', 'kimi-k2.7-code').join(',') !== 'auto')
     throw new Error('Kimi discovery did not enrich thinking support');
 
-if (!kimiDiscoveryStore.getProvider('kimi').models.every((model) => model.contextWindowTokens === 256000))
-    throw new Error('Kimi discovery did not enrich context windows');
+if (kimiDiscoveryStore.resolve('kimi', 'kimi-k3').model.contextWindowTokens !== 1000000)
+    throw new Error('Kimi discovery did not retain built-in Kimi K3 metadata');
 
 if (defaultStore.getThinkingLevels('deepseek', 'deepseek-v4-pro').join(',') !== 'off,auto,high,max')
     throw new Error('DeepSeek V4 Pro should expose thinking on/off modes');
@@ -577,70 +636,151 @@ if (!enabledProviderIds.includes('secure-remote'))
 if (availableProviderIds.includes('secure-remote'))
     throw new Error('Unavailable provider was included in available provider list');
 
-const customSettings = new MemorySettings();
-const customStore = new ProviderConfigStore(undefined, {
-    settings: customSettings,
+const legacyCustomSettings = new MemorySettings({
+    strings: {
+        'custom-openai-compatible-base-url': 'https://legacy.example/v1',
+    },
+    strv: {
+        'custom-openai-compatible-models': ['legacy-small', 'legacy-large'],
+    },
+});
+const legacyCustomStore = new ProviderConfigStore(undefined, {
+    settings: legacyCustomSettings,
     apiKeyStore: new MemoryApiKeyStore({
-        'openai-compatible': 'sk-custom',
+        'openai-compatible': 'sk-legacy',
     }),
     envLookup: () => '',
 });
+const legacyCustomProvider = legacyCustomStore.getProvider('openai-compatible');
 
-if (customStore.canEnableProvider('openai-compatible'))
-    throw new Error('Custom provider should require endpoint and models before enabling');
+if (legacyCustomProvider?.baseUrl !== 'https://legacy.example/v1'
+    || legacyCustomProvider.models.length !== 2) {
+    throw new Error('Legacy custom provider settings were not migrated into the custom provider list');
+}
 
-customStore.setCustomProviderConfig('openai-compatible', {
-    baseUrl: 'https://custom.example/v1',
+if (!legacyCustomStore.canEnableProvider('openai-compatible'))
+    throw new Error('Migrated custom provider did not retain its legacy Secret Service credential');
+
+if (!legacyCustomSettings.get_string('custom-openai-compatible-providers').includes('legacy.example'))
+    throw new Error('Migrated custom provider list was not persisted');
+
+if (legacyCustomSettings.get_string('custom-openai-compatible-base-url')
+    || legacyCustomSettings.get_strv('custom-openai-compatible-models').length > 0) {
+    throw new Error('Legacy custom provider settings were not cleared after migration');
+}
+
+const customSettings = new MemorySettings();
+const customApiKeys = new MemoryApiKeyStore();
+const customStore = new ProviderConfigStore(undefined, {
+    settings: customSettings,
+    apiKeyStore: customApiKeys,
+    envLookup: () => '',
+});
+const discoveredProvider = customStore.addCustomProvider({
+    name: 'Discovered API',
+    baseUrl: 'https://discovered.example/v1',
+    apiKey: 'sk-discovered',
+});
+const manualProvider = customStore.addCustomProvider({
+    name: 'Manual API',
+    baseUrl: 'https://manual.example/v1',
+    models: 'custom-small, custom-large, custom-small',
+    apiKey: 'sk-manual',
+});
+
+if (discoveredProvider.id === manualProvider.id)
+    throw new Error('Custom providers did not receive distinct identifiers');
+
+if (customStore.listProviders().filter((provider) => provider.customizable).length !== 2)
+    throw new Error('Multiple custom providers were not added to the provider list');
+
+if (customStore.canEnableProvider(discoveredProvider.id))
+    throw new Error('Custom provider should require discovered or manual models before enabling');
+
+await customStore.discoverModels(discoveredProvider.id, {
+    discoverer: async (config) => {
+        if (config.apiKey !== 'sk-discovered' || config.baseUrl !== 'https://discovered.example/v1')
+            throw new Error('Custom provider discovery did not receive its own endpoint and API key');
+
+        return [
+            { id: 'discovered-small', name: 'Discovered Small' },
+            { id: 'discovered-large', name: 'Discovered Large', contextWindowTokens: 131072 },
+        ];
+    },
+});
+customStore.setCustomProviderConfig(discoveredProvider.id, {
+    name: 'Discovered API',
+    baseUrl: 'https://discovered.example/v1',
+    models: 'discovered-small, discovered-large',
+});
+
+if (!customStore.canEnableProvider(discoveredProvider.id))
+    throw new Error('Custom provider with discovered models should be enableable');
+
+customStore.setProviderEnabled(discoveredProvider.id, true);
+customStore.setDefaultModel(discoveredProvider.id, 'discovered-large');
+
+if (customStore.getDefaultModel(discoveredProvider.id).id !== 'discovered-large')
+    throw new Error('Discovered custom provider default model was not updated');
+
+if (customStore.createProvider(discoveredProvider.id).name !== 'Discovered API')
+    throw new Error('Custom provider client was not created');
+
+customStore.setCustomProviderConfig(manualProvider.id, {
+    name: 'Renamed Manual API',
+    baseUrl: 'https://manual.example/v1',
     models: 'custom-small, custom-large, custom-small',
 });
-customStore.setCustomImageModels('openai-compatible', 'custom-image, custom-image-fast, custom-image');
+customStore.setCustomImageModels(manualProvider.id, 'custom-image, custom-image-fast, custom-image');
+customStore.setDefaultModel(manualProvider.id, 'custom-large');
+customStore.setDefaultImageModel(manualProvider.id, 'custom-image-fast');
+customStore.setDefaultImageSelection(manualProvider.id, 'custom-image-fast');
 
-if (customSettings.get_string('custom-openai-compatible-base-url') !== 'https://custom.example/v1')
-    throw new Error('Custom provider endpoint was not persisted');
-
-if (customSettings.get_strv('custom-openai-compatible-models').length !== 2)
-    throw new Error('Custom provider models were not normalized and persisted');
-
-if (!customSettings.get_string('provider-custom-image-models').includes('custom-image-fast'))
-    throw new Error('Custom provider image models were not normalized and persisted');
-
-if (!customStore.canEnableProvider('openai-compatible'))
-    throw new Error('Configured custom provider should be enableable');
-
-customStore.setProviderEnabled('openai-compatible', true);
-customStore.setDefaultModel('openai-compatible', 'custom-large');
-
-if (customStore.getDefaultModel('openai-compatible').id !== 'custom-large')
-    throw new Error('Custom provider default model was not updated');
-
-customStore.setDefaultImageModel('openai-compatible', 'custom-image-fast');
-customStore.setDefaultImageSelection('openai-compatible', 'custom-image-fast');
-
-if (customStore.getDefaultImageModel('openai-compatible').id !== 'custom-image-fast')
+if (customStore.getDefaultImageModel(manualProvider.id).id !== 'custom-image-fast')
     throw new Error('Custom provider default image model was not updated');
 
-if (customSettings.get_string('default-image-provider') !== 'openai-compatible'
+if (customSettings.get_string('default-image-provider') !== manualProvider.id
     || customSettings.get_string('default-image-model') !== 'custom-image-fast') {
     throw new Error('Standalone default image generation selection was not persisted');
 }
 
-if (customStore.createProvider('openai-compatible').name !== 'Custom API')
-    throw new Error('Custom provider client was not created');
+const persistedCustomProviders = customSettings.get_string('custom-openai-compatible-providers');
 
-await customStore.discoverModels('openai-compatible', {
-    discoverer: async () => [
-        { id: 'discovered-small', name: 'Discovered Small' },
-        { id: 'discovered-large', name: 'Discovered Large', contextWindowTokens: 131072 },
-    ],
-});
+if (!persistedCustomProviders.includes('Discovered API')
+    || !persistedCustomProviders.includes('Renamed Manual API')) {
+    throw new Error('Multiple custom provider definitions were not persisted');
+}
 
-if (customStore.getDefaultModel('openai-compatible').id !== 'discovered-small')
-    throw new Error('Discovered models did not replace custom provider defaults');
+if (!customSettings.get_string('provider-custom-image-models').includes('custom-image-fast'))
+    throw new Error('Custom provider image models were not normalized and persisted');
 
 if (!customSettings.get_string('provider-discovered-models').includes('discovered-large'))
     throw new Error('Discovered models were not persisted');
 
-if (customStore.resolve('openai-compatible', 'discovered-large').model.contextWindowTokens !== 131072)
+if (customStore.resolve(discoveredProvider.id, 'discovered-large').model.contextWindowTokens !== 131072)
     throw new Error('Discovered custom model context window was not preserved');
+
+const reloadedCustomStore = new ProviderConfigStore(undefined, {
+    settings: customSettings,
+    apiKeyStore: customApiKeys,
+    envLookup: () => '',
+});
+
+if (reloadedCustomStore.listProviders().filter((provider) => provider.customizable).length !== 2)
+    throw new Error('Multiple custom providers were not restored from settings');
+
+if (reloadedCustomStore.resolve(discoveredProvider.id, 'discovered-large').model.contextWindowTokens !== 131072)
+    throw new Error('Reloaded custom provider lost discovered model metadata');
+
+reloadedCustomStore.removeCustomProvider(manualProvider.id);
+
+if (reloadedCustomStore.getProvider(manualProvider.id))
+    throw new Error('Removed custom provider remained in the provider list');
+
+if (customApiKeys.lookup(manualProvider.id))
+    throw new Error('Removed custom provider API key remained in Secret Service');
+
+if (customSettings.get_string('custom-openai-compatible-providers').includes(manualProvider.id))
+    throw new Error('Removed custom provider remained in persisted settings');
 
 print('Cusco provider config smoke passed');

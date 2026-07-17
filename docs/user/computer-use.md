@@ -3,6 +3,8 @@
 Computer use lets a Cusco agent see and operate application windows on a
 GNOME Wayland desktop. It can list windows, take a screenshot of one window,
 click, type, scroll, drag, and switch GNOME workspaces.
+It can also create a workspace, move a window there, and maximize supported
+windows.
 
 The feature is Linux-only and disabled by default. Cusco keeps screen capture,
 input control, and workspace switching behind separate settings so you can
@@ -58,6 +60,27 @@ gnome-extensions info cusco-computer-use@stonega
 
 The `info` output should report the extension as enabled or active.
 
+### Update only the extension
+
+To package and update the computer-use extension without rebuilding or
+installing the Cusco application, run this from the repository root:
+
+```sh
+scripts/update-computer-use-extension.sh
+```
+
+The script packages the extension with `gnome-extensions pack` and installs
+the bundle for the current user with overwrite enabled. To create the bundle
+without updating the installed extension, use:
+
+```sh
+scripts/update-computer-use-extension.sh --build-only
+```
+
+The bundle is written beneath `builddir/gnome-shell-extension/`. After an
+update, fully log out of GNOME and log back in, enable the extension, and
+restart Cusco as described above.
+
 ## Turn on computer use in Cusco
 
 1. Start the installed Cusco application.
@@ -66,8 +89,8 @@ The `info` output should report the extension as enabled or active.
 4. Turn on **Allow window capture** if the agent should see windows.
 5. Turn on **Allow pointer and keyboard input** if the agent should interact
    with windows.
-6. Turn on **Allow workspace switching** if the agent may move between GNOME
-   workspaces.
+6. Turn on **Allow workspace switching** if the agent may create or activate
+   GNOME workspaces and move windows between them.
 7. Check that **GNOME Shell integration** says the integration is ready.
 8. Enable **Agent** in the chat where you want to use it.
 
@@ -80,31 +103,68 @@ You can describe the task normally. For example:
 
 - “List my open windows and tell me which workspace Firefox is on.”
 - “Open the browser window, inspect the page, and click the Sign in button.”
+- “Open Calculator in a new workspace.”
 - “Switch to workspace 2 and focus Terminal.”
 - “Fill in this form, but stop before submitting it.”
 
-Behind the scenes the agent follows a three-step tool workflow:
+Behind the scenes the agent follows this tool workflow:
 
 1. `computer_list` returns GNOME workspaces and controllable windows.
 2. `computer_observe` focuses one window and captures it as a PNG for the next
-   model turn.
-3. `computer_act` performs one bounded action. The agent observes again after
-   an action changes the screen.
+   model turn. The model receives a synthetic `0`–`1000` grid drawn on a copy;
+   the clean screenshot remains unchanged for verification.
+3. `computer_observe_region` enlarges a selected part of the latest screenshot
+   when a target is small or an earlier visual click did not change the screen.
+4. `computer_step` performs one or more safe actions and returns the updated
+   screenshot in the same tool call. It also reports unchanged screens so the
+   agent can stop retrying a missed target.
+5. `computer_act` creates and switches workspaces, launches through global
+   keyboard input, and performs individual actions that do not need an
+   immediate screenshot.
 
-Coordinates are relative to the most recent screenshot of that window. Cusco
-automatically maps screenshot coordinates to the real window size, including
-HiDPI scaling. A coordinate-based action is rejected until the window has been
-observed.
+When the agent launches an application, its Computer Use rule first creates
+and activates a new workspace. After the new window appears, the agent checks
+that it is on that workspace, moves it there if necessary, and maximizes it
+when the window supports maximizing. If workspace creation is unavailable, the
+agent should report that constraint instead of silently launching on an
+occupied workspace.
+
+`computer_step` uses normalized coordinates from 0 to 1000. Cusco automatically
+maps them to the real window size, including HiDPI scaling. Each observation
+has an ID, and an action that explicitly references an older observation is
+rejected rather than clicking against a stale layout.
+
+Grid lines and labels are targeting aids added by Cusco; they are not part of
+the application. Region observations use their own local `0`–`1000` space and
+Cusco maps the point back to the full window automatically. After two visual
+click attempts leave the screen unchanged, further full-window coordinate
+clicks are blocked until the agent changes strategy. Coordinate clicks and
+typing are deliberately split into separate steps so a missed click cannot
+send text to the wrong target.
+
+When an application exposes desktop accessibility information, observations
+also include named elements such as buttons and text fields. The agent can
+activate or fill these elements by reference instead of estimating pixels.
+Focusable rows without a direct click action are activated with Return. If an
+application reports duplicate or out-of-window element positions, Cusco hides
+those unreliable bounds while preserving the named reference. In a search
+result list, the agent prefers keyboard selection; coordinate navigation is
+only considered verified when the requested destination appears afterward.
+Not every GNOME application or custom-drawn surface exposes this information,
+so Cusco always keeps the application-independent visual fallback available.
 
 ## Available actions
 
 | Action | What it does |
 |---|---|
+| `create_workspace` | Creates and activates a new GNOME workspace. |
 | `focus` | Focuses and unminimizes a window. |
+| `maximize` | Maximizes a window when the application supports it. |
+| `move_to_workspace` | Moves a window to a workspace by zero-based index. |
 | `move` | Moves the pointer to a window-relative position. |
 | `click` | Clicks the left, middle, or right pointer button. |
 | `double_click` | Double-clicks at a position. |
-| `type` | Optionally clicks a position, then types text. |
+| `type` | Types text into the current focus. `computer_act` retains optional coordinate targeting for compatibility; safe stepped workflows click and verify first. |
 | `keypress` | Sends a key or shortcut such as `CTRL` + `L`. |
 | `scroll` | Scrolls horizontally or vertically at a position. |
 | `drag` | Drags from one window-relative position to another. |
@@ -113,9 +173,12 @@ observed.
 ## Stop immediately
 
 After the first computer action in an agent turn, a cyan (`#42e6f5`) stop
-control appears in the GNOME top panel and at the bottom of the Cusco window.
-It remains visible until that turn completes or is cancelled. Click either one
-to:
+control appears in the GNOME top panel. It combines the computer-use icon with
+a short status such as **Viewing Firefox** or **Typing in Terminal**. Long
+window titles end in an ellipsis, and Cusco never shows the text being typed.
+Cusco does not add a second banner; the composer instead shows **Esc to quit**
+in the same cyan. The indicators remain visible until that turn completes or
+is cancelled. Click the Shell control or press Escape in Cusco to:
 
 - cancel the current computer-use operation;
 - stop the current provider turn;
@@ -129,10 +192,10 @@ that another application already received.
 
 | Setting | Effect |
 |---|---|
-| Enable computer use | Registers the three `computer_*` tools for Agent mode. |
+| Enable computer use | Registers the four `computer_*` tools for Agent mode. |
 | Allow window capture | Allows a selected window to be focused and captured. |
 | Allow pointer and keyboard input | Allows focus, clicks, typing, shortcuts, scrolling, and dragging. |
-| Allow workspace switching | Allows `switch_workspace`; input control must also be enabled. |
+| Allow workspace switching | Allows workspace creation, activation, and window moves; input control must also be enabled. |
 | Action timeout | Limits one Shell operation to 5–120 seconds. |
 | GNOME Shell integration | Shows whether Cusco can register with the loaded extension. |
 

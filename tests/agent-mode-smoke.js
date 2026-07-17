@@ -6,6 +6,7 @@ import {
     formatAgentToolCall,
     isPartialAgentToolCall,
     parseAgentToolCall,
+    pruneComputerUseObservationImages,
 } from '../src/chat/agentMode.js';
 import { createToolPermissionDecision, TOOL_PERMISSION_DENY } from '../src/tools/permissions.js';
 import { ToolManager } from '../src/tools/tools.js';
@@ -17,6 +18,24 @@ const nativeSearchPrompt = buildAgentModeSystemPrompt(
     tools.listTools().filter((tool) => tool.name !== 'search'),
     { nativeSearchTools: ['web_search', 'x_search'] },
 );
+const nativeToolPrompt = buildAgentModeSystemPrompt([
+    ...tools.listTools(),
+    {
+        name: 'computer_step',
+        label: 'Act and observe desktop window',
+        permissionPolicy: 'ask',
+    },
+    {
+        name: 'computer_act',
+        label: 'Control GNOME desktop',
+        permissionPolicy: 'ask',
+    },
+    {
+        name: 'computer_observe_region',
+        label: 'Zoom into desktop window region',
+        permissionPolicy: 'ask',
+    },
+], { nativeToolCalling: true });
 
 if (DEFAULT_AGENT_MAX_ITERATIONS < 100
     || !defaultPrompt.includes(`at most ${DEFAULT_AGENT_MAX_ITERATIONS} tool-use iterations`)) {
@@ -34,6 +53,58 @@ if (!prompt.includes('Agent is enabled')
 if (!nativeSearchPrompt.includes('Provider-managed search tools are enabled: web_search, x_search')
     || nativeSearchPrompt.includes('- search: Web Search')) {
     throw new Error('Agent Mode prompt did not route search to provider-managed tools');
+}
+
+if (!nativeToolPrompt.includes('native function-calling interface')
+    || !nativeToolPrompt.includes('prefer computer_step')
+    || !nativeToolPrompt.includes('first call computer_act with create_workspace')
+    || !nativeToolPrompt.includes('maximize it when canMaximize is true')
+    || !nativeToolPrompt.includes('prefer keypress Down followed by Return')
+    || !nativeToolPrompt.includes('include an expect entry')
+    || !nativeToolPrompt.includes('coordinate click without a matching expectation as unverified')
+    || !nativeToolPrompt.includes('call computer_observe_region')
+    || !nativeToolPrompt.includes('Never batch a coordinate click with typing')
+    || !nativeToolPrompt.includes('synthetic coordinate grid')
+    || !nativeToolPrompt.includes('whether the task succeeded or failed')
+    || !nativeToolPrompt.includes('last computer-use action focus the Cusco app')
+    || nativeToolPrompt.includes('<cusco_tool_call>')) {
+    throw new Error('Native Agent Mode prompt mixed native and XML tool protocols');
+}
+
+const runtimeMessages = [
+    {
+        role: 'user',
+        content: 'Tool result for computer_observe:\n{}',
+        attachments: [
+            { kind: 'image', path: '/tmp/old-observation.png' },
+            { kind: 'file', path: '/tmp/keep.txt' },
+        ],
+    },
+    {
+        role: 'user',
+        content: 'Tool result for image_gen:\n{}',
+        attachments: [{ kind: 'image', path: '/tmp/generated.png' }],
+    },
+    {
+        role: 'tool',
+        toolName: 'computer_step',
+        content: '{}',
+        attachments: [{ kind: 'image', path: '/tmp/old-step.png' }],
+    },
+    {
+        role: 'tool',
+        toolName: 'computer_observe_region',
+        content: '{}',
+        attachments: [{ kind: 'image', path: '/tmp/old-region.png' }],
+    },
+];
+
+if (pruneComputerUseObservationImages(runtimeMessages) !== 3
+    || runtimeMessages[0].attachments.length !== 1
+    || runtimeMessages[1].attachments.length !== 1
+    || runtimeMessages[2].attachments.length !== 0
+    || runtimeMessages[3].attachments.length !== 0) {
+    throw new Error('Superseded computer-use observations were not pruned');
 }
 
 const parsedCall = parseAgentToolCall('<cusco_tool_call>{"name":"calc","input":"2 + 2"}</cusco_tool_call>');

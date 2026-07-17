@@ -23,6 +23,8 @@ import {
 import { createDefaultApiKeyStore } from '../secrets/apiKeyStore.js';
 
 const SETTINGS_SCHEMA_ID = 'io.github.stonega.Cusco';
+const LEGACY_CUSTOM_PROVIDER_ID = 'openai-compatible';
+const CUSTOM_PROVIDER_ID_PREFIX = `${LEGACY_CUSTOM_PROVIDER_ID}-`;
 const REQUIRED_SETTINGS_KEYS = [
     'active-provider',
     'active-model',
@@ -34,6 +36,7 @@ const REQUIRED_SETTINGS_KEYS = [
     'provider-default-image-models',
     'provider-custom-image-models',
     'provider-discovered-image-models',
+    'custom-openai-compatible-providers',
     'custom-openai-compatible-base-url',
     'custom-openai-compatible-models',
 ];
@@ -48,6 +51,7 @@ const FALLBACK_STRING_DEFAULTS = {
     'provider-default-image-models': '{}',
     'provider-custom-image-models': '{}',
     'provider-discovered-image-models': '{}',
+    'custom-openai-compatible-providers': '[]',
     'custom-openai-compatible-base-url': '',
 };
 const FALLBACK_STRV_DEFAULTS = {
@@ -218,13 +222,73 @@ function normalizeCustomModels(models) {
         : String(models ?? '').split(',');
 
     return modelIds
-        .map((model) => String(model).trim())
+        .map((model) => String(model?.id ?? model).trim())
         .filter((model, index, allModels) => model && allModels.indexOf(model) === index)
         .map((model) => ({
             id: model,
             name: model,
             description: 'Custom OpenAI-compatible model.',
         }));
+}
+
+function isCustomProviderId(providerId) {
+    const id = String(providerId ?? '').trim();
+    return id === LEGACY_CUSTOM_PROVIDER_ID || id.startsWith(CUSTOM_PROVIDER_ID_PREFIX);
+}
+
+function normalizeCustomProviderName(name) {
+    return String(name ?? '').trim() || 'Custom API';
+}
+
+function createCustomProviderConfig({
+    id,
+    name,
+    baseUrl = '',
+    models = [],
+} = {}) {
+    const normalizedId = String(id ?? '').trim();
+
+    if (!isCustomProviderId(normalizedId))
+        throw new Error(`Invalid custom provider identifier: ${normalizedId}`);
+
+    const normalizedModels = normalizeCustomModels(models);
+
+    return {
+        id: normalizedId,
+        name: normalizeCustomProviderName(name),
+        description: 'User-defined OpenAI-compatible chat completions API.',
+        themeColor: '#64748B',
+        implemented: true,
+        enabled: false,
+        customizable: true,
+        apiFormat: 'openai-chat-completions',
+        imageApiFormat: 'openai-images',
+        supportsImageModelDiscovery: false,
+        apiKeyRequired: true,
+        apiKeyConfigured: false,
+        apiKeyEnvVar: 'CUSCO_CUSTOM_API_KEY',
+        baseUrl: String(baseUrl ?? '').trim(),
+        chatPath: '/chat/completions',
+        defaultModelId: normalizedModels[0]?.id ?? '',
+        defaultImageModelId: '',
+        models: normalizedModels,
+        imageModels: [],
+        customImageModels: [],
+        discoveredImageModels: [],
+    };
+}
+
+function parseCustomProviderSettings(value) {
+    try {
+        const parsed = JSON.parse(value || '[]');
+
+        if (Array.isArray(parsed))
+            return parsed;
+    } catch (_error) {
+        // Invalid settings should not stop the application from opening.
+    }
+
+    return [];
 }
 
 function normalizeCustomImageModels(models, providerId = '') {
@@ -257,6 +321,9 @@ const PROVIDER_MODEL_ID_ALIASES = {
     openai: {
         'gpt-5.6': 'gpt-5.6-sol',
     },
+    anthropic: {
+        'claude-haiku-4-5-20251001': 'claude-haiku-4-5',
+    },
     gemini: {
         'gemini-3.1-pro': 'gemini-3.1-pro-preview',
     },
@@ -266,11 +333,18 @@ const PROVIDER_MODEL_ID_ALIASES = {
     },
 };
 const PROVIDER_SUPPORTED_MODEL_IDS = {
+    anthropic: new Set([
+        'claude-fable-5',
+        'claude-opus-4-8',
+        'claude-sonnet-5',
+        'claude-haiku-4-5',
+    ]),
     gemini: new Set([
         'gemini-3.5-flash',
         'gemini-3.1-pro-preview',
     ]),
     kimi: new Set([
+        'kimi-k3',
         'kimi-k2.7-code',
         'kimi-k2.7-code-highspeed',
         'kimi-k2.6',
@@ -382,7 +456,7 @@ function isProviderImageModelSupported(providerId, modelId, options = {}) {
     if (!supportedModelIds)
         return true;
 
-    return supportedModelIds.has(id) || Boolean(options.custom && providerId === 'openai-compatible');
+    return supportedModelIds.has(id) || Boolean(options.custom && isCustomProviderId(providerId));
 }
 
 const OPENAI_GPT_56_THINKING = {
@@ -413,7 +487,71 @@ const OPENAI_MODEL_METADATA = {
         thinking: OPENAI_GPT_56_THINKING,
     },
 };
+const ANTHROPIC_ADAPTIVE_THINKING = {
+    api: 'anthropic-adaptive',
+    levels: ['off', 'low', 'medium', 'high', 'xhigh', 'max'],
+    defaultLevel: 'high',
+    display: 'summarized',
+};
+const ANTHROPIC_ALWAYS_ON_ADAPTIVE_THINKING = {
+    ...ANTHROPIC_ADAPTIVE_THINKING,
+    levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    alwaysOn: true,
+};
+const ANTHROPIC_MODEL_METADATA = {
+    'claude-fable-5': {
+        id: 'claude-fable-5',
+        name: 'Claude Fable 5',
+        description: 'Anthropic\'s most capable model for long-running agents and demanding reasoning.',
+        contextWindowTokens: 1000000,
+        thinking: ANTHROPIC_ALWAYS_ON_ADAPTIVE_THINKING,
+    },
+    'claude-opus-4-8': {
+        id: 'claude-opus-4-8',
+        name: 'Claude Opus 4.8',
+        description: 'Advanced model for complex agentic coding and enterprise work.',
+        contextWindowTokens: 1000000,
+        thinking: ANTHROPIC_ADAPTIVE_THINKING,
+    },
+    'claude-sonnet-5': {
+        id: 'claude-sonnet-5',
+        name: 'Claude Sonnet 5',
+        description: 'Best balance of speed and intelligence for production workloads.',
+        contextWindowTokens: 1000000,
+        thinking: ANTHROPIC_ADAPTIVE_THINKING,
+    },
+    'claude-haiku-4-5': {
+        id: 'claude-haiku-4-5',
+        name: 'Claude Haiku 4.5',
+        description: 'Fastest Claude model with near-frontier intelligence.',
+        contextWindowTokens: 200000,
+        thinking: {
+            api: 'anthropic-budget',
+            levels: ['off', 'auto', 'low', 'medium', 'high'],
+            display: 'summarized',
+            budgets: {
+                auto: 2048,
+                low: 1024,
+                medium: 2048,
+                high: 3072,
+            },
+        },
+    },
+};
 const KIMI_MODEL_METADATA = {
+    'kimi-k3': {
+        id: 'kimi-k3',
+        name: 'Kimi K3',
+        description: 'Kimi flagship model for long-horizon coding, knowledge work, reasoning, and visual understanding. Context 1M.',
+        contextWindowTokens: 1000000,
+        thinking: {
+            api: 'kimi-k3-reasoning',
+            levels: ['max'],
+            defaultLevel: 'max',
+            alwaysOn: true,
+            maxOutputTokensParameter: 'max_completion_tokens',
+        },
+    },
     'kimi-k2.7-code': {
         id: 'kimi-k2.7-code',
         name: 'Kimi K2.7 Code',
@@ -522,6 +660,7 @@ const GROK_MODEL_METADATA = {
 };
 const PROVIDER_MODEL_METADATA = {
     openai: OPENAI_MODEL_METADATA,
+    anthropic: ANTHROPIC_MODEL_METADATA,
     kimi: KIMI_MODEL_METADATA,
     deepseek: DEEPSEEK_MODEL_METADATA,
     grok: GROK_MODEL_METADATA,
@@ -537,9 +676,10 @@ const PROVIDER_MODEL_CONTEXT_WINDOW_TOKENS = {
         'gpt-4.1': 1000000,
     },
     anthropic: {
+        'claude-fable-5': 1000000,
         'claude-opus-4-8': 1000000,
-        'claude-sonnet-4-6': 1000000,
-        'claude-haiku-4-5-20251001': 200000,
+        'claude-sonnet-5': 1000000,
+        'claude-haiku-4-5': 200000,
     },
     gemini: {
         'gemini-3.5-flash': 1048576,
@@ -789,42 +929,12 @@ export const DEFAULT_PROVIDER_CONFIGS = [
             tools: ['web_search'],
             maxUses: 5,
         },
-        defaultModelId: 'claude-sonnet-4-6',
-        thinking: {
-            api: 'anthropic-adaptive',
-            levels: ['off', 'auto', 'low', 'medium', 'high'],
-            display: 'summarized',
-        },
+        defaultModelId: 'claude-sonnet-5',
         models: [
-            {
-                id: 'claude-opus-4-8',
-                name: 'Claude Opus 4.8',
-                description: 'Anthropic model for complex reasoning and agentic coding.',
-                contextWindowTokens: 1000000,
-            },
-            {
-                id: 'claude-sonnet-4-6',
-                name: 'Claude Sonnet 4.6',
-                description: 'Fast balance of intelligence and speed.',
-                contextWindowTokens: 1000000,
-            },
-            {
-                id: 'claude-haiku-4-5-20251001',
-                name: 'Claude Haiku 4.5',
-                description: 'Fastest Claude model with near-frontier intelligence.',
-                contextWindowTokens: 200000,
-                thinking: {
-                    api: 'anthropic-budget',
-                    levels: ['off', 'auto', 'low', 'medium', 'high'],
-                    display: 'summarized',
-                    budgets: {
-                        auto: 2048,
-                        low: 1024,
-                        medium: 2048,
-                        high: 3072,
-                    },
-                },
-            },
+            { ...ANTHROPIC_MODEL_METADATA['claude-fable-5'] },
+            { ...ANTHROPIC_MODEL_METADATA['claude-opus-4-8'] },
+            { ...ANTHROPIC_MODEL_METADATA['claude-sonnet-5'] },
+            { ...ANTHROPIC_MODEL_METADATA['claude-haiku-4-5'] },
         ],
     },
     {
@@ -881,8 +991,9 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         apiKeyEnvVar: 'MOONSHOT_API_KEY',
         baseUrl: 'https://api.moonshot.ai/v1',
         chatPath: '/chat/completions',
-        defaultModelId: 'kimi-k2.7-code',
+        defaultModelId: 'kimi-k3',
         models: [
+            { ...KIMI_MODEL_METADATA['kimi-k3'] },
             { ...KIMI_MODEL_METADATA['kimi-k2.7-code'] },
             { ...KIMI_MODEL_METADATA['kimi-k2.7-code-highspeed'] },
             { ...KIMI_MODEL_METADATA['kimi-k2.6'] },
@@ -969,27 +1080,6 @@ export const DEFAULT_PROVIDER_CONFIGS = [
             { ...IMAGE_MODEL_METADATA.zai['glm-image'] },
         ],
     },
-    {
-        id: 'openai-compatible',
-        name: 'Custom API',
-        description: 'User-defined OpenAI-compatible chat completions API.',
-        themeColor: '#64748B',
-        implemented: true,
-        enabled: false,
-        customizable: true,
-        apiFormat: 'openai-chat-completions',
-        imageApiFormat: 'openai-images',
-        supportsImageModelDiscovery: false,
-        apiKeyRequired: true,
-        apiKeyConfigured: false,
-        apiKeyEnvVar: 'CUSCO_CUSTOM_API_KEY',
-        baseUrl: '',
-        chatPath: '/chat/completions',
-        defaultModelId: '',
-        defaultImageModelId: '',
-        models: [],
-        imageModels: [],
-    },
 ];
 
 export class ProviderConfigStore {
@@ -1015,8 +1105,8 @@ export class ProviderConfigStore {
             customImageModels: (config.customImageModels ?? []).map((model) => ({ ...model })),
             discoveredImageModels: (config.discoveredImageModels ?? []).map((model) => ({ ...model })),
         }));
-        this.refreshApiKeyStatus();
         this._loadPersistentState();
+        this.refreshApiKeyStatus();
     }
 
     refreshApiKeyStatus() {
@@ -1167,7 +1257,70 @@ export class ProviderConfigStore {
         return this.getApiKeyStatus(provider.id);
     }
 
-    setCustomProviderConfig(providerId, { baseUrl, models }) {
+    addCustomProvider({ name, baseUrl, models = [], apiKey = '' } = {}) {
+        let providerId;
+
+        do {
+            providerId = `${CUSTOM_PROVIDER_ID_PREFIX}${GLib.uuid_string_random()}`;
+        } while (this.getProvider(providerId));
+
+        const provider = createCustomProviderConfig({
+            id: providerId,
+            name,
+            baseUrl,
+            models,
+        });
+        const normalizedApiKey = String(apiKey ?? '').trim();
+
+        if (normalizedApiKey)
+            this._apiKeyStore.store(provider.id, provider.name, normalizedApiKey);
+
+        this._configs.push(provider);
+        this.refreshApiKeyStatus();
+        this._persistCustomProviders();
+        this._persistDefaultModels();
+        return this.listProviders().find((item) => item.id === provider.id);
+    }
+
+    removeCustomProvider(providerId) {
+        const providerIndex = this._configs.findIndex((provider) => provider.id === providerId);
+        const provider = this._configs[providerIndex];
+
+        if (!provider)
+            throw new Error(`Provider does not exist: ${providerId}`);
+
+        if (!provider.customizable)
+            throw new Error(`Provider is not customizable: ${providerId}`);
+
+        this._apiKeyStore.clear(provider.id);
+        this._configs.splice(providerIndex, 1);
+        this._apiKeyStatuses.delete(provider.id);
+
+        if (this._activeProviderId === provider.id) {
+            this._activeProviderId = '';
+            this._activeModelId = '';
+            this._settings?.set_string('active-provider', '');
+            this._settings?.set_string('active-model', '');
+        }
+
+        if (this._defaultImageProviderId === provider.id) {
+            this._defaultImageProviderId = '';
+            this._defaultImageModelId = '';
+            this._persistDefaultImageSelection();
+        }
+
+        this._persistCustomProviders();
+        this._persistEnabledProviders();
+        this._persistDefaultModels();
+        this._persistDefaultImageModels();
+        this._persistDiscoveredModels();
+        this._persistCustomImageModels();
+        this._persistDiscoveredImageModels();
+        flushSettings();
+        return true;
+    }
+
+    setCustomProviderConfig(providerId, { name, baseUrl, models } = {}) {
         const provider = this.getProvider(providerId);
 
         if (!provider)
@@ -1176,14 +1329,23 @@ export class ProviderConfigStore {
         if (!provider.customizable)
             throw new Error(`Provider is not customizable: ${providerId}`);
 
-        provider.baseUrl = String(baseUrl ?? '').trim();
-        provider.models = normalizeCustomModels(models);
+        if (name !== undefined)
+            provider.name = normalizeCustomProviderName(name);
+
+        if (baseUrl !== undefined)
+            provider.baseUrl = String(baseUrl ?? '').trim();
+
+        if (models !== undefined) {
+            const existingModels = new Map(provider.models.map((model) => [model.id, model]));
+            provider.models = normalizeCustomModels(models).map((model) => ({
+                ...(existingModels.get(model.id) ?? model),
+            }));
+        }
 
         if (!provider.models.some((model) => model.id === provider.defaultModelId))
             provider.defaultModelId = provider.models[0]?.id ?? '';
 
-        this._settings?.set_string('custom-openai-compatible-base-url', provider.baseUrl);
-        this._settings?.set_strv('custom-openai-compatible-models', provider.models.map((model) => model.id));
+        this._persistCustomProviders();
         this._persistDiscoveredModels();
         this._persistDefaultModels();
 
@@ -1231,7 +1393,7 @@ export class ProviderConfigStore {
         if (!provider.apiFormat)
             throw new Error(`Provider does not support model discovery: ${provider.name}`);
 
-        if (!this._isProviderConfigured(provider))
+        if (!this._isProviderConfiguredForModelDiscovery(provider))
             throw new Error(`Provider is not configured for model discovery: ${provider.name}`);
 
         const providerConfig = {
@@ -1241,10 +1403,16 @@ export class ProviderConfigStore {
         const discoverer = options.discoverer ?? ((config, discoverOptions) => (
             this._discoverModelsForProvider(config, discoverOptions)
         ));
-        const models = normalizeStoredModels(await discoverer(providerConfig, {
+        const discoveredModels = await discoverer(providerConfig, {
             cancellable: options.cancellable ?? null,
             timeoutSeconds: options.timeoutSeconds,
-        }), provider.id);
+        });
+        const models = normalizeStoredModels(
+            PROVIDER_SUPPORTED_MODEL_IDS[provider.id]
+                ? [...provider.models, ...discoveredModels]
+                : discoveredModels,
+            provider.id,
+        );
 
         if (models.length === 0)
             throw new Error(`${provider.name} did not return any models`);
@@ -1255,7 +1423,7 @@ export class ProviderConfigStore {
             provider.defaultModelId = provider.models[0].id;
 
         if (provider.customizable)
-            this._settings?.set_strv('custom-openai-compatible-models', provider.models.map((model) => model.id));
+            this._persistCustomProviders();
 
         this._persistDiscoveredModels();
         this._persistDefaultModels();
@@ -1613,6 +1781,13 @@ export class ProviderConfigStore {
         return Boolean(provider.baseUrl) && provider.models.length > 0;
     }
 
+    _isProviderConfiguredForModelDiscovery(provider) {
+        if (!provider.customizable)
+            return true;
+
+        return Boolean(provider.baseUrl);
+    }
+
     _isProviderConfiguredForImageGeneration(provider) {
         if (!provider.customizable)
             return Boolean(provider.imageApiFormat);
@@ -1703,7 +1878,7 @@ export class ProviderConfigStore {
 
         switch (providerConfig.imageApiFormat) {
         case 'openai-images':
-            discoveredModels = providerConfig.id === 'openai-compatible'
+            discoveredModels = providerConfig.customizable
                 ? []
                 : await discoverOpenAiImageModels(providerConfig, options);
             break;
@@ -1791,7 +1966,12 @@ export class ProviderConfigStore {
             if (!provider)
                 continue;
 
-            const normalizedModels = normalizeStoredModels(models, providerId);
+            const normalizedModels = normalizeStoredModels(
+                PROVIDER_SUPPORTED_MODEL_IDS[providerId]
+                    ? [...provider.models, ...models]
+                    : models,
+                providerId,
+            );
 
             if (normalizedModels.length > 0)
                 provider.models = normalizedModels;
@@ -1837,16 +2017,57 @@ export class ProviderConfigStore {
     }
 
     _loadCustomProviderSettings() {
-        const provider = this.getProvider('openai-compatible');
+        const definitions = parseCustomProviderSettings(
+            this._settings.get_string('custom-openai-compatible-providers'),
+        );
+        let loadedProviderCount = 0;
 
-        if (!provider?.customizable)
+        for (const definition of definitions) {
+            const providerId = String(definition?.id ?? '').trim();
+
+            if (!isCustomProviderId(providerId) || this.getProvider(providerId))
+                continue;
+
+            try {
+                this._configs.push(createCustomProviderConfig(definition));
+                loadedProviderCount++;
+            } catch (error) {
+                logError(error, 'Failed to load custom provider');
+            }
+        }
+
+        if (loadedProviderCount > 0)
             return;
 
-        provider.baseUrl = this._settings.get_string('custom-openai-compatible-base-url').trim();
-        provider.models = normalizeCustomModels(this._settings.get_strv('custom-openai-compatible-models'));
+        const legacyBaseUrl = this._settings.get_string('custom-openai-compatible-base-url').trim();
+        const legacyModels = this._settings.get_strv('custom-openai-compatible-models');
 
-        if (!provider.models.some((model) => model.id === provider.defaultModelId))
-            provider.defaultModelId = provider.models[0]?.id ?? '';
+        if ((!legacyBaseUrl && legacyModels.length === 0) || this.getProvider(LEGACY_CUSTOM_PROVIDER_ID))
+            return;
+
+        this._configs.push(createCustomProviderConfig({
+            id: LEGACY_CUSTOM_PROVIDER_ID,
+            name: 'Custom API',
+            baseUrl: legacyBaseUrl,
+            models: legacyModels,
+        }));
+        this._persistCustomProviders();
+    }
+
+    _persistCustomProviders() {
+        const customProviders = this._configs
+            .filter((provider) => provider.customizable && isCustomProviderId(provider.id))
+            .map((provider) => ({
+                id: provider.id,
+                name: provider.name,
+                baseUrl: provider.baseUrl,
+                models: provider.models.map((model) => model.id),
+            }));
+
+        this._settings?.set_string('custom-openai-compatible-providers', JSON.stringify(customProviders));
+        this._settings?.set_string('custom-openai-compatible-base-url', '');
+        this._settings?.set_strv('custom-openai-compatible-models', []);
+        flushSettings();
     }
 
     _persistEnabledProviders() {
@@ -1897,6 +2118,9 @@ export class ProviderConfigStore {
                 id: model.id,
                 name: model.name,
                 description: model.description,
+                ...(model.contextWindowTokens === undefined
+                    ? {}
+                    : { contextWindowTokens: model.contextWindowTokens }),
                 ...(model.thinking === undefined ? {} : { thinking: model.thinking }),
             }));
         }

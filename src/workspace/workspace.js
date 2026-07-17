@@ -176,6 +176,30 @@ export class WorkspaceManager {
         return prompt;
     }
 
+    updatePrompt(promptId, updates = {}) {
+        const index = this._prompts.findIndex((prompt) => prompt.id === promptId);
+
+        if (index < 0)
+            throw new Error(`Prompt does not exist: ${promptId}`);
+
+        const existing = this._prompts[index];
+        const prompt = {
+            ...existing,
+            ...updates,
+            id: existing.id,
+            createdAt: existing.createdAt,
+            updatedAt: now(),
+        };
+
+        prompt.title = String(prompt.title ?? '').trim() || 'Untitled Prompt';
+        prompt.content = String(prompt.content ?? '');
+        prompt.tags = normalizeList(prompt.tags);
+
+        this._prompts[index] = prompt;
+        this._persist();
+        return { ...prompt };
+    }
+
     searchPrompts(query) {
         const normalizedQuery = String(query ?? '').trim().toLowerCase();
         return this._prompts.filter((prompt) => !normalizedQuery

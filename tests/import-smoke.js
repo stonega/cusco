@@ -34,6 +34,7 @@ import { MemoryApiKeyStore, SecretServiceApiKeyStore } from '../src/secrets/apiK
 import { ConversationSearchIndex, installSearchProvider } from '../src/searchProvider.js';
 import { createAppInfoSettingsPage } from '../src/settings/appInfoSettings.js';
 import { AppSettingsStore, createApplicationSettingsPage } from '../src/settings/appSettings.js';
+import { createArchivedChatsWindow, presentArchivedChatsWindow } from '../src/settings/archivedChats.js';
 import { createComputerUseSettingsGroup } from '../src/settings/computerUseSettings.js';
 import { createMemorySettingsPage } from '../src/settings/memorySettings.js';
 import { createMcpSettingsPage } from '../src/settings/mcpSettings.js';
@@ -53,6 +54,11 @@ import { ToolManager, calculateExpression, parseToolRequest } from '../src/tools
 import { exportConversation } from '../src/workspace/exports.js';
 import { extractPromptVariables, renderPromptTemplate } from '../src/workspace/promptVariables.js';
 import { WorkspaceManager } from '../src/workspace/workspace.js';
+import {
+    composerHintPresentation,
+    formatConversationUpdatedAt,
+    shouldSendLongResponseNotification,
+} from '../src/window.js';
 
 if (APP_ID !== 'io.github.stonega.Cusco')
     throw new Error(`Unexpected application id: ${APP_ID}`);
@@ -74,6 +80,47 @@ if (APP_VERSION !== versionMatch[1])
 
 if (typeof CuscoApplication !== 'function')
     throw new Error('CuscoApplication did not import as a class');
+
+const fakeWindow = {
+    // GJS exposes this property on the instance, shadowing GTK's method name.
+    is_active: true,
+    get_property(name) {
+        if (name !== 'is-active')
+            throw new Error(`Unexpected window property: ${name}`);
+
+        return this.is_active;
+    },
+};
+
+if (shouldSendLongResponseNotification(fakeWindow))
+    throw new Error('Active windows should not send long-response notifications');
+
+fakeWindow.is_active = false;
+
+if (!shouldSendLongResponseNotification(fakeWindow))
+    throw new Error('Inactive windows should send long-response notifications');
+
+const computerUseHint = composerHintPresentation(false, true, true);
+if (!computerUseHint.markup?.includes('foreground="#42e6f5"')
+    || !computerUseHint.markup.includes('Esc to quit')) {
+    throw new Error('Active computer use did not expose the cyan Escape hint');
+}
+
+const normalBusyHint = composerHintPresentation(true, true, false);
+if (normalBusyHint.label !== 'Enter queues · Esc to stop' || normalBusyHint.markup)
+    throw new Error('Normal busy composer hint changed unexpectedly');
+
+const timestampNow = '2026-07-17T12:00:00+08:00';
+
+if (formatConversationUpdatedAt('2026-07-17T11:58:00+08:00', timestampNow) !== '2 mins ago')
+    throw new Error('A chat updated minutes ago did not use a relative subtitle');
+
+if (formatConversationUpdatedAt('2026-07-17T10:00:00+08:00', timestampNow) !== '2 hours ago')
+    throw new Error('A chat updated hours ago did not use a relative subtitle');
+
+const olderChatTimestamp = formatConversationUpdatedAt('2026-07-16T23:59:00+08:00', timestampNow);
+if (!olderChatTimestamp || olderChatTimestamp.includes('ago'))
+    throw new Error('A chat updated before today did not use a calendar date subtitle');
 
 if (typeof ProviderConfigStore !== 'function')
     throw new Error('ProviderConfigStore did not import as a class');
@@ -145,6 +192,9 @@ if (typeof ConversationSearchIndex !== 'function' || typeof installSearchProvide
 
 if (typeof createApplicationSettingsPage !== 'function')
     throw new Error('createApplicationSettingsPage did not import as a function');
+
+if (typeof createArchivedChatsWindow !== 'function' || typeof presentArchivedChatsWindow !== 'function')
+    throw new Error('Archived chats window helpers did not import as functions');
 
 if (typeof createComputerUseSettingsGroup !== 'function'
     || typeof ComputerUseService !== 'function'

@@ -12,6 +12,8 @@ import { normalizeTokenUsage } from './usage.js';
 
 const DISPLAY_STREAM_DELAY_MS = 10;
 const DEFAULT_REQUEST_TIMEOUT_SECONDS = 45;
+const MAX_NETWORK_RECONNECTS = 5;
+const NETWORK_RECONNECT_DELAY_MS = 250;
 const CONTINUATION_PROMPT = [
     'Continue exactly where your previous assistant message stopped.',
     'Do not repeat completed text.',
@@ -77,6 +79,31 @@ function createUserVisibleError(message, userMessage = message) {
 
 function isGioError(error, code) {
     return typeof error?.matches === 'function' && error.matches(Gio.IOErrorEnum, code);
+}
+
+export function isTransientTlsError(error) {
+    if (typeof error?.matches !== 'function')
+        return false;
+
+    return error.matches(Gio.TlsError, Gio.TlsError.HANDSHAKE)
+        || error.matches(Gio.TlsError, Gio.TlsError.EOF);
+}
+
+const RETRYABLE_NETWORK_IO_ERRORS = [
+    Gio.IOErrorEnum.TIMED_OUT,
+    Gio.IOErrorEnum.HOST_NOT_FOUND,
+    Gio.IOErrorEnum.HOST_UNREACHABLE,
+    Gio.IOErrorEnum.NETWORK_UNREACHABLE,
+    Gio.IOErrorEnum.CONNECTION_REFUSED,
+    Gio.IOErrorEnum.CONNECTION_CLOSED,
+    Gio.IOErrorEnum.NOT_CONNECTED,
+    Gio.IOErrorEnum.BROKEN_PIPE,
+    Gio.IOErrorEnum.PROXY_FAILED,
+];
+
+export function isNetworkError(error) {
+    return isTransientTlsError(error)
+        || RETRYABLE_NETWORK_IO_ERRORS.some((code) => isGioError(error, code));
 }
 
 function isCancelled(cancellable) {
@@ -182,8 +209,55 @@ function providerMessages(messages) {
             return true;
         }
 
+        if (message.role === 'tool')
+            return hasUserMessage;
+
         return hasUserMessage && message.role === 'assistant';
     });
+}
+
+function messageToolCalls(message) {
+    return Array.isArray(message?.toolCalls)
+        ? message.toolCalls.filter(call => String(call?.name ?? '').trim())
+        : [];
+}
+
+function toolArguments(input) {
+    const source = String(input ?? '').trim();
+
+    if (!source)
+        return '{}';
+
+    try {
+        JSON.parse(source);
+        return source;
+    } catch (_error) {
+        return JSON.stringify({ input: source });
+    }
+}
+
+function toolInputObject(input) {
+    try {
+        const parsed = JSON.parse(toolArguments(input));
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? parsed
+            : { input: parsed };
+    } catch (_error) {
+        return { input: String(input ?? '') };
+    }
+}
+
+function toolCallId(call, index = 0) {
+    return String(call?.id ?? '').trim() || `cusco_tool_call_${index + 1}`;
+}
+
+function toolResultImageMessage(message, label) {
+    return {
+        ...message,
+        role: 'user',
+        content: `Post-action screenshot returned by ${label}.`,
+        toolCalls: [],
+    };
 }
 
 function normalizeUrl(baseUrl, path) {
@@ -230,6 +304,19 @@ function sendAndRead(session, message, cancellable) {
     });
 }
 
+async function sendRequest(url, timeoutSeconds, cancellable, createMessage) {
+    const session = createSession(url, timeoutSeconds);
+    const message = createMessage();
+
+    try {
+        const bytes = await sendAndRead(session, message, cancellable);
+        return { bytes, message };
+    } catch (error) {
+        error.providerResponseStarted = responseStatusCode(message) > 0;
+        throw error;
+    }
+}
+
 function responseStatusCode(message) {
     const statusCode = Number(message.status_code);
 
@@ -254,25 +341,29 @@ async function postJson(url, headers, body, options = {}) {
         providerName = 'Provider',
         timeoutSeconds = DEFAULT_REQUEST_TIMEOUT_SECONDS,
     } = options;
-    const session = createSession(url, timeoutSeconds);
-    const message = Soup.Message.new('POST', url);
-
-    message.request_headers.append('Content-Type', 'application/json');
-
-    for (const [name, value] of Object.entries(headers))
-        message.request_headers.append(name, value);
-
-    message.set_request_body_from_bytes('application/json', encodeJsonBody(body));
-
     let bytes;
+    let message;
 
     try {
-        bytes = await sendAndRead(session, message, cancellable);
+        ({ bytes, message } = await sendRequest(url, timeoutSeconds, cancellable, () => {
+            const request = Soup.Message.new('POST', url);
+            request.request_headers.append('Content-Type', 'application/json');
+
+            for (const [name, value] of Object.entries(headers))
+                request.request_headers.append(name, value);
+
+            request.set_request_body_from_bytes('application/json', encodeJsonBody(body));
+            return request;
+        }));
     } catch (error) {
         if (isGioError(error, Gio.IOErrorEnum.CANCELLED))
             error.userMessage = `${providerName} request was cancelled.`;
         else if (isGioError(error, Gio.IOErrorEnum.TIMED_OUT))
             error.userMessage = `${providerName} did not respond within ${timeoutSeconds} seconds.`;
+        else if (isTransientTlsError(error))
+            error.userMessage = `${providerName} could not establish a secure connection. Try again.`;
+        else if (isNetworkError(error))
+            error.userMessage = `${providerName} could not connect. Check your network and try again.`;
 
         throw error;
     }
@@ -302,21 +393,25 @@ async function getJson(url, headers, options = {}) {
         providerName = 'Provider',
         timeoutSeconds = DEFAULT_REQUEST_TIMEOUT_SECONDS,
     } = options;
-    const session = createSession(url, timeoutSeconds);
-    const message = Soup.Message.new('GET', url);
-
-    for (const [name, value] of Object.entries(headers))
-        message.request_headers.append(name, value);
-
     let bytes;
+    let message;
 
     try {
-        bytes = await sendAndRead(session, message, cancellable);
+        ({ bytes, message } = await sendRequest(url, timeoutSeconds, cancellable, () => {
+            const request = Soup.Message.new('GET', url);
+
+            for (const [name, value] of Object.entries(headers))
+                request.request_headers.append(name, value);
+
+            return request;
+        }));
     } catch (error) {
         if (isGioError(error, Gio.IOErrorEnum.CANCELLED))
             error.userMessage = `${providerName} model discovery was cancelled.`;
         else if (isGioError(error, Gio.IOErrorEnum.TIMED_OUT))
             error.userMessage = `${providerName} did not return models within ${timeoutSeconds} seconds.`;
+        else if (isTransientTlsError(error))
+            error.userMessage = `${providerName} could not establish a secure connection. Try again.`;
 
         throw error;
     }
@@ -367,11 +462,18 @@ function normalizeProviderResponse(response) {
         usage: normalizeTokenUsage(response.usage),
         finishReason: String(response.finishReason ?? ''),
         toolCalls: Array.isArray(response.toolCalls)
-            ? response.toolCalls.map((toolCall) => ({
-                id: String(toolCall?.id ?? ''),
-                name: String(toolCall?.name ?? '').trim(),
-                input: String(toolCall?.input ?? ''),
-            })).filter((toolCall) => toolCall.name)
+            ? response.toolCalls.map((toolCall) => {
+                const thoughtSignature = toolCall?.thoughtSignature ?? toolCall?.thought_signature;
+
+                return {
+                    id: String(toolCall?.id ?? ''),
+                    name: String(toolCall?.name ?? '').trim(),
+                    input: String(toolCall?.input ?? ''),
+                    ...(typeof thoughtSignature === 'string' && thoughtSignature
+                        ? { thoughtSignature }
+                        : {}),
+                };
+            }).filter((toolCall) => toolCall.name)
             : [],
         serverToolResults: Array.isArray(response.serverToolResults)
             ? response.serverToolResults.map((result) => ({
@@ -1041,13 +1143,24 @@ export function extractAnthropicToolCalls(response) {
 
 export function extractGeminiToolCalls(response) {
     return (response?.candidates?.[0]?.content?.parts ?? [])
-        .map((part) => part.functionCall ?? part.function_call ?? null)
+        .map((part) => {
+            const call = part.functionCall ?? part.function_call ?? null;
+
+            if (!call)
+                return null;
+
+            const thoughtSignature = part.thoughtSignature ?? part.thought_signature;
+
+            return {
+                id: String(call.id ?? ''),
+                name: String(call.name ?? '').trim(),
+                input: toolInputFromValue(call.args ?? call.arguments ?? {}),
+                ...(typeof thoughtSignature === 'string' && thoughtSignature
+                    ? { thoughtSignature }
+                    : {}),
+            };
+        })
         .filter(Boolean)
-        .map((call) => ({
-            id: '',
-            name: String(call.name ?? '').trim(),
-            input: toolInputFromValue(call.args ?? call.arguments ?? {}),
-        }))
         .filter((toolCall) => toolCall.name);
 }
 
@@ -1056,19 +1169,110 @@ function providerSupportsImageAttachments(provider) {
 }
 
 export function openAiMessages(messages) {
-    return providerMessages(messages).map((message) => ({
-        role: message.role === 'system' ? 'developer' : message.role,
-        content: openAiContent(message, { responses: true }),
-    }));
+    const output = [];
+
+    for (const message of providerMessages(messages)) {
+        const toolCalls = messageToolCalls(message);
+
+        if (message.role === 'assistant' && toolCalls.length > 0) {
+            const content = messageContent(message);
+
+            if (content) {
+                output.push({
+                    role: 'assistant',
+                    content,
+                });
+            }
+
+            toolCalls.forEach((call, index) => {
+                output.push({
+                    type: 'function_call',
+                    call_id: toolCallId(call, index),
+                    name: call.name,
+                    arguments: toolArguments(call.input),
+                });
+            });
+            continue;
+        }
+
+        if (message.role === 'tool') {
+            output.push({
+                type: 'function_call_output',
+                call_id: String(message.toolCallId ?? '').trim() || 'cusco_tool_call_1',
+                output: messageContent(message),
+            });
+
+            if (imageAttachments(message).length > 0) {
+                output.push({
+                    role: 'user',
+                    content: openAiContent(
+                        toolResultImageMessage(message, message.toolName ?? 'computer tool'),
+                        { responses: true },
+                    ),
+                });
+            }
+            continue;
+        }
+
+        output.push({
+            role: message.role === 'system' ? 'developer' : message.role,
+            content: openAiContent(message, { responses: true }),
+        });
+    }
+
+    return output;
 }
 
 export function openAiCompatibleMessages(messages, options = {}) {
     const includeImages = providerSupportsImageAttachments(options.provider ?? options.config);
+    const output = [];
 
-    return providerMessages(messages).map((message) => ({
-        role: message.role,
-        content: openAiContent(message, { includeImages }),
-    }));
+    for (const message of providerMessages(messages)) {
+        const toolCalls = messageToolCalls(message);
+
+        if (message.role === 'assistant' && toolCalls.length > 0) {
+            output.push({
+                role: 'assistant',
+                content: messageContent(message) || null,
+                tool_calls: toolCalls.map((call, index) => ({
+                    id: toolCallId(call, index),
+                    type: 'function',
+                    function: {
+                        name: call.name,
+                        arguments: toolArguments(call.input),
+                    },
+                })),
+            });
+            continue;
+        }
+
+        if (message.role === 'tool') {
+            output.push({
+                role: 'tool',
+                tool_call_id: String(message.toolCallId ?? '').trim() || 'cusco_tool_call_1',
+                name: String(message.toolName ?? '').trim() || undefined,
+                content: messageContent(message),
+            });
+
+            if (includeImages && imageAttachments(message).length > 0) {
+                output.push({
+                    role: 'user',
+                    content: openAiContent(
+                        toolResultImageMessage(message, message.toolName ?? 'computer tool'),
+                        { includeImages: true },
+                    ),
+                });
+            }
+            continue;
+        }
+
+        output.push({
+            role: message.role,
+            content: openAiContent(message, { includeImages }),
+        });
+    }
+
+    return output;
 }
 
 export function anthropicPayloadMessages(messages) {
@@ -1078,11 +1282,46 @@ export function anthropicPayloadMessages(messages) {
         .map(messageContent)
         .join('\n\n');
     const conversationMessages = normalizedMessages
-        .filter((message) => message.role === 'user' || message.role === 'assistant')
-        .map((message) => ({
-            role: message.role,
-            content: anthropicContent(message),
-        }));
+        .filter((message) => (
+            message.role === 'user'
+            || message.role === 'assistant'
+            || message.role === 'tool'
+        ))
+        .map((message) => {
+            const toolCalls = messageToolCalls(message);
+
+            if (message.role === 'assistant' && toolCalls.length > 0) {
+                const text = messageContent(message);
+                return {
+                    role: 'assistant',
+                    content: [
+                        ...(text ? [{ type: 'text', text }] : []),
+                        ...toolCalls.map((call, index) => ({
+                            type: 'tool_use',
+                            id: toolCallId(call, index),
+                            name: call.name,
+                            input: toolInputObject(call.input),
+                        })),
+                    ],
+                };
+            }
+
+            if (message.role === 'tool') {
+                return {
+                    role: 'user',
+                    content: [{
+                        type: 'tool_result',
+                        tool_use_id: String(message.toolCallId ?? '').trim() || 'cusco_tool_call_1',
+                        content: anthropicContent(message),
+                    }],
+                };
+            }
+
+            return {
+                role: message.role,
+                content: anthropicContent(message),
+            };
+        });
 
     return { system, messages: conversationMessages };
 }
@@ -1094,7 +1333,11 @@ export function geminiPayload(messages) {
         .map(messageContent)
         .join('\n\n');
     const contents = normalizedMessages
-        .filter((message) => message.role === 'user' || message.role === 'assistant')
+        .filter((message) => (
+            message.role === 'user'
+            || message.role === 'assistant'
+            || message.role === 'tool'
+        ))
         .map((message) => ({
             role: message.role === 'assistant' ? 'model' : 'user',
             parts: geminiParts(message),
@@ -1169,8 +1412,49 @@ function geminiParts(message) {
     const parts = [];
     const text = messageContent(message);
 
+    if (message.role === 'tool') {
+        const id = String(message.toolCallId ?? '');
+        parts.push({
+            functionResponse: {
+                name: String(message.toolName ?? '').trim() || 'unknown_tool',
+                response: {
+                    output: text,
+                },
+                ...(id ? { id } : {}),
+            },
+        });
+
+        for (const image of encodedImageAttachments(message)) {
+            parts.push({
+                inline_data: {
+                    mime_type: image.mimeType,
+                    data: image.data,
+                },
+            });
+        }
+
+        return parts;
+    }
+
     if (text)
         parts.push({ text });
+
+    for (const call of messageToolCalls(message)) {
+        const id = String(call.id ?? '');
+        const thoughtSignature = call.thoughtSignature ?? call.thought_signature;
+        const part = {
+            functionCall: {
+                name: call.name,
+                args: toolInputObject(call.input),
+                ...(id ? { id } : {}),
+            },
+        };
+
+        if (typeof thoughtSignature === 'string' && thoughtSignature)
+            part.thoughtSignature = thoughtSignature;
+
+        parts.push(part);
+    }
 
     for (const image of encodedImageAttachments(message)) {
         parts.push({
@@ -1229,16 +1513,18 @@ function buildAnthropicThinkingConfig(config, model, level) {
         return null;
 
     if (thinking.level === 'off')
-        return { type: 'disabled' };
+        return { thinking: { type: 'disabled' } };
 
     if (thinking.api === 'anthropic-adaptive') {
         const request = {
-            type: 'adaptive',
-            display: thinking.display ?? 'summarized',
+            thinking: {
+                type: 'adaptive',
+                display: thinking.display ?? 'summarized',
+            },
         };
 
         if (thinking.level !== 'auto')
-            request.effort = thinking.level;
+            request.outputConfig = { effort: thinking.level };
 
         return request;
     }
@@ -1248,9 +1534,11 @@ function buildAnthropicThinkingConfig(config, model, level) {
         const budget = budgets[thinking.level] ?? budgets.medium ?? ANTHROPIC_DEFAULT_THINKING_BUDGETS.medium;
 
         return {
-            type: 'enabled',
-            budget_tokens: budget,
-            display: thinking.display ?? 'summarized',
+            thinking: {
+                type: 'enabled',
+                budget_tokens: budget,
+                display: thinking.display ?? 'summarized',
+            },
         };
     }
 
@@ -1295,6 +1583,9 @@ function buildOpenAiCompatibleThinkingConfig(config, model, level) {
             },
         };
     }
+
+    if (thinking.api === 'kimi-k3-reasoning')
+        return { reasoning_effort: thinking.level };
 
     if (thinking.api === 'deepseek-thinking') {
         if (thinking.level === 'off')
@@ -1368,13 +1659,17 @@ export function buildOpenAiResponsesBody(messages, modelId, options = {}) {
 }
 
 export function buildOpenAiCompatibleChatBody(messages, modelId, options = {}) {
+    const provider = options.provider ?? options.config;
+    const thinkingCapability = getThinkingCapability(provider, options.model);
+    const maxOutputTokensParameter = thinkingCapability?.maxOutputTokensParameter === 'max_completion_tokens'
+        ? 'max_completion_tokens'
+        : 'max_tokens';
     const body = {
         model: modelId,
         messages: openAiCompatibleMessages(messages, options),
-        max_tokens: normalizeMaxOutputTokens(options.maxOutputTokens),
         stream: false,
     };
-    const provider = options.provider ?? options.config;
+    body[maxOutputTokensParameter] = normalizeMaxOutputTokens(options.maxOutputTokens);
     const thinking = buildOpenAiCompatibleThinkingConfig(provider, options.model, options.thinkingLevel);
     const nativeSearch = nativeSearchConfiguration(options, 'zai-chat-completions');
     const clientTools = clientToolsForSearchConfiguration(options.tools, nativeSearch);
@@ -1396,7 +1691,11 @@ export function buildOpenAiCompatibleChatBody(messages, modelId, options = {}) {
 
 export function buildAnthropicMessagesBody(messages, modelId, options = {}) {
     const { system, messages: conversationMessages } = anthropicPayloadMessages(messages);
-    const thinking = buildAnthropicThinkingConfig(options.provider ?? options.config, options.model, options.thinkingLevel);
+    const thinkingConfig = buildAnthropicThinkingConfig(
+        options.provider ?? options.config,
+        options.model,
+        options.thinkingLevel,
+    );
     const body = {
         model: modelId,
         max_tokens: normalizeMaxOutputTokens(options.maxOutputTokens),
@@ -1406,11 +1705,14 @@ export function buildAnthropicMessagesBody(messages, modelId, options = {}) {
     if (system)
         body.system = system;
 
-    if (thinking) {
-        body.thinking = thinking;
+    if (thinkingConfig) {
+        body.thinking = thinkingConfig.thinking;
 
-        if (Number.isFinite(thinking.budget_tokens) && thinking.budget_tokens >= body.max_tokens)
-            body.max_tokens = thinking.budget_tokens + 1024;
+        if (thinkingConfig.outputConfig)
+            body.output_config = thinkingConfig.outputConfig;
+
+        if (Number.isFinite(body.thinking.budget_tokens) && body.thinking.budget_tokens >= body.max_tokens)
+            body.max_tokens = body.thinking.budget_tokens + 1024;
     }
 
     const nativeSearch = nativeSearchConfiguration(options, 'anthropic-messages');
@@ -1759,11 +2061,36 @@ class RemoteProvider extends ChatProvider {
         const maxContinuationTurns = normalizeMaxContinuationTurns(options.maxContinuationTurns);
 
         for (let turn = 0; turn <= maxContinuationTurns; turn++) {
-            const response = normalizeProviderResponse(await this._complete(
-                requestMessages,
-                options.model?.id ?? this._config.defaultModelId,
-                options,
-            ));
+            let response;
+
+            for (let reconnectAttempt = 0; ; ) {
+                try {
+                    response = normalizeProviderResponse(await this._complete(
+                        requestMessages,
+                        options.model?.id ?? this._config.defaultModelId,
+                        options,
+                    ));
+                    break;
+                } catch (error) {
+                    const shouldReconnect = reconnectAttempt < MAX_NETWORK_RECONNECTS
+                        && !isCancelled(options.cancellable)
+                        && !error?.providerResponseStarted
+                        && isNetworkError(error);
+
+                    if (!shouldReconnect)
+                        throw error;
+
+                    reconnectAttempt++;
+                    yield {
+                        type: 'status',
+                        text: `Reconnecting ${reconnectAttempt}/${MAX_NETWORK_RECONNECTS}\u2026`,
+                        status: 'reconnecting',
+                        attempt: reconnectAttempt,
+                        maxAttempts: MAX_NETWORK_RECONNECTS,
+                    };
+                    await delay(NETWORK_RECONNECT_DELAY_MS);
+                }
+            }
 
             if (!response.text
                 && !response.reasoning

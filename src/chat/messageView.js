@@ -32,6 +32,7 @@ const LANGUAGE_ALIASES = {
     yml: 'yaml',
 };
 const DEFAULT_CODE_MIN_WIDTH = 360;
+const UTF8_ENCODER = new TextEncoder();
 
 function tableAlignmentXalign(alignment) {
     if (alignment === 'right')
@@ -53,6 +54,81 @@ function clearBox(box) {
     }
 }
 
+function pangoColorComponents(value) {
+    const color = new Gdk.RGBA();
+
+    if (!color.parse(String(value ?? '')))
+        return null;
+
+    return [color.red, color.green, color.blue]
+        .map((component) => Math.round(component * 65535));
+}
+
+function insertReferenceAttribute(attributes, attribute, startIndex, endIndex) {
+    if (!attribute)
+        return;
+
+    attribute.start_index = startIndex;
+    attribute.end_index = endIndex;
+    attributes.insert(attribute);
+}
+
+export function applyReferenceTextStyles(label, references = [], styles = {}) {
+    const text = String(label?.get_text?.() ?? '');
+    const attributes = new Pango.AttrList();
+    const seenReferences = new Set();
+    let hasAttributes = false;
+
+    for (const reference of Array.isArray(references) ? references : []) {
+        const kind = String(reference?.kind ?? '');
+        const token = String(reference?.insertText ?? '');
+        const style = styles?.[kind];
+        const referenceKey = `${kind}\u0000${token}`;
+
+        if (!token || !style || seenReferences.has(referenceKey))
+            continue;
+
+        seenReferences.add(referenceKey);
+        const foreground = pangoColorComponents(style.foreground);
+        const background = pangoColorComponents(style.background);
+        let index = text.indexOf(token);
+
+        while (index >= 0) {
+            const startIndex = UTF8_ENCODER.encode(text.slice(0, index)).length;
+            const endIndex = startIndex + UTF8_ENCODER.encode(token).length;
+
+            if (foreground) {
+                insertReferenceAttribute(
+                    attributes,
+                    Pango.attr_foreground_new(...foreground),
+                    startIndex,
+                    endIndex,
+                );
+            }
+
+            if (background) {
+                insertReferenceAttribute(
+                    attributes,
+                    Pango.attr_background_new(...background),
+                    startIndex,
+                    endIndex,
+                );
+            }
+
+            insertReferenceAttribute(
+                attributes,
+                Pango.attr_weight_new(Pango.Weight.BOLD),
+                startIndex,
+                endIndex,
+            );
+            hasAttributes = true;
+            index = text.indexOf(token, index + token.length);
+        }
+    }
+
+    label?.set_attributes?.(hasAttributes ? attributes : null);
+}
+
 function getLanguage(languageId) {
     if (!languageId)
         return null;
@@ -61,17 +137,18 @@ function getLanguage(languageId) {
     return GtkSource.LanguageManager.get_default().get_language(normalizedLanguageId);
 }
 
-function createMarkdownLabel(content, role) {
+function createMarkdownLabel(content, options = {}) {
     const label = new Gtk.Label({
         wrap: true,
         selectable: true,
         xalign: 0,
-        max_width_chars: role === 'user' ? 36 : 82,
+        max_width_chars: options.role === 'user' ? 36 : 82,
     });
     label.set_wrap_mode(Pango.WrapMode.WORD_CHAR);
     label.set_use_markup(true);
     label.set_markup(markdownToPangoMarkup(content) || ' ');
     label.add_css_class('cusco-message-markdown');
+    applyReferenceTextStyles(label, options.references, options.referenceStyles);
 
     return label;
 }
@@ -98,6 +175,8 @@ function createTableCell(content, options = {}) {
     if (options.header)
         label.add_css_class('cusco-table-header-cell');
 
+    applyReferenceTextStyles(label, options.references, options.referenceStyles);
+
     return label;
 }
 
@@ -116,6 +195,8 @@ function createMarkdownTable(block, options = {}) {
             columnCount,
             header: true,
             role: options.role,
+            references: options.references,
+            referenceStyles: options.referenceStyles,
         }), column, 0, 1, 1);
     });
 
@@ -125,6 +206,8 @@ function createMarkdownTable(block, options = {}) {
                 alignment: block.alignments[column],
                 columnCount,
                 role: options.role,
+                references: options.references,
+                referenceStyles: options.referenceStyles,
             }), column, rowIndex + 1, 1, 1);
         });
     });
@@ -488,7 +571,7 @@ export function renderMessageContent(container, body, options = {}) {
         } else if (block.type === 'table') {
             container.append(createMarkdownTable(block, options));
         } else {
-            container.append(createMarkdownLabel(block.content, options.role));
+            container.append(createMarkdownLabel(block.content, options));
         }
     }
 }
@@ -499,7 +582,18 @@ export function createMessageContent(body, options = {}) {
         spacing: 8,
         hexpand: Boolean(options.hexpand),
     });
-    renderMessageContent(container, body, options);
-    container.updateContent = (nextBody) => renderMessageContent(container, nextBody, options);
+    const renderingOptions = { ...options };
+    let currentBody = body;
+    const render = () => renderMessageContent(container, currentBody, renderingOptions);
+
+    render();
+    container.updateContent = (nextBody) => {
+        currentBody = nextBody;
+        render();
+    };
+    container.updateReferenceStyles = (referenceStyles) => {
+        renderingOptions.referenceStyles = referenceStyles;
+        render();
+    };
     return container;
 }

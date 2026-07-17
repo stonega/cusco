@@ -1,6 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
+sh -n scripts/update-computer-use-extension.sh
+
 missing_sources=$(
   find src -type f -name '*.js' | sort | while IFS= read -r source; do
     relative=${source#src/}
@@ -21,7 +23,9 @@ fi
 
 gjs -m tests/import-smoke.js
 gjs -m tests/artifacts-smoke.js
+gjs -m tests/attachments-smoke.js
 gjs -m tests/markdown-smoke.js
+gjs -m tests/message-view-smoke.js
 gjs -m tests/usage-smoke.js
 gjs -m tests/compaction-smoke.js
 gjs -m tests/memory-smoke.js
@@ -29,12 +33,17 @@ gjs -m tests/image-generation-smoke.js
 gjs -m tests/tools-smoke.js
 gjs -m tests/cron-smoke.js
 gjs -m tests/agent-mode-smoke.js
+gjs -m tests/accessibility-smoke.js
+gjs -m tests/computer-use-image-views-smoke.js
+gjs -m tests/computer-use-smoke.js
+gjs -m tests/computer-use-benchmark-smoke.js
 gjs -m tests/skills-smoke.js
 gjs -m tests/mcp-smoke.js
 gjs -m tests/search-provider-smoke.js
 gjs -m tests/workspace-smoke.js
 gjs -m tests/prompt-variables-smoke.js
 gjs -m tests/app-settings-smoke.js
+gjs -m tests/archived-chats-smoke.js
 gjs -m tests/chat-management-smoke.js
 gjs -m tests/conversation-store-smoke.js
 gjs -m tests/provider-config-smoke.js

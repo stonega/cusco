@@ -1,8 +1,24 @@
-.cusco-computer-use-indicator {
+.cusco-computer-use-button {
+  color: #42e6f5;
+}
+
+.cusco-computer-use-button:hover {
+  color: #8ff3fa;
+}
+
+.cusco-computer-use-content {
+  spacing: 6px;
+}
+
+.cusco-computer-use-icon {
   -st-icon-style: symbolic;
   color: #42e6f5;
 }
 
-.cusco-computer-use-indicator:hover {
+.cusco-computer-use-button:hover .cusco-computer-use-icon {
   color: #8ff3fa;
+}
+
+.cusco-computer-use-label {
+  font-weight: 600;
 }

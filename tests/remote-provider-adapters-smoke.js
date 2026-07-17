@@ -1,4 +1,5 @@
 import GLib from 'gi://GLib?version=2.0';
+import Gio from 'gi://Gio?version=2.0';
 
 import {
     buildAnthropicMessagesBody,
@@ -91,6 +92,29 @@ const svgImageMessages = [
         }],
     }),
 ];
+const nativeToolMessages = [
+    createMessage('user', 'Inspect the window'),
+    {
+        ...createMessage('assistant', ''),
+        toolCalls: [{
+            id: 'call-computer-1',
+            name: 'computer_step',
+            input: '{"windowId":"42","actions":[{"action":"keypress","keys":["TAB"]}]}',
+            thoughtSignature: 'gemini-thought-signature',
+        }],
+    },
+    {
+        ...createMessage('tool', 'The window changed.', {
+            attachments: [{
+                kind: 'image',
+                name: 'updated-window.png',
+                path: imagePath,
+            }],
+        }),
+        toolCallId: 'call-computer-1',
+        toolName: 'computer_step',
+    },
+];
 
 const openAiBody = buildOpenAiResponsesBody(messages, 'gpt-test');
 assertEqual(openAiBody.model, 'gpt-test', 'OpenAI model');
@@ -98,6 +122,15 @@ assertEqual(openAiBody.input.length, 4, 'OpenAI filtered message count');
 assertEqual(openAiBody.input[0].role, 'developer', 'OpenAI system role');
 assertEqual(openAiBody.input.some((message) => message.content === ''), false, 'OpenAI omitted Agent Mode reasoning messages');
 assertEqual(openAiBody.max_output_tokens, 8192, 'OpenAI default max output tokens');
+const openAiNativeToolBody = buildOpenAiResponsesBody(nativeToolMessages, 'gpt-test');
+assertEqual(openAiNativeToolBody.input[1].type, 'function_call', 'OpenAI native function call history');
+assertEqual(openAiNativeToolBody.input[2].type, 'function_call_output', 'OpenAI native function result history');
+assertEqual(openAiNativeToolBody.input[3].content[1].type, 'input_image', 'OpenAI native tool screenshot history');
+
+const compatibleNativeToolBody = buildOpenAiCompatibleChatBody(nativeToolMessages, 'model-test');
+assertEqual(compatibleNativeToolBody.messages[1].tool_calls[0].function.name, 'computer_step', 'Chat Completions native function call history');
+assertEqual(compatibleNativeToolBody.messages[2].role, 'tool', 'Chat Completions native function result history');
+assertEqual(compatibleNativeToolBody.messages[3].content[1].type, 'image_url', 'Chat Completions native tool screenshot history');
 
 const mcpTool = {
     name: 'mcp__context7__resolve_library_id',
@@ -232,6 +265,22 @@ const chatToolBody = buildOpenAiCompatibleChatBody(messages, 'chat-test', {
 assertEqual(chatToolBody.tool_choice, 'auto', 'OpenAI-compatible tool choice');
 assertEqual(chatToolBody.tools[0].function.name, 'mcp__context7__resolve_library_id', 'OpenAI-compatible tool name');
 assertEqual(chatToolBody.tools[0].function.parameters.required.length, 2, 'OpenAI-compatible tool schema');
+const kimiK3Body = buildOpenAiCompatibleChatBody(messages, 'kimi-k3', {
+    model: {
+        thinking: {
+            api: 'kimi-k3-reasoning',
+            levels: ['max'],
+            maxOutputTokensParameter: 'max_completion_tokens',
+        },
+    },
+    thinkingLevel: 'max',
+    maxOutputTokens: 32768,
+});
+assertEqual(kimiK3Body.reasoning_effort, 'max', 'Kimi K3 reasoning effort');
+assertEqual(kimiK3Body.max_completion_tokens, 32768, 'Kimi K3 completion token field');
+assertEqual(hasOwn(kimiK3Body, 'max_tokens'), false, 'Kimi K3 omits legacy max tokens');
+assertEqual(hasOwn(kimiK3Body, 'thinking'), false, 'Kimi K3 omits K2 thinking parameter');
+assertEqual(hasOwn(kimiK3Body, 'temperature'), false, 'Kimi K3 omits fixed sampling parameters');
 const kimiThinkingBody = buildOpenAiCompatibleChatBody(messages, 'kimi-k2.6', {
     model: {
         thinking: {
@@ -363,6 +412,10 @@ const anthropicToolBody = buildAnthropicMessagesBody(messages, 'claude-test', {
 });
 assertEqual(anthropicToolBody.tools[0].name, 'mcp__context7__resolve_library_id', 'Anthropic tool name');
 assertEqual(anthropicToolBody.tools[0].input_schema.required.length, 2, 'Anthropic tool schema');
+const anthropicNativeToolHistory = buildAnthropicMessagesBody(nativeToolMessages, 'claude-test');
+assertEqual(anthropicNativeToolHistory.messages[1].content[0].type, 'tool_use', 'Anthropic native tool call history');
+assertEqual(anthropicNativeToolHistory.messages[2].content[0].type, 'tool_result', 'Anthropic native tool result history');
+assertEqual(anthropicNativeToolHistory.messages[2].content[0].content[0].type, 'image', 'Anthropic native tool screenshot history');
 const anthropicNativeSearchBody = buildAnthropicMessagesBody(messages, 'claude-test', {
     provider: {
         nativeSearch: {
@@ -389,9 +442,33 @@ const anthropicThinkingBody = buildAnthropicMessagesBody(messages, 'claude-test'
     maxOutputTokens: 12288,
 });
 assertEqual(anthropicThinkingBody.thinking.type, 'adaptive', 'Anthropic thinking type');
-assertEqual(anthropicThinkingBody.thinking.effort, 'low', 'Anthropic thinking effort');
+assertEqual(anthropicThinkingBody.output_config.effort, 'low', 'Anthropic output effort');
+assertEqual(hasOwn(anthropicThinkingBody.thinking, 'effort'), false, 'Anthropic effort is not nested in thinking');
 assertEqual(anthropicThinkingBody.thinking.display, 'summarized', 'Anthropic thinking display');
 assertEqual(anthropicThinkingBody.max_tokens, 12288, 'Anthropic custom max tokens');
+const anthropicXHighThinkingBody = buildAnthropicMessagesBody(messages, 'claude-opus-4-8', {
+    model: {
+        thinking: {
+            api: 'anthropic-adaptive',
+            levels: ['off', 'low', 'medium', 'high', 'xhigh', 'max'],
+            display: 'summarized',
+        },
+    },
+    thinkingLevel: 'xhigh',
+});
+assertEqual(anthropicXHighThinkingBody.thinking.type, 'adaptive', 'Claude Opus 4.8 adaptive thinking');
+assertEqual(anthropicXHighThinkingBody.output_config.effort, 'xhigh', 'Claude Opus 4.8 xhigh effort');
+const anthropicThinkingOffBody = buildAnthropicMessagesBody(messages, 'claude-sonnet-5', {
+    model: {
+        thinking: {
+            api: 'anthropic-adaptive',
+            levels: ['off', 'low', 'medium', 'high', 'xhigh', 'max'],
+        },
+    },
+    thinkingLevel: 'off',
+});
+assertEqual(anthropicThinkingOffBody.thinking.type, 'disabled', 'Claude Sonnet 5 thinking disabled');
+assertEqual(hasOwn(anthropicThinkingOffBody, 'output_config'), false, 'Disabled Claude thinking omits effort');
 
 const geminiBody = buildGeminiGenerateContentBody(messages);
 assertEqual(geminiBody.systemInstruction.parts[0].text, 'Keep answers concise.', 'Gemini system instruction');
@@ -401,6 +478,13 @@ const geminiImageBody = buildGeminiGenerateContentBody(imageMessages);
 assertEqual(geminiImageBody.contents[0].parts[0].text, 'Describe this image', 'Gemini image prompt text part');
 assertEqual(geminiImageBody.contents[0].parts[1].inline_data.mime_type, 'image/png', 'Gemini image MIME type');
 assertEqual(geminiImageBody.contents[0].parts[1].inline_data.data, imageData, 'Gemini image data');
+const geminiNativeToolHistory = buildGeminiGenerateContentBody(nativeToolMessages);
+assertEqual(geminiNativeToolHistory.contents[1].parts[0].functionCall.name, 'computer_step', 'Gemini native function call history');
+assertEqual(geminiNativeToolHistory.contents[1].parts[0].functionCall.id, 'call-computer-1', 'Gemini native function call ID history');
+assertEqual(geminiNativeToolHistory.contents[1].parts[0].thoughtSignature, 'gemini-thought-signature', 'Gemini thought signature history');
+assertEqual(geminiNativeToolHistory.contents[2].parts[0].functionResponse.name, 'computer_step', 'Gemini native function result history');
+assertEqual(geminiNativeToolHistory.contents[2].parts[0].functionResponse.id, 'call-computer-1', 'Gemini native function response ID history');
+assertEqual(geminiNativeToolHistory.contents[2].parts[1].inline_data.mime_type, 'image/png', 'Gemini native tool screenshot history');
 const geminiSvgBody = buildGeminiGenerateContentBody(svgImageMessages);
 assertEqual(geminiSvgBody.contents[0].parts.length, 1, 'Gemini SVG attachment is not sent as an image part');
 assertEqual(geminiSvgBody.contents[0].parts[0].text, 'Read this SVG', 'Gemini SVG prompt text part');
@@ -564,14 +648,18 @@ const geminiToolCalls = extractGeminiToolCalls({
         content: {
             parts: [{
                 functionCall: {
+                    id: 'gemini-call-1',
                     name: 'mcp__context7__query_docs',
                     args: { libraryId: '/reactjs/react.dev', query: 'hooks' },
                 },
+                thoughtSignature: 'gemini-response-signature',
             }],
         },
     }],
 });
+assertEqual(geminiToolCalls[0].id, 'gemini-call-1', 'Gemini tool call ID extraction');
 assertEqual(geminiToolCalls[0].input, '{"libraryId":"/reactjs/react.dev","query":"hooks"}', 'Gemini tool call extraction');
+assertEqual(geminiToolCalls[0].thoughtSignature, 'gemini-response-signature', 'Gemini thought signature extraction');
 assertEqual(extractGeminiUsage({
     usageMetadata: {
         promptTokenCount: 6,
@@ -638,11 +726,52 @@ assertEqual(
     'Automatic continuation prompt',
 );
 
+class ReconnectingProvider extends ContinuingProvider {
+    constructor(failuresBeforeSuccess) {
+        super([]);
+        this.failuresBeforeSuccess = failuresBeforeSuccess;
+    }
+
+    async _complete(messagesForRequest, _modelId, _options = {}) {
+        this.calls.push(messagesForRequest);
+
+        if (this.failuresBeforeSuccess > 0) {
+            this.failuresBeforeSuccess--;
+            throw new GLib.Error(
+                Gio.io_error_quark(),
+                Gio.IOErrorEnum.NETWORK_UNREACHABLE,
+                'Network unreachable',
+            );
+        }
+
+        return { text: 'Recovered', finishReason: 'stop' };
+    }
+}
+
+const reconnectingProvider = new ReconnectingProvider(5);
+const reconnectStatuses = [];
+let reconnectedText = '';
+
+for await (const chunk of reconnectingProvider.streamChat([createMessage('user', 'Retry this request')])) {
+    if (chunk?.type === 'status')
+        reconnectStatuses.push(chunk.text);
+    else if (typeof chunk === 'string')
+        reconnectedText += chunk;
+}
+
+assertEqual(reconnectingProvider.calls.length, 6, 'Network reconnect request count');
+assertEqual(reconnectStatuses.length, 5, 'Network reconnect status count');
+assertEqual(reconnectStatuses[0], 'Reconnecting 1/5\u2026', 'First network reconnect status');
+assertEqual(reconnectStatuses[4], 'Reconnecting 5/5\u2026', 'Final network reconnect status');
+assertEqual(reconnectedText, 'Recovered', 'Network reconnect response');
+
 const toolCallingProvider = new ContinuingProvider([
     {
         toolCalls: [{
+            id: 'gemini-call-1',
             name: 'calc',
             input: '2 + 2',
+            thoughtSignature: 'gemini-provider-signature',
         }],
         finishReason: 'tool_calls',
     },
@@ -658,6 +787,8 @@ for await (const chunk of toolCallingProvider.streamChat([createMessage('user', 
 
 assertEqual(providerToolCall.name, 'calc', 'Provider tool call chunk name');
 assertEqual(providerToolCall.input, '2 + 2', 'Provider tool call chunk input');
+assertEqual(providerToolCall.id, 'gemini-call-1', 'Provider tool call chunk ID');
+assertEqual(providerToolCall.thoughtSignature, 'gemini-provider-signature', 'Provider tool call chunk thought signature');
 
 if (GLib.file_test(imagePath, GLib.FileTest.EXISTS))
     GLib.unlink(imagePath);

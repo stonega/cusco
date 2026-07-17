@@ -73,13 +73,37 @@ if (branch.messages.length !== 1 || branch.id === firstChat.id || branch.skillId
 
 conversations.archiveConversation(branch.id);
 
-if (conversations.archivedConversations.length !== 1)
+if (conversations.archivedConversations.length !== 1
+    || conversations.conversations.some((conversation) => conversation.id === branch.id)) {
     throw new Error('Conversation was not archived');
+}
+
+conversations.archiveConversation(branch.id, false);
+
+if (conversations.archivedConversations.length !== 0
+    || !conversations.conversations.some((conversation) => conversation.id === branch.id)) {
+    throw new Error('Conversation was not unarchived');
+}
+
+conversations.archiveConversation(branch.id);
 
 conversations.deleteConversation(branch.id);
 
 if (conversations.archivedConversations.length !== 0)
     throw new Error('Archived conversation was not deleted');
+
+const archiveFallbackConversations = new ConversationManager({
+    providerId: defaultProvider.id,
+    modelId: defaultModel.id,
+});
+const visibleFallbackChat = archiveFallbackConversations.createConversation({ title: 'Visible chat' });
+const archivedFallbackChat = archiveFallbackConversations.createConversation({ title: 'Archived chat' });
+archiveFallbackConversations.archiveConversation(archivedFallbackChat.id);
+archiveFallbackConversations.selectConversation(visibleFallbackChat.id);
+archiveFallbackConversations.deleteConversation(visibleFallbackChat.id);
+
+if (archiveFallbackConversations.activeConversation !== null)
+    throw new Error('Deleting the last visible chat selected an archived chat');
 
 const providerIds = providers.listProviders().map((provider) => provider.id);
 const expectedProviderIds = ['openai', 'anthropic', 'gemini', 'kimi', 'deepseek', 'grok', 'zai'];

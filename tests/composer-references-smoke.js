@@ -92,5 +92,17 @@ index.stop();
 assert(!timedOut, 'Home file indexing timed out');
 assert(index.items.some((item) => item.value === indexedPath), 'Nested home file was not indexed');
 assert(!index.items.some((item) => item.value === skippedPath), 'Noisy dependency directory was indexed');
+assert(
+    index.search('idea', 8).some((item) => item.value === indexedPath),
+    'Home file search did not return a matching indexed file',
+);
+assert(
+    index.search('ideas.md', 8).some((item) => item.value === indexedPath),
+    'Narrowing a cached Home file search lost a matching file',
+);
+assert(
+    index.search('id', 8).some((item) => item.value === indexedPath),
+    'Broadening a cached Home file search did not rescan the index',
+);
 
 print('Cusco composer references smoke passed');
