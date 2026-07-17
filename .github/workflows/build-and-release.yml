@@ -30,6 +30,7 @@ jobs:
             desktop-file-utils \
             gjs \
             gir1.2-adw-1 \
+            gir1.2-atspi-2.0 \
             gir1.2-gtk-4.0 \
             gir1.2-gtksource-5 \
             gir1.2-secret-1 \
