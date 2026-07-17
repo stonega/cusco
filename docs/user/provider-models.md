@@ -35,7 +35,7 @@ support keep the chat picker disabled.
 | Google Gemini | `gemini-3.5-flash` | `gemini-3.5-flash` | `Minimal`, `Auto`, `Low`, `Medium`, `High` |
 | Google Gemini | `gemini-3.5-flash` | `gemini-3.1-pro-preview` | `Auto`, `Low`, `Medium`, `High` |
 | Kimi | `kimi-k3` | `kimi-k3` | `Max` |
-| Kimi | `kimi-k3` | `kimi-k2.7-code`, `kimi-k2.7-code-highspeed` | `Auto` |
+| Kimi | `kimi-k3` | `kimi-k2.7-code` | `Auto` |
 | Kimi | `kimi-k3` | `kimi-k2.6` | `Off`, `Auto` |
 | DeepSeek | `deepseek-v4-pro` | `deepseek-v4-pro`, `deepseek-v4-flash` | `Off`, `Auto`, `High`, `Max` |
 | Grok | `grok-4.5` | `grok-4.5` | `Low`, `Medium`, `High` |
@@ -65,7 +65,6 @@ from the built-in model metadata.
 | Google Gemini | `gemini-3.1-pro-preview` | 1,048,576 tokens |
 | Kimi | `kimi-k3` | 1M tokens |
 | Kimi | `kimi-k2.7-code` | 256K tokens |
-| Kimi | `kimi-k2.7-code-highspeed` | 256K tokens |
 | Kimi | `kimi-k2.6` | 256K tokens |
 | DeepSeek | `deepseek-v4-pro` | 1M tokens |
 | DeepSeek | `deepseek-v4-flash` | 1M tokens |
@@ -111,13 +110,13 @@ models that use its OpenAI-compatible image generation endpoint.
   Their explicit effort levels are sent in `output_config`, default to `High`,
   and support `X-High` and `Max`. Haiku 4.5 continues to use manual
   extended-thinking budgets and does not support those two higher efforts.
-- Kimi is intentionally limited to `kimi-k3`, `kimi-k2.7-code`,
-  `kimi-k2.7-code-highspeed`, and `kimi-k2.6`. Persisted or discovered
+- Kimi is intentionally limited to `kimi-k3`, `kimi-k2.7-code`, and
+  `kimi-k2.6`. Persisted or discovered
   Moonshot V1 and older Kimi models are ignored. Kimi K3 uses always-on
   thinking with its only currently supported effort, `Max`; requests use
   top-level `reasoning_effort` and `max_completion_tokens`, not the K2.x
-  `thinking` parameter. Kimi K2.7 Code variants use always-on thinking through
-  `Auto`; only Kimi K2.6 exposes `Off`.
+  `thinking` parameter. Kimi K2.7 Code uses always-on thinking through `Auto`;
+  only Kimi K2.6 exposes `Off`.
 - DeepSeek is intentionally limited to `deepseek-v4-pro` and
   `deepseek-v4-flash`. Older persisted models such as `deepseek-v3` are
   ignored. `Auto` enables DeepSeek thinking without an explicit effort;
@@ -152,7 +151,6 @@ models that use its OpenAI-compatible image generation endpoint.
 | Google Gemini | `gemini-3.1-pro-preview` | Advanced intelligence and agentic coding model. | `Auto`, `Low`, `Medium`, `High` |
 | Kimi | `kimi-k3` | Kimi flagship model for long-horizon coding, knowledge work, reasoning, and visual understanding. Context 1M. | `Max` |
 | Kimi | `kimi-k2.7-code` | Kimi coding model with stronger long-context instruction following and higher coding task success. Context 256k. | `Auto` |
-| Kimi | `kimi-k2.7-code-highspeed` | High-speed Kimi K2.7 Code variant, around 180 tokens/s and up to 260 tokens/s in short contexts. Context 256k. | `Auto` |
 | Kimi | `kimi-k2.6` | Kimi intelligent multimodal model for agent, code, visual understanding, and general tasks with thinking and non-thinking modes. Context 256k. | `Off`, `Auto` |
 | DeepSeek | `deepseek-v4-pro` | DeepSeek reasoning-capable model. | `Off`, `Auto`, `High`, `Max` |
 | DeepSeek | `deepseek-v4-flash` | DeepSeek lower-latency model. | `Off`, `Auto`, `High`, `Max` |

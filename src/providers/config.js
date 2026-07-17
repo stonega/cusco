@@ -31,6 +31,7 @@ const REQUIRED_SETTINGS_KEYS = [
     'default-image-provider',
     'default-image-model',
     'enabled-providers',
+    'provider-endpoint-presets',
     'provider-default-models',
     'provider-discovered-models',
     'provider-default-image-models',
@@ -46,6 +47,7 @@ const FALLBACK_STRING_DEFAULTS = {
     'active-model': '',
     'default-image-provider': '',
     'default-image-model': '',
+    'provider-endpoint-presets': '{}',
     'provider-default-models': '{}',
     'provider-discovered-models': '{}',
     'provider-default-image-models': '{}',
@@ -346,7 +348,6 @@ const PROVIDER_SUPPORTED_MODEL_IDS = {
     kimi: new Set([
         'kimi-k3',
         'kimi-k2.7-code',
-        'kimi-k2.7-code-highspeed',
         'kimi-k2.6',
     ]),
     deepseek: new Set([
@@ -556,18 +557,6 @@ const KIMI_MODEL_METADATA = {
         id: 'kimi-k2.7-code',
         name: 'Kimi K2.7 Code',
         description: 'Kimi coding model with stronger long-context instruction following and higher coding task success. Context 256k.',
-        contextWindowTokens: 256000,
-        thinking: {
-            api: 'kimi-thinking',
-            levels: ['auto'],
-            keep: 'all',
-            alwaysOn: true,
-        },
-    },
-    'kimi-k2.7-code-highspeed': {
-        id: 'kimi-k2.7-code-highspeed',
-        name: 'Kimi K2.7 Code High-Speed',
-        description: 'High-speed Kimi K2.7 Code variant, around 180 tokens/s and up to 260 tokens/s in short contexts. Context 256k.',
         contextWindowTokens: 256000,
         thinking: {
             api: 'kimi-thinking',
@@ -990,12 +979,25 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         apiKeyConfigured: false,
         apiKeyEnvVar: 'MOONSHOT_API_KEY',
         baseUrl: 'https://api.moonshot.ai/v1',
+        defaultEndpointPresetId: 'global',
+        endpointPresetId: 'global',
+        endpointPresets: [
+            {
+                id: 'global',
+                label: 'Global',
+                baseUrl: 'https://api.moonshot.ai/v1',
+            },
+            {
+                id: 'cn',
+                label: 'CN',
+                baseUrl: 'https://api.moonshot.cn/v1',
+            },
+        ],
         chatPath: '/chat/completions',
         defaultModelId: 'kimi-k3',
         models: [
             { ...KIMI_MODEL_METADATA['kimi-k3'] },
             { ...KIMI_MODEL_METADATA['kimi-k2.7-code'] },
-            { ...KIMI_MODEL_METADATA['kimi-k2.7-code-highspeed'] },
             { ...KIMI_MODEL_METADATA['kimi-k2.6'] },
         ],
     },
@@ -1100,6 +1102,7 @@ export class ProviderConfigStore {
         };
         this._configs = configs.map((config) => ({
             ...config,
+            endpointPresets: (config.endpointPresets ?? []).map((preset) => ({ ...preset })),
             models: config.models.map((model) => ({ ...model })),
             imageModels: (config.imageModels ?? []).map((model) => ({ ...model })),
             customImageModels: (config.customImageModels ?? []).map((model) => ({ ...model })),
@@ -1130,6 +1133,7 @@ export class ProviderConfigStore {
 
         return providers.map((provider) => ({
             ...provider,
+            endpointPresets: (provider.endpointPresets ?? []).map((preset) => ({ ...preset })),
             models: provider.models.map((model) => ({ ...model })),
             imageModels: (provider.imageModels ?? []).map((model) => ({ ...model })),
             customImageModels: (provider.customImageModels ?? []).map((model) => ({ ...model })),
@@ -1145,6 +1149,7 @@ export class ProviderConfigStore {
             ))
             .map((provider) => ({
                 ...provider,
+                endpointPresets: (provider.endpointPresets ?? []).map((preset) => ({ ...preset })),
                 models: provider.models.map((model) => ({ ...model })),
                 imageModels: (provider.imageModels ?? []).map((model) => ({ ...model })),
                 customImageModels: (provider.customImageModels ?? []).map((model) => ({ ...model })),
@@ -1197,6 +1202,25 @@ export class ProviderConfigStore {
 
     getProvider(providerId) {
         return this._configs.find((provider) => provider.id === providerId) ?? null;
+    }
+
+    setProviderEndpointPreset(providerId, presetId) {
+        const provider = this.getProvider(providerId);
+
+        if (!provider)
+            throw new Error(`Provider does not exist: ${providerId}`);
+
+        const normalizedPresetId = String(presetId ?? '').trim()
+            || provider.defaultEndpointPresetId;
+        const preset = provider.endpointPresets?.find((item) => item.id === normalizedPresetId);
+
+        if (!preset)
+            throw new Error(`Endpoint preset does not exist for ${provider.name}: ${normalizedPresetId}`);
+
+        provider.endpointPresetId = preset.id;
+        provider.baseUrl = preset.baseUrl;
+        this._persistEndpointPresets();
+        return provider;
     }
 
     isProviderEnabled(providerId) {
@@ -1902,6 +1926,7 @@ export class ProviderConfigStore {
             return;
 
         this._loadCustomProviderSettings();
+        this._loadEndpointPresetSettings();
         this._loadDiscoveredModelSettings();
         this._loadDiscoveredImageModelSettings();
         this._loadCustomImageModelSettings();
@@ -1975,6 +2000,29 @@ export class ProviderConfigStore {
 
             if (normalizedModels.length > 0)
                 provider.models = normalizedModels;
+        }
+    }
+
+    _loadEndpointPresetSettings() {
+        const selectedPresets = parseDefaultModelSettings(
+            this._settings.get_string('provider-endpoint-presets'),
+        );
+
+        for (const provider of this._configs) {
+            if (!provider.endpointPresets?.length)
+                continue;
+
+            const selectedPresetId = String(
+                selectedPresets[provider.id] ?? provider.defaultEndpointPresetId ?? '',
+            ).trim();
+            const preset = provider.endpointPresets.find((item) => item.id === selectedPresetId)
+                ?? provider.endpointPresets.find((item) => item.id === provider.defaultEndpointPresetId);
+
+            if (!preset)
+                continue;
+
+            provider.endpointPresetId = preset.id;
+            provider.baseUrl = preset.baseUrl;
         }
     }
 
@@ -2076,6 +2124,18 @@ export class ProviderConfigStore {
             .map((provider) => provider.id);
 
         this._settings?.set_strv('enabled-providers', enabledProviderIds);
+        flushSettings();
+    }
+
+    _persistEndpointPresets() {
+        const selectedPresets = {};
+
+        for (const provider of this._configs) {
+            if (provider.endpointPresetId)
+                selectedPresets[provider.id] = provider.endpointPresetId;
+        }
+
+        this._settings?.set_string('provider-endpoint-presets', JSON.stringify(selectedPresets));
         flushSettings();
     }
 

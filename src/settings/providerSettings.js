@@ -263,10 +263,41 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows, 
     }
 
     if (provider.baseUrl && !provider.customizable) {
-        row.add_row(new Adw.ActionRow({
+        const endpointRow = new Adw.ActionRow({
             title: 'Endpoint',
             subtitle: provider.baseUrl,
-        }));
+        });
+        const endpointPresetButtons = (provider.endpointPresets ?? [])
+            .filter((preset) => preset.id !== provider.defaultEndpointPresetId)
+            .map((preset) => {
+                const button = new Gtk.ToggleButton({
+                    label: preset.label ?? preset.id.toUpperCase(),
+                    tooltip_text: `Use the ${preset.label ?? preset.id} endpoint`,
+                    valign: Gtk.Align.CENTER,
+                });
+                button.add_css_class('flat');
+                button.connect('toggled', () => {
+                    if (button._syncing)
+                        return;
+
+                    try {
+                        providerConfigs.setProviderEndpointPreset(
+                            providerId,
+                            button.get_active() ? preset.id : provider.defaultEndpointPresetId,
+                        );
+                        syncAllRows();
+                        onChanged();
+                    } catch (error) {
+                        syncAllRows();
+                        logError(error, 'Failed to update provider endpoint');
+                    }
+                });
+                endpointRow.add_suffix(button);
+                return { button, presetId: preset.id };
+            });
+        row.add_row(endpointRow);
+        row._endpointActionRow = endpointRow;
+        row._endpointPresetButtons = endpointPresetButtons;
     }
 
     if (provider.apiFormat) {
@@ -407,6 +438,14 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows, 
 
         if (row._modelsEntryRow)
             row._modelsEntryRow.set_text(currentProvider.models.map((model) => model.id).join(', '));
+
+        row._endpointActionRow?.set_subtitle(currentProvider.baseUrl ?? '');
+
+        for (const { button, presetId } of row._endpointPresetButtons ?? []) {
+            button._syncing = true;
+            button.set_active(currentProvider.endpointPresetId === presetId);
+            button._syncing = false;
+        }
 
         if (row._modelRow) {
             row._modelRow._syncing = true;
