@@ -26,6 +26,11 @@
       <summary>Enabled AI providers</summary>
       <description>Provider identifiers available in chat provider pickers.</description>
     </key>
+    <key name="provider-endpoint-presets" type="s">
+      <default>'{}'</default>
+      <summary>Provider endpoint presets</summary>
+      <description>JSON object mapping provider identifiers to their selected endpoint preset identifiers.</description>
+    </key>
     <key name="provider-default-models" type="s">
       <default>'{}'</default>
       <summary>Provider default models</summary>

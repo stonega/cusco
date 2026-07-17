@@ -69,6 +69,17 @@ function findExpanderRowByTitle(root, title) {
     return found;
 }
 
+function findToggleButtonByLabel(root, label) {
+    let found = null;
+
+    walkWidgets(root, (widget) => {
+        if (!found && widget instanceof Gtk.ToggleButton && widget.get_label() === label)
+            found = widget;
+    });
+
+    return found;
+}
+
 if (Gtk.init_check()) {
     Adw.init();
 
@@ -144,6 +155,30 @@ if (Gtk.init_check()) {
 
     if (!findComboRowByTitle(page, 'Default model')?.get_list_factory())
         throw new Error('Settings model selector did not install the full-name list factory');
+
+    const kimiRow = findExpanderRowByTitle(builtInGroup, 'Kimi');
+    const kimiEndpointRow = findActionRowByTitle(kimiRow, 'Endpoint');
+    const kimiCnButton = findToggleButtonByLabel(kimiEndpointRow, 'CN');
+
+    if (!kimiEndpointRow || !kimiCnButton)
+        throw new Error('Kimi endpoint row did not include the CN button');
+
+    if (kimiCnButton.get_active())
+        throw new Error('Kimi CN endpoint button should initially be inactive');
+
+    kimiCnButton.set_active(true);
+
+    if (providerConfigs.getProvider('kimi').baseUrl !== 'https://api.moonshot.cn/v1'
+        || kimiEndpointRow.get_subtitle() !== 'https://api.moonshot.cn/v1') {
+        throw new Error('Kimi CN endpoint button did not activate the China endpoint');
+    }
+
+    kimiCnButton.set_active(false);
+
+    if (providerConfigs.getProvider('kimi').baseUrl !== 'https://api.moonshot.ai/v1'
+        || kimiEndpointRow.get_subtitle() !== 'https://api.moonshot.ai/v1') {
+        throw new Error('Kimi CN endpoint button did not restore the global endpoint');
+    }
 
     const imageProviderRow = findComboRowByTitle(page, 'Provider');
     const imageModelRow = findComboRowByTitle(page, 'Model');

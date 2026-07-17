@@ -405,7 +405,7 @@ if (staleGeminiImageStore.getDefaultImageModel('gemini').id !== 'gemini-3-pro-im
 
 const kimiProvider = defaultStore.getProvider('kimi');
 const kimiModelIds = kimiProvider.models.map((model) => model.id);
-const expectedKimiModelIds = ['kimi-k3', 'kimi-k2.7-code', 'kimi-k2.7-code-highspeed', 'kimi-k2.6'];
+const expectedKimiModelIds = ['kimi-k3', 'kimi-k2.7-code', 'kimi-k2.6'];
 
 if (defaultStore.getDefaultModel('kimi').id !== 'kimi-k3')
     throw new Error('Kimi default model should be Kimi K3');
@@ -432,6 +432,32 @@ if (defaultStore.getThinkingLevels('kimi', 'kimi-k2.7-code').join(',') !== 'auto
 
 if (defaultStore.getThinkingLevels('kimi', 'kimi-k2.6').join(',') !== 'off,auto')
     throw new Error('Kimi K2.6 should expose thinking on/off modes');
+
+const kimiEndpointSettings = new MemorySettings({
+    strings: {
+        'provider-endpoint-presets': '{"kimi":"cn"}',
+    },
+});
+const kimiEndpointStore = new ProviderConfigStore(undefined, {
+    settings: kimiEndpointSettings,
+    apiKeyStore: new MemoryApiKeyStore({ kimi: 'kimi-key' }),
+    envLookup: () => '',
+});
+
+if (kimiEndpointStore.getProvider('kimi').baseUrl !== 'https://api.moonshot.cn/v1')
+    throw new Error('Kimi CN endpoint preset was not loaded');
+
+kimiEndpointStore.setProviderEndpointPreset('kimi', 'global');
+
+if (kimiEndpointStore.getProvider('kimi').baseUrl !== 'https://api.moonshot.ai/v1')
+    throw new Error('Kimi global endpoint preset was not restored');
+
+kimiEndpointStore.setProviderEndpointPreset('kimi', 'cn');
+
+if (kimiEndpointStore.getProvider('kimi').baseUrl !== 'https://api.moonshot.cn/v1'
+    || !kimiEndpointSettings.get_string('provider-endpoint-presets').includes('"kimi":"cn"')) {
+    throw new Error('Kimi CN endpoint preset was not persisted');
+}
 
 const staleKimiSettings = new MemorySettings({
     strings: {
@@ -484,8 +510,8 @@ const discoveredKimiModelIds = kimiDiscoveryStore.getProvider('kimi').models.map
 if (discoveredKimiModelIds.join(',') !== expectedKimiModelIds.join(','))
     throw new Error(`Kimi discovery did not filter unsupported models: ${discoveredKimiModelIds.join(', ')}`);
 
-if (!kimiDiscoveryStore.getProvider('kimi').models.find((model) => model.id === 'kimi-k2.7-code-highspeed').description.includes('180 tokens/s'))
-    throw new Error('Kimi discovery did not enrich model details');
+if (kimiDiscoveryStore.getProvider('kimi').models.some((model) => model.id === 'kimi-k2.7-code-highspeed'))
+    throw new Error('Kimi discovery retained the unsupported high-speed model');
 
 if (kimiDiscoveryStore.getThinkingLevels('kimi', 'kimi-k2.7-code').join(',') !== 'auto')
     throw new Error('Kimi discovery did not enrich thinking support');
