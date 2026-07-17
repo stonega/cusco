@@ -1,4 +1,5 @@
 import Gdk from 'gi://Gdk?version=4.0';
+import GdkPixbuf from 'gi://GdkPixbuf?version=2.0';
 import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
@@ -32,7 +33,156 @@ const LANGUAGE_ALIASES = {
     yml: 'yaml',
 };
 const DEFAULT_CODE_MIN_WIDTH = 360;
+const CONTENT_UPDATE_INTERVAL_MS = 33;
+const SYNTAX_HIGHLIGHT_INTERVAL_MS = 16;
+const ARTIFACT_PREVIEW_WIDTH = 360;
+const ARTIFACT_PREVIEW_HEIGHT = 240;
+const ARTIFACT_TEXTURE_INTERVAL_MS = 16;
+const MAX_CACHED_ARTIFACT_PREVIEWS = 24;
 const UTF8_ENCODER = new TextEncoder();
+const PENDING_SYNTAX_HIGHLIGHTS = [];
+const ARTIFACT_PREVIEW_CACHE = new Map();
+const PENDING_ARTIFACT_PREVIEW_LOADS = new Map();
+const PENDING_ARTIFACT_TEXTURES = [];
+let syntaxHighlightSourceId = 0;
+let artifactTextureSourceId = 0;
+
+function queueArtifactTexture(pixbuf, onCreated) {
+    PENDING_ARTIFACT_TEXTURES.push({ pixbuf, onCreated });
+
+    if (artifactTextureSourceId)
+        return;
+
+    artifactTextureSourceId = GLib.timeout_add(
+        GLib.PRIORITY_LOW,
+        ARTIFACT_TEXTURE_INTERVAL_MS,
+        () => {
+            const pending = PENDING_ARTIFACT_TEXTURES.shift();
+
+            if (pending)
+                pending.onCreated(Gdk.Texture.new_for_pixbuf(pending.pixbuf));
+
+            if (PENDING_ARTIFACT_TEXTURES.length > 0)
+                return GLib.SOURCE_CONTINUE;
+
+            artifactTextureSourceId = 0;
+            return GLib.SOURCE_REMOVE;
+        },
+    );
+}
+
+function cacheArtifactPreview(path, paintable) {
+    ARTIFACT_PREVIEW_CACHE.delete(path);
+    ARTIFACT_PREVIEW_CACHE.set(path, paintable);
+
+    while (ARTIFACT_PREVIEW_CACHE.size > MAX_CACHED_ARTIFACT_PREVIEWS) {
+        const oldestPath = ARTIFACT_PREVIEW_CACHE.keys().next().value;
+        ARTIFACT_PREVIEW_CACHE.delete(oldestPath);
+    }
+}
+
+function loadArtifactPreviewAsync(path, onLoaded) {
+    const cached = ARTIFACT_PREVIEW_CACHE.get(path);
+
+    if (cached) {
+        cacheArtifactPreview(path, cached);
+        onLoaded(cached);
+        return;
+    }
+
+    const pendingCallbacks = PENDING_ARTIFACT_PREVIEW_LOADS.get(path);
+
+    if (pendingCallbacks) {
+        pendingCallbacks.push(onLoaded);
+        return;
+    }
+
+    PENDING_ARTIFACT_PREVIEW_LOADS.set(path, [onLoaded]);
+    const complete = (paintable) => {
+        const callbacks = PENDING_ARTIFACT_PREVIEW_LOADS.get(path) ?? [];
+        PENDING_ARTIFACT_PREVIEW_LOADS.delete(path);
+
+        if (paintable)
+            cacheArtifactPreview(path, paintable);
+
+        callbacks.forEach((callback) => callback(paintable));
+    };
+    const file = Gio.File.new_for_path(path);
+
+    file.read_async(GLib.PRIORITY_DEFAULT, null, (source, result) => {
+        let stream;
+
+        try {
+            stream = source.read_finish(result);
+        } catch (error) {
+            logError(error, `Failed to open artifact preview: ${path}`);
+            complete(null);
+            return;
+        }
+
+        GdkPixbuf.Pixbuf.new_from_stream_at_scale_async(
+            stream,
+            ARTIFACT_PREVIEW_WIDTH,
+            ARTIFACT_PREVIEW_HEIGHT,
+            true,
+            null,
+            (_source, loadResult) => {
+                try {
+                    const pixbuf = GdkPixbuf.Pixbuf.new_from_stream_finish(loadResult);
+                    queueArtifactTexture(pixbuf, complete);
+                } catch (error) {
+                    logError(error, `Failed to decode artifact preview: ${path}`);
+                    complete(null);
+                } finally {
+                    try {
+                        stream.close(null);
+                    } catch (_error) {
+                        // The loader may already have closed the stream after an error.
+                    }
+                }
+            },
+        );
+    });
+}
+
+function scheduleSyntaxHighlight(buffer, owner, languageId, codeTheme) {
+    PENDING_SYNTAX_HIGHLIGHTS.push({
+        buffer,
+        owner,
+        languageId,
+        codeTheme,
+    });
+
+    if (syntaxHighlightSourceId)
+        return;
+
+    syntaxHighlightSourceId = GLib.timeout_add(
+        GLib.PRIORITY_LOW,
+        SYNTAX_HIGHLIGHT_INTERVAL_MS,
+        () => {
+            const pending = PENDING_SYNTAX_HIGHLIGHTS.shift();
+
+            if (pending?.owner.get_root()) {
+                const language = getLanguage(pending.languageId);
+                const styleScheme = getCodeThemeStyleScheme(pending.codeTheme);
+
+                if (language)
+                    pending.buffer.set_language(language);
+
+                if (styleScheme)
+                    pending.buffer.set_style_scheme(styleScheme);
+
+                pending.buffer.set_highlight_syntax(Boolean(language));
+            }
+
+            if (PENDING_SYNTAX_HIGHLIGHTS.length > 0)
+                return GLib.SOURCE_CONTINUE;
+
+            syntaxHighlightSourceId = 0;
+            return GLib.SOURCE_REMOVE;
+        },
+    );
+}
 
 function tableAlignmentXalign(alignment) {
     if (alignment === 'right')
@@ -426,8 +576,11 @@ function createArtifactImagePreview(artifact) {
 
     picture.set_content_fit(Gtk.ContentFit.CONTAIN);
     picture.set_size_request(360, 240);
-    picture.set_file(Gio.File.new_for_path(artifact.path));
     picture.add_css_class('cusco-artifact-picture');
+    loadArtifactPreviewAsync(artifact.path, (paintable) => {
+        if (paintable && picture.get_parent())
+            picture.set_paintable(paintable);
+    });
     return picture;
 }
 
@@ -514,17 +667,8 @@ function createCodeBlock(block, options) {
     outer.append(header);
 
     const buffer = new GtkSource.Buffer();
-    const language = getLanguage(block.language);
 
-    if (language)
-        buffer.set_language(language);
-
-    const styleScheme = getCodeThemeStyleScheme(options.codeTheme);
-
-    if (styleScheme)
-        buffer.set_style_scheme(styleScheme);
-
-    buffer.set_highlight_syntax(Boolean(language));
+    buffer.set_highlight_syntax(false);
     buffer.set_text(block.content, -1);
 
     const view = new GtkSource.View({
@@ -548,6 +692,8 @@ function createCodeBlock(block, options) {
         propagate_natural_height: true,
     });
     outer.append(scroller);
+
+    scheduleSyntaxHighlight(buffer, outer, block.language, options.codeTheme);
 
     return outer;
 }
@@ -583,17 +729,56 @@ export function createMessageContent(body, options = {}) {
         hexpand: Boolean(options.hexpand),
     });
     const renderingOptions = { ...options };
-    let currentBody = body;
-    const render = () => renderMessageContent(container, currentBody, renderingOptions);
+    let currentBody = String(body ?? '');
+    let renderedBody = null;
+    let renderSourceId = 0;
+    const render = (force = false) => {
+        if (!force && currentBody === renderedBody)
+            return;
+
+        renderMessageContent(container, currentBody, renderingOptions);
+        renderedBody = currentBody;
+    };
+    const cancelQueuedRender = () => {
+        if (!renderSourceId)
+            return;
+
+        GLib.source_remove(renderSourceId);
+        renderSourceId = 0;
+    };
 
     render();
-    container.updateContent = (nextBody) => {
-        currentBody = nextBody;
-        render();
+    container.updateContent = (nextBody, updateOptions = {}) => {
+        const normalizedBody = String(nextBody ?? '');
+
+        if (normalizedBody === currentBody && !updateOptions.force)
+            return;
+
+        currentBody = normalizedBody;
+
+        if (!updateOptions.defer) {
+            cancelQueuedRender();
+            render(Boolean(updateOptions.force));
+            return;
+        }
+
+        if (renderSourceId)
+            return;
+
+        renderSourceId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT,
+            CONTENT_UPDATE_INTERVAL_MS,
+            () => {
+                renderSourceId = 0;
+                render();
+                return GLib.SOURCE_REMOVE;
+            },
+        );
     };
     container.updateReferenceStyles = (referenceStyles) => {
         renderingOptions.referenceStyles = referenceStyles;
-        render();
+        cancelQueuedRender();
+        render(true);
     };
     return container;
 }

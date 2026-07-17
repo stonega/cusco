@@ -7,6 +7,7 @@ import { normalizeTokenUsage } from '../providers/usage.js';
 
 const APP_ID = 'io.github.stonega.Cusco';
 const DATABASE_VERSION = 1;
+const SELECTION_STATE_VERSION = 1;
 
 function defaultConversationDatabasePath() {
     return GLib.build_filenamev([
@@ -156,6 +157,7 @@ function writeFileAtomically(path, contents) {
 export class ConversationFileStore {
     constructor(options = {}) {
         this.path = options.path ?? defaultConversationDatabasePath();
+        this.selectionPath = options.selectionPath ?? `${this.path}.state`;
     }
 
     load() {
@@ -166,17 +168,47 @@ export class ConversationFileStore {
         const decoded = new TextDecoder().decode(contents);
         const parsed = JSON.parse(decoded);
 
-        return normalizeDatabase(parsed);
+        const database = normalizeDatabase(parsed);
+        const selectedConversationId = this._loadActiveConversationId();
+
+        if (database.conversations.some((conversation) => conversation.id === selectedConversationId))
+            database.activeConversationId = selectedConversationId;
+
+        return database;
     }
 
-    save(database) {
-        const normalized = normalizeDatabase(database);
+    save(database, options = {}) {
+        const normalized = options.normalized ? database : normalizeDatabase(database);
         const payload = JSON.stringify({
             version: DATABASE_VERSION,
             activeConversationId: normalized.activeConversationId,
             conversations: normalized.conversations,
-        }, null, 2);
+        });
 
         writeFileAtomically(this.path, `${payload}\n`);
+        this.saveActiveConversationId(normalized.activeConversationId);
+    }
+
+    saveActiveConversationId(activeConversationId) {
+        const payload = JSON.stringify({
+            version: SELECTION_STATE_VERSION,
+            activeConversationId: normalizeString(activeConversationId, null),
+        });
+
+        writeFileAtomically(this.selectionPath, `${payload}\n`);
+    }
+
+    _loadActiveConversationId() {
+        if (!GLib.file_test(this.selectionPath, GLib.FileTest.EXISTS))
+            return null;
+
+        try {
+            const [, contents] = GLib.file_get_contents(this.selectionPath);
+            const decoded = new TextDecoder().decode(contents);
+            return normalizeString(JSON.parse(decoded)?.activeConversationId, null);
+        } catch (error) {
+            logError(error, 'Failed to load active conversation state');
+            return null;
+        }
     }
 }

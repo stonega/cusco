@@ -54,9 +54,10 @@ Cusco starts as a standalone native GNOME application.
 - Streaming is represented as an async iterator so real API clients and local providers can use the same UI path.
 - Provider fallback is opt-in and retries failed requests with another enabled provider, excluding user-cancelled requests.
 - Transcript rendering stays native: Pango markup for markdown text and GtkSourceView for highlighted code blocks.
+- Transcript navigation keeps a bounded cache of recent GTK view trees and initially materializes only the latest message page. Older pages remain explicitly loadable; collapsed reasoning/tool bodies, syntax highlighting, and image decoding are deferred so chat selection does not block the GTK main loop. The limits, persistence boundaries, and profiling method are recorded in [Chat Switching Performance](../implementation/chat-performance.md).
 - Token usage is an estimate for context awareness; provider-specific tokenizers can replace it later.
 - Message edit, retry, regenerate, and branch actions mutate conversation state through the chat manager.
-- Conversations persist through a small local JSON database with schema versioning and atomic writes.
+- Conversations persist through a local JSON database with schema versioning and atomic writes. Active-chat selection uses a separate small state record so navigation never rewrites the transcript database, while streaming mutations are flushed at response completion and window close.
 - Provider availability, default models, active selection, and chat preferences are persisted with GSettings.
 - API keys are stored in Secret Service; environment variables remain a development fallback.
 - Custom OpenAI-compatible providers are stored as a multi-entry list in GSettings, while each stable provider ID keeps an independent API key in Secret Service. Legacy singleton settings migrate into the list.

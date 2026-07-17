@@ -66,6 +66,7 @@ import { ConversationFileStore } from './storage/conversationStore.js';
 import { MemoryFileStore } from './storage/memoryStore.js';
 import { WorkspaceFileStore } from './storage/workspaceStore.js';
 import { buildSkillContext } from './skills/skills.js';
+import { createAskUserTool } from './tools/askUser.js';
 import { createToolPermissionDecision } from './tools/permissions.js';
 import {
     appendToolOutputPreview,
@@ -102,6 +103,12 @@ const LONG_RESPONSE_NOTIFICATION_DELAY_MS = 10000;
 const COMPUTER_USE_ACCENT_COLOR = '#42e6f5';
 const SCROLL_TO_BOTTOM_ANIMATION_MS = 180;
 const SCROLL_TO_BOTTOM_ANIMATION_INTERVAL_MS = 16;
+const STREAMING_USAGE_UPDATE_INTERVAL_MS = 100;
+const CONVERSATION_RENDER_BATCH_BUDGET_US = 8000;
+const CONVERSATION_MESSAGE_PAGE_SIZE = 32;
+const CONVERSATION_PAGE_CONTEXT_LIMIT = 6;
+const MAX_CACHED_CONVERSATION_VIEWS = 4;
+const MAX_CACHED_ATTACHMENT_THUMBNAILS = 48;
 // SVG is XML text; most model image endpoints do not accept it as a vision input.
 const IMAGE_ATTACHMENT_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
 const MAX_ATTACHMENT_TEXT_CHARS = 20000;
@@ -111,6 +118,8 @@ const COMPOSER_SUGGESTION_LIMIT = 8;
 const PENDING_MESSAGE_COMPOSER_OVERLAP = 14;
 const PENDING_MESSAGE_STACK_SPAN = 5;
 const PENDING_MESSAGE_STACK_STEP = 4;
+const SCALED_IMAGE_PAINTABLE_CACHE = new Map();
+const PENDING_SCALED_IMAGE_LOADS = new Map();
 const KNOT_ICON_CURVES = [
     [15, 219.379, 56.5, 207.379, 186.6, 201.8, 431, 259],
     [431, 259, 736.5, 330.5, 706.5, 70.3797, 706.5, 70.3797],
@@ -510,6 +519,28 @@ function isAgentReasoningMessage(message) {
     return Boolean(message?.reasoning?.agentMode && getMessageReasoningContent(message));
 }
 
+export function normalizeConversationMessageStartIndex(
+    messages,
+    requestedStartIndex,
+    contextLimit = CONVERSATION_PAGE_CONTEXT_LIMIT,
+) {
+    const safeMessages = Array.isArray(messages) ? messages : [];
+    let startIndex = Math.max(0, Math.min(safeMessages.length, requestedStartIndex));
+    const earliestContextIndex = Math.max(0, startIndex - contextLimit);
+
+    while (startIndex > earliestContextIndex) {
+        const message = safeMessages[startIndex];
+        const isContinuation = isAgentReasoningMessage(message) || Boolean(message?.toolCall?.agentMode);
+
+        if (!isContinuation)
+            break;
+
+        startIndex -= 1;
+    }
+
+    return startIndex;
+}
+
 function isImageAttachmentName(name) {
     const lowerName = String(name ?? '').toLowerCase();
     return IMAGE_ATTACHMENT_EXTENSIONS.some((extension) => lowerName.endsWith(extension));
@@ -528,14 +559,79 @@ function attachmentPathExists(attachment) {
     return Boolean(path) && GLib.file_test(path, GLib.FileTest.EXISTS);
 }
 
-function createScaledImagePaintable(path, width, height) {
-    try {
-        const pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, width, height, true);
-        return Gdk.Texture.new_for_pixbuf(pixbuf);
-    } catch (error) {
-        logError(error, `Failed to load image preview: ${path}`);
-        return null;
+function cacheScaledImagePaintable(cacheKey, paintable) {
+    SCALED_IMAGE_PAINTABLE_CACHE.delete(cacheKey);
+    SCALED_IMAGE_PAINTABLE_CACHE.set(cacheKey, paintable);
+
+    while (SCALED_IMAGE_PAINTABLE_CACHE.size > MAX_CACHED_ATTACHMENT_THUMBNAILS) {
+        const oldestKey = SCALED_IMAGE_PAINTABLE_CACHE.keys().next().value;
+        SCALED_IMAGE_PAINTABLE_CACHE.delete(oldestKey);
     }
+}
+
+function loadScaledImagePaintableAsync(path, width, height, onLoaded) {
+    const cacheKey = `${path}\u0000${width}\u0000${height}`;
+    const cached = SCALED_IMAGE_PAINTABLE_CACHE.get(cacheKey);
+
+    if (cached) {
+        cacheScaledImagePaintable(cacheKey, cached);
+        onLoaded(cached);
+        return;
+    }
+
+    const pendingCallbacks = PENDING_SCALED_IMAGE_LOADS.get(cacheKey);
+
+    if (pendingCallbacks) {
+        pendingCallbacks.push(onLoaded);
+        return;
+    }
+
+    PENDING_SCALED_IMAGE_LOADS.set(cacheKey, [onLoaded]);
+    const complete = (paintable) => {
+        const callbacks = PENDING_SCALED_IMAGE_LOADS.get(cacheKey) ?? [];
+        PENDING_SCALED_IMAGE_LOADS.delete(cacheKey);
+
+        if (paintable)
+            cacheScaledImagePaintable(cacheKey, paintable);
+
+        callbacks.forEach((callback) => callback(paintable));
+    };
+    const file = Gio.File.new_for_path(path);
+
+    file.read_async(GLib.PRIORITY_DEFAULT, null, (source, result) => {
+        let stream;
+
+        try {
+            stream = source.read_finish(result);
+        } catch (error) {
+            logError(error, `Failed to open image preview: ${path}`);
+            complete(null);
+            return;
+        }
+
+        GdkPixbuf.Pixbuf.new_from_stream_at_scale_async(
+            stream,
+            width,
+            height,
+            true,
+            null,
+            (_source, loadResult) => {
+                try {
+                    const pixbuf = GdkPixbuf.Pixbuf.new_from_stream_finish(loadResult);
+                    complete(Gdk.Texture.new_for_pixbuf(pixbuf));
+                } catch (error) {
+                    logError(error, `Failed to decode image preview: ${path}`);
+                    complete(null);
+                } finally {
+                    try {
+                        stream.close(null);
+                    } catch (_error) {
+                        // The loader may already have closed the stream after an error.
+                    }
+                }
+            },
+        );
+    });
 }
 
 function displayBodyWithoutImageAttachmentLines(body, message) {
@@ -726,6 +822,15 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._scrollToBottomSourceId = 0;
         this._scrollToBottomPasses = 0;
         this._scrollToBottomAnimationSourceId = 0;
+        this._conversationViewCache = new Map();
+        this._conversationMessageStartIndexes = new Map();
+        this._conversationRenderSourceId = 0;
+        this._pendingConversationView = null;
+        this._isBatchRenderingConversation = false;
+        this._renderedConversationId = null;
+        this._conversationSelectionSerial = 0;
+        this._usageDisplaySourceId = 0;
+        this._pendingUsageConversationId = null;
         const { provider: defaultProvider, model: defaultModel } = this._providerConfigs.getActiveSelection();
 
         this._conversations = new ConversationManager({
@@ -735,6 +840,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
             store: new ConversationFileStore(),
         });
         this._tools.registerTool(createImageGenerationTool(this._providerConfigs));
+        this._tools.registerTool(createAskUserTool(
+            (questions, options) => this._requestAgentQuestions(questions, options),
+        ));
         this._tools.registerTool(createCronCreateTool(this._cron, {
             onJobCreated: async (job) => this._handleCronJobChanged(job),
         }));
@@ -755,16 +863,25 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._isUpdatingProviderControls = false;
         this._activeChatCancellable = null;
         this._activeTurnConversationId = null;
+        this._activeQuestionSession = null;
         this._pendingUserMessagesByConversation = new Map();
         this._lastAssistantMessageView = null;
         this.connect('close-request', () => {
             this._stopActiveConversation();
+            this._conversations.persist();
             this._stopCronLogSync();
             this._homeFileIndex.stop();
 
             if (this._composerSuggestionRefreshSourceId) {
                 GLib.Source.remove(this._composerSuggestionRefreshSourceId);
                 this._composerSuggestionRefreshSourceId = 0;
+            }
+
+            this._cancelScheduledConversationRender();
+
+            if (this._usageDisplaySourceId) {
+                GLib.Source.remove(this._usageDisplaySourceId);
+                this._usageDisplaySourceId = 0;
             }
 
             if (this._composerStyleManagerSignalId) {
@@ -827,6 +944,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         keyController.set_propagation_phase(Gtk.PropagationPhase.CAPTURE);
         keyController.connect('key-pressed', (_controller, keyval) => {
+            if (keyval === Gdk.KEY_Escape && this._activeQuestionSession) {
+                this._finishAgentQuestions(null);
+                return true;
+            }
+
             if (keyval === Gdk.KEY_Escape && this._isComposerSuggestionPanelVisible()) {
                 this._dismissComposerSuggestions();
                 return true;
@@ -914,8 +1036,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (this._isRefreshingConversations || !row)
                 return;
 
+            this._conversationSelectionSerial += 1;
             this._conversations.selectConversation(row.conversationId);
-            this._renderActiveConversation();
+            this._renderActiveConversation({ deferIfUncached: true });
         });
 
         const conversationListScroller = new Gtk.ScrolledWindow({
@@ -957,9 +1080,57 @@ class CuscoWindow extends Adw.ApplicationWindow {
             hexpand: true,
         });
         composerMetaRow.add_css_class('cusco-composer-meta');
+        this._composerMetaRow = composerMetaRow;
         const composerMetaSpacer = new Gtk.Box({
             hexpand: true,
         });
+
+        this._agentQuestionPanel = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 6,
+            hexpand: true,
+            visible: false,
+        });
+        this._agentQuestionPanel.add_css_class('cusco-agent-question-panel');
+        const agentQuestionHeading = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 8,
+            hexpand: true,
+        });
+        this._agentQuestionHeader = new Gtk.Label({
+            label: 'Question',
+            xalign: 0,
+            hexpand: true,
+            ellipsize: Pango.EllipsizeMode.END,
+        });
+        this._agentQuestionHeader.add_css_class('caption');
+        this._agentQuestionHeader.add_css_class('dim-label');
+        this._agentQuestionProgress = new Gtk.Label({
+            xalign: 1,
+        });
+        this._agentQuestionProgress.add_css_class('caption');
+        this._agentQuestionProgress.add_css_class('dim-label');
+        this._agentQuestionPrompt = new Gtk.Label({
+            xalign: 0,
+            hexpand: true,
+            wrap: true,
+            wrap_mode: Pango.WrapMode.WORD_CHAR,
+        });
+        this._agentQuestionPrompt.add_css_class('cusco-agent-question-prompt');
+        this._agentQuestionOptions = new Gtk.FlowBox({
+            selection_mode: Gtk.SelectionMode.NONE,
+            column_spacing: 6,
+            row_spacing: 6,
+            max_children_per_line: 4,
+            min_children_per_line: 1,
+            hexpand: true,
+        });
+        this._agentQuestionOptions.add_css_class('cusco-agent-question-options');
+        agentQuestionHeading.append(this._agentQuestionHeader);
+        agentQuestionHeading.append(this._agentQuestionProgress);
+        this._agentQuestionPanel.append(agentQuestionHeading);
+        this._agentQuestionPanel.append(this._agentQuestionPrompt);
+        this._agentQuestionPanel.append(this._agentQuestionOptions);
 
         this._providerPicker = this._createProviderPicker();
         this._providerConfigButton = this._createProviderConfigButton();
@@ -985,20 +1156,41 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._scrollToBottomButton.add_css_class('cusco-scroll-to-bottom-button');
         this._scrollToBottomButton.connect('clicked', () => this._scrollToBottom({ animate: true }));
 
-        this._messages = new Gtk.Box({
-            orientation: Gtk.Orientation.VERTICAL,
-            spacing: 12,
-            margin_top: 8,
-            margin_start: 26,
-            margin_end: 26,
+        const initialConversationView = this._createConversationView();
+        this._messages = initialConversationView.messages;
+        this._messageBottomSpacer = initialConversationView.bottomSpacer;
+        this._initialConversationView = initialConversationView;
+
+        this._conversationStack = new Gtk.Stack({
+            hexpand: true,
+            vexpand: true,
+            hhomogeneous: false,
+            vhomogeneous: false,
         });
-        this._messageBottomSpacer = new Gtk.Box();
-        this._messageBottomSpacer.set_size_request(-1, 260);
-        this._messageBottomSpacer.add_css_class('cusco-message-bottom-spacer');
-        this._appendMessageBottomSpacer();
+        this._conversationStack.add_child(this._messages);
+
+        const loadingSpinner = new Gtk.Spinner({
+            spinning: true,
+        });
+        const loadingLabel = new Gtk.Label({
+            label: 'Loading chat…',
+        });
+        loadingLabel.add_css_class('dim-label');
+        this._conversationLoadingView = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 8,
+            halign: Gtk.Align.CENTER,
+            valign: Gtk.Align.CENTER,
+            hexpand: true,
+            vexpand: true,
+        });
+        this._conversationLoadingView.append(loadingSpinner);
+        this._conversationLoadingView.append(loadingLabel);
+        this._conversationStack.add_child(this._conversationLoadingView);
+        this._conversationStack.set_visible_child(this._messages);
 
         this._scroller = new Gtk.ScrolledWindow({
-            child: this._messages,
+            child: this._conversationStack,
             hexpand: true,
             vexpand: true,
         });
@@ -1160,6 +1352,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             margin_bottom: 5,
         });
         composerInlineControls.add_css_class('cusco-composer-inline-controls');
+        this._composerInlineControls = composerInlineControls;
 
         this._composerUsageFraction = 0;
         this._composerUsageChart = new Gtk.DrawingArea({
@@ -1198,6 +1391,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         const sendMessage = () => {
             const text = this._getComposerText().trim();
+
+            if (this._activeQuestionSession) {
+                if (text)
+                    this._submitAgentQuestionAnswer(text);
+                return;
+            }
+
             const references = this._getComposerReferences();
             const hasAttachments = this._pendingAttachments.length > 0;
 
@@ -1233,7 +1433,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
             const shiftPressed = (state & Gdk.ModifierType.SHIFT_MASK) !== 0;
             const controlPressed = (state & Gdk.ModifierType.CONTROL_MASK) !== 0;
 
-            if (isEnter && !shiftPressed && (this._appSettings.sendWithEnter || controlPressed)) {
+            if (isEnter
+                && !shiftPressed
+                && (this._activeQuestionSession || this._appSettings.sendWithEnter || controlPressed)) {
                 sendMessage();
                 return true;
             }
@@ -1295,6 +1497,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
 
         composerShell.append(composerMetaRow);
+        composerShell.append(this._agentQuestionPanel);
         composerShell.append(this._attachmentRow);
         composerShell.append(composerDeck);
 
@@ -1314,6 +1517,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const skillIds = activeConversation?.skillIds ?? [];
         const thinkingLevel = activeConversation?.thinkingLevel ?? this._appSettings.thinkingLevel;
 
+        this._conversationSelectionSerial += 1;
         this._conversations.createConversation({
             providerId,
             modelId,
@@ -1367,6 +1571,175 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._syncComposerReferenceTags();
         this._refreshComposerSuggestions();
         this._syncComposerPlaceholder();
+    }
+
+    _requestAgentQuestions(questions, options = {}) {
+        if (this._activeQuestionSession) {
+            const error = new Error('Another agent question is already waiting for an answer.');
+            error.userMessage = error.message;
+            throw error;
+        }
+
+        const cancellable = options.cancellable ?? null;
+
+        if (isCancellableCancelled(cancellable)) {
+            return Promise.resolve({
+                answers: null,
+                cancelled: true,
+            });
+        }
+
+        return new Promise((resolve) => {
+            const session = {
+                questions,
+                index: 0,
+                answers: {},
+                resolve,
+                cancellable,
+                cancelSignalId: 0,
+                draft: {
+                    text: this._getComposerText(),
+                    references: this._getComposerReferences(),
+                },
+            };
+
+            this._activeQuestionSession = session;
+
+            if (cancellable) {
+                session.cancelSignalId = cancellable.connect('cancelled', () => {
+                    this._finishAgentQuestions(null, { cancelled: true });
+                });
+            }
+
+            this._setQuestionComposerMode(true);
+            this._setComposerText('');
+            this._showActiveAgentQuestion();
+        });
+    }
+
+    _setQuestionComposerMode(active) {
+        this._composerMetaRow?.set_visible(!active);
+        this._agentQuestionPanel?.set_visible(active);
+        this._composerInlineControls?.set_visible(!active);
+        this._composerHint?.set_visible(!active);
+        this._attachmentRow?.set_visible(active ? false : this._pendingAttachments.length > 0);
+        this._pendingUserMessagesRow?.set_visible(false);
+        this._composer?.set_bottom_margin(active ? 8 : 26);
+        this._composerScroller?.set_min_content_height(active ? 48 : 88);
+        this._composerScroller?.set_max_content_height(active ? 120 : 176);
+        this._composerPlaceholder?.set_label(active ? 'Type a custom answer' : 'Message Cusco');
+
+        if (active) {
+            this._hideComposerSuggestions();
+        } else {
+            this._updateAttachmentLabel();
+            this._renderPendingUserMessages();
+            this._syncComposerHint(Boolean(this._activeChatCancellable));
+        }
+
+        this._syncComposerPlaceholder();
+    }
+
+    _showActiveAgentQuestion() {
+        const session = this._activeQuestionSession;
+        const question = session?.questions?.[session.index];
+
+        if (!session || !question)
+            return;
+
+        this._agentQuestionHeader.set_label(question.header || 'Question');
+        this._agentQuestionPrompt.set_label(question.question);
+        this._agentQuestionProgress.set_label(session.questions.length > 1
+            ? `${session.index + 1} of ${session.questions.length} · Esc to skip`
+            : 'Esc to skip');
+        this._clearBox(this._agentQuestionOptions);
+
+        for (const option of question.options) {
+            const button = new Gtk.Button({
+                tooltip_text: option.description || option.label,
+                halign: Gtk.Align.START,
+            });
+            const content = new Gtk.Box({
+                orientation: Gtk.Orientation.VERTICAL,
+                spacing: 1,
+            });
+            const label = new Gtk.Label({
+                label: option.label,
+                xalign: 0,
+                wrap: true,
+                wrap_mode: Pango.WrapMode.WORD_CHAR,
+            });
+            label.add_css_class('cusco-agent-question-option-title');
+            content.append(label);
+
+            if (option.description) {
+                const description = new Gtk.Label({
+                    label: option.description,
+                    xalign: 0,
+                    wrap: true,
+                    wrap_mode: Pango.WrapMode.WORD_CHAR,
+                });
+                description.add_css_class('caption');
+                description.add_css_class('dim-label');
+                content.append(description);
+            }
+
+            button.set_child(content);
+            button.add_css_class('cusco-agent-question-option');
+            button.connect('clicked', () => this._submitAgentQuestionAnswer(option.value));
+            this._agentQuestionOptions.append(button);
+        }
+
+        this._agentQuestionOptions.set_visible(question.options.length > 0);
+        this.focusComposer();
+    }
+
+    _submitAgentQuestionAnswer(answer) {
+        const session = this._activeQuestionSession;
+        const question = session?.questions?.[session.index];
+        const value = String(answer ?? '').trim();
+
+        if (!session || !question || !value)
+            return false;
+
+        session.answers[question.id] = value;
+        session.index += 1;
+
+        if (session.index >= session.questions.length) {
+            this._finishAgentQuestions({ ...session.answers });
+            return true;
+        }
+
+        this._setComposerText('');
+        this._showActiveAgentQuestion();
+        return true;
+    }
+
+    _finishAgentQuestions(answers, { cancelled = false } = {}) {
+        const session = this._activeQuestionSession;
+
+        if (!session)
+            return false;
+
+        this._activeQuestionSession = null;
+
+        if (session.cancellable && session.cancelSignalId) {
+            try {
+                session.cancellable.disconnect(session.cancelSignalId);
+            } catch (_error) {
+                // The cancellation signal may already be disconnecting during shutdown.
+            }
+        }
+
+        this._setQuestionComposerMode(false);
+        this._composerReferences = session.draft.references;
+        this._setComposerText(session.draft.text, { preserveReferences: true });
+        this.focusComposer();
+        session.resolve({
+            answers: answers ?? null,
+            cancelled,
+        });
+        return true;
     }
 
     _createComposerSuggestionPanel() {
@@ -1526,7 +1899,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _scheduleComposerSuggestionRefresh() {
-        if (this._composerSuggestionRefreshSourceId)
+        if (this._activeQuestionSession || this._composerSuggestionRefreshSourceId)
             return;
 
         this._composerSuggestionRefreshSourceId = GLib.idle_add(
@@ -1543,6 +1916,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (this._composerSuggestionRefreshSourceId) {
             GLib.Source.remove(this._composerSuggestionRefreshSourceId);
             this._composerSuggestionRefreshSourceId = 0;
+        }
+
+        if (this._activeQuestionSession) {
+            this._hideComposerSuggestions();
+            return;
         }
 
         if (this._updatingComposerReferences || !this._composerBuffer || !this._composerSuggestionRevealer)
@@ -1888,14 +2266,29 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return popover;
     }
 
-    _syncComposerUsageChart() {
+    _syncComposerUsageChart(baseUsage = null, conversation = this._conversations.activeConversation) {
         if (!this._composerUsageChart)
             return;
 
-        const conversation = this._conversations.activeConversation;
-        const usage = estimateConversationUsage(this._getUsageMessages(conversation, {
-            includeComposerDraft: true,
-        }));
+        let usage = baseUsage;
+
+        if (usage) {
+            const draft = this._getComposerText().trim();
+
+            if (draft) {
+                const draftUsage = estimateConversationUsage([{ content: draft }]);
+                usage = {
+                    characters: usage.characters + draftUsage.characters,
+                    messages: usage.messages + draftUsage.messages,
+                    tokens: usage.tokens + draftUsage.tokens,
+                };
+            }
+        } else {
+            usage = estimateConversationUsage(this._getUsageMessages(conversation, {
+                includeComposerDraft: true,
+            }));
+        }
+
         const contextWindowTokens = this._getContextWindowTokens(conversation);
         this._composerUsageFraction = contextWindowTokens > 0
             ? usage.tokens / contextWindowTokens
@@ -2085,9 +2478,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (!conversation)
             return;
 
+        this._conversationSelectionSerial += 1;
         this._conversations.selectConversation(conversationId);
         this._refreshConversationList();
-        this._renderActiveConversation();
+        this._renderActiveConversation({ deferIfUncached: true });
         this.present();
     }
 
@@ -2209,6 +2603,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     async _syncCronJobsWithConversations({ refreshUi = false } = {}) {
         const activeConversationId = this._conversations.activeConversation?.id ?? null;
+        const selectionSerial = this._conversationSelectionSerial;
         const status = await this._cron.getStatus();
 
         if (!status.available)
@@ -2228,8 +2623,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 this._appendCronRunLogs(job, conversation);
         }
 
-        if (activeConversationId && this._conversations.getConversation(activeConversationId))
+        if (selectionSerial === this._conversationSelectionSerial
+            && activeConversationId
+            && this._conversations.getConversation(activeConversationId)) {
             this._conversations.selectConversation(activeConversationId);
+        }
 
         if (refreshUi) {
             this._refreshConversationList();
@@ -2976,24 +3374,26 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         card.add_css_class('cusco-composer-attachment-preview');
 
-        const attachmentPaintable = isImageAttachment(attachment) && attachmentPathExists(attachment)
-            ? createScaledImagePaintable(
-                attachment.path,
-                COMPOSER_ATTACHMENT_THUMBNAIL_WIDTH,
-                COMPOSER_ATTACHMENT_THUMBNAIL_HEIGHT,
-            )
-            : null;
+        const canLoadImage = isImageAttachment(attachment) && attachmentPathExists(attachment);
 
-        if (attachmentPaintable) {
+        if (canLoadImage) {
             const picture = new Gtk.Picture({
                 can_shrink: true,
                 keep_aspect_ratio: true,
             });
             picture.set_content_fit(Gtk.ContentFit.COVER);
             picture.set_size_request(COMPOSER_ATTACHMENT_THUMBNAIL_WIDTH, COMPOSER_ATTACHMENT_THUMBNAIL_HEIGHT);
-            picture.set_paintable(attachmentPaintable);
             picture.add_css_class('cusco-composer-attachment-thumbnail');
             card.append(picture);
+            loadScaledImagePaintableAsync(
+                attachment.path,
+                COMPOSER_ATTACHMENT_THUMBNAIL_WIDTH,
+                COMPOSER_ATTACHMENT_THUMBNAIL_HEIGHT,
+                (paintable) => {
+                    if (paintable && picture.get_parent())
+                        picture.set_paintable(paintable);
+                },
+            );
         } else {
             const icon = new Gtk.Image({
                 icon_name: isImageAttachment(attachment) ? 'image-missing-symbolic' : 'text-x-generic-symbolic',
@@ -3124,7 +3524,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                         if (state?.type !== 'usage')
                             assistantView.set_label(text);
 
-                        this._updateUsageDisplay(conversation);
+                        this._scheduleUsageDisplayUpdate(conversation);
                         this._scrollToBottom();
                     },
                 );
@@ -3150,6 +3550,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             assistantView.set_stream_text(assistantText, assistantText);
             assistantView.set_artifacts?.(this._materializeAssistantArtifacts(assistantText));
+            assistantView.persist?.();
             this._refreshConversationList();
             this._renderActiveConversation();
             shouldSendQueued = ownsActiveTurn;
@@ -3317,10 +3718,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
             const message = createMessage('assistant', '', {
                 reasoning: this._createAgentReasoningPayload(conversation, reasoningContent),
             });
-            this._conversations.appendMessage(conversation.id, message);
+            this._conversations.appendMessage(conversation.id, message, { persist: false });
             const view = this._addMessageIfActiveConversation(conversation.id, message);
 
-            this._updateUsageDisplay(conversation);
+            this._scheduleUsageDisplayUpdate(conversation);
             this._scrollToBottom();
             return { message, view };
         }
@@ -3333,10 +3734,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 reasoningContent,
                 segment.message.reasoning?.createdAt,
             ),
+            { persist: false },
         );
 
         segment.view?.update_reasoning_message?.(storedMessage);
-        this._updateUsageDisplay(conversation);
+        this._scheduleUsageDisplayUpdate(conversation);
         this._scrollToBottom();
         return {
             message: storedMessage,
@@ -3534,7 +3936,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         else
             assistantView.set_label(displayText);
 
-        this._updateUsageDisplay(conversation);
+        this._scheduleUsageDisplayUpdate(conversation);
         this._scrollToBottom();
 
         if (this._activeChatCancellable)
@@ -3887,7 +4289,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 return assistantMessage;
 
             assistantMessage = createMessage('assistant', text);
-            this._conversations.appendMessage(conversation.id, assistantMessage);
+            this._conversations.appendMessage(conversation.id, assistantMessage, { persist: false });
             return assistantMessage;
         };
 
@@ -3895,7 +4297,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
             currentText = String(text ?? '');
             const message = ensureMessage(currentText);
 
-            this._conversations.updateMessageContent(conversation.id, message.id, currentText);
+            this._conversations.updateMessageContent(
+                conversation.id,
+                message.id,
+                currentText,
+                { persist: false },
+            );
             ensureView()?.set_label(displayText);
         };
 
@@ -3909,7 +4316,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 modelId: conversation.modelId,
                 thinkingLevel: conversation.thinkingLevel,
                 createdAt: new Date().toISOString(),
-            });
+            }, { persist: false });
             ensureView()?.set_reasoning(currentReasoning);
         };
 
@@ -3925,11 +4332,21 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 return;
 
             const message = ensureMessage(currentText);
-            this._conversations.updateMessageUsage(conversation.id, message.id, currentUsage);
+            this._conversations.updateMessageUsage(
+                conversation.id,
+                message.id,
+                currentUsage,
+                { persist: false },
+            );
         };
         const updatePersistentArtifacts = (artifacts) => {
             const message = ensureMessage(currentText);
-            const storedMessage = this._conversations.updateMessageArtifacts(conversation.id, message.id, artifacts);
+            const storedMessage = this._conversations.updateMessageArtifacts(
+                conversation.id,
+                message.id,
+                artifacts,
+                { persist: false },
+            );
 
             assistantMessage = storedMessage;
         };
@@ -3943,6 +4360,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             set_loading: () => ensureView()?.set_loading(),
             set_status: (text) => ensureView()?.set_status(text),
             clear_status: () => view?.clear_loading?.(),
+            persist: () => this._conversations.persist(),
             remove: () => view?.remove?.(),
             hasContent: () => currentText.length > 0 || currentReasoning.length > 0 || Boolean(currentUsage),
             hasToolResults: () => view?.has_tool_results?.() ?? false,
@@ -5068,21 +5486,307 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
     }
 
-    _renderActiveConversation() {
+    _createConversationView() {
+        const messages = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 12,
+            margin_top: 8,
+            margin_start: 26,
+            margin_end: 26,
+        });
+        const bottomSpacer = new Gtk.Box();
+
+        bottomSpacer.set_size_request(-1, 260);
+        bottomSpacer.add_css_class('cusco-message-bottom-spacer');
+        messages.append(bottomSpacer);
+
+        return {
+            messages,
+            bottomSpacer,
+            conversationId: null,
+            fingerprint: '',
+            lastAssistantMessageView: null,
+            referenceContents: new Set(),
+        };
+    }
+
+    _conversationViewFingerprint(conversation) {
+        if (!conversation)
+            return '';
+
+        return [
+            conversation.updatedAt ?? '',
+            conversation.messages?.length ?? 0,
+            this._appSettings.codeTheme,
+            Adw.StyleManager.get_default().get_dark() ? 'dark' : 'light',
+        ].join('\u0000');
+    }
+
+    _normalizeConversationMessageStartIndex(conversation, requestedStartIndex) {
+        return normalizeConversationMessageStartIndex(
+            conversation?.messages,
+            requestedStartIndex,
+        );
+    }
+
+    _conversationMessageStartIndex(conversation) {
+        if (!conversation?.id)
+            return 0;
+
+        const defaultStartIndex = Math.max(
+            0,
+            conversation.messages.length - CONVERSATION_MESSAGE_PAGE_SIZE,
+        );
+        const storedStartIndex = this._conversationMessageStartIndexes.get(conversation.id);
+        const requestedStartIndex = Number.isFinite(storedStartIndex)
+            && storedStartIndex < conversation.messages.length
+            ? storedStartIndex
+            : defaultStartIndex;
+
+        return this._normalizeConversationMessageStartIndex(conversation, requestedStartIndex);
+    }
+
+    _createLoadEarlierMessagesRow(conversation, startIndex) {
+        const button = new Gtk.Button({
+            label: `Show ${startIndex} earlier message${startIndex === 1 ? '' : 's'}`,
+            halign: Gtk.Align.CENTER,
+            margin_top: 8,
+            margin_bottom: 4,
+        });
+
+        button.add_css_class('flat');
+        button.connect('clicked', () => {
+            if (!this._isActiveConversationId(conversation.id))
+                return;
+
+            const nextStartIndex = this._normalizeConversationMessageStartIndex(
+                conversation,
+                Math.max(0, startIndex - CONVERSATION_MESSAGE_PAGE_SIZE),
+            );
+
+            this._conversationMessageStartIndexes.set(conversation.id, nextStartIndex);
+            this._conversationStack.set_visible_child(this._conversationLoadingView);
+            this._renderActiveConversation({
+                forceRebuild: true,
+                incremental: true,
+            });
+        });
+        return button;
+    }
+
+    _getCachedConversationView(conversation) {
+        if (!conversation?.id)
+            return null;
+
+        const entry = this._conversationViewCache.get(conversation.id);
+        return entry?.fingerprint === this._conversationViewFingerprint(conversation)
+            ? entry
+            : null;
+    }
+
+    _captureCurrentConversationView() {
+        const entry = this._conversationViewCache.get(this._renderedConversationId);
+
+        if (!entry || entry.messages !== this._messages)
+            return;
+
+        entry.lastAssistantMessageView = this._lastAssistantMessageView;
+        entry.referenceContents = this._userMessageReferenceContents;
+    }
+
+    _activateConversationView(entry, { reveal = true } = {}) {
+        this._messages = entry.messages;
+        this._messageBottomSpacer = entry.bottomSpacer;
+        this._lastAssistantMessageView = entry.lastAssistantMessageView;
+        this._userMessageReferenceContents = entry.referenceContents;
+        this._renderedConversationId = entry.conversationId;
+
+        if (reveal)
+            this._conversationStack.set_visible_child(entry.messages);
+    }
+
+    _touchConversationView(entry) {
+        this._conversationViewCache.delete(entry.conversationId);
+        this._conversationViewCache.set(entry.conversationId, entry);
+    }
+
+    _removeConversationView(entry) {
+        if (!entry || entry.messages === this._messages)
+            return;
+
+        if (entry.messages.get_parent() === this._conversationStack)
+            this._conversationStack.remove(entry.messages);
+    }
+
+    _trimConversationViewCache() {
+        while (this._conversationViewCache.size > MAX_CACHED_CONVERSATION_VIEWS) {
+            const oldest = this._conversationViewCache.entries().next().value;
+
+            if (!oldest)
+                return;
+
+            const [conversationId, entry] = oldest;
+
+            if (conversationId === this._renderedConversationId) {
+                this._touchConversationView(entry);
+                continue;
+            }
+
+            this._conversationViewCache.delete(conversationId);
+            this._removeConversationView(entry);
+        }
+    }
+
+    _cancelScheduledConversationRender() {
+        if (this._conversationRenderSourceId) {
+            GLib.source_remove(this._conversationRenderSourceId);
+            this._conversationRenderSourceId = 0;
+        }
+
+        if (this._pendingConversationView?.messages.get_parent() === this._conversationStack)
+            this._conversationStack.remove(this._pendingConversationView.messages);
+
+        this._pendingConversationView = null;
+        this._isBatchRenderingConversation = false;
+    }
+
+    _scheduleActiveConversationRender(conversation) {
+        this._cancelScheduledConversationRender();
+        this._hideEmptyConversationState();
+        this._conversationStack.set_visible_child(this._conversationLoadingView);
+        const conversationId = conversation?.id ?? null;
+
+        this._conversationRenderSourceId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._conversationRenderSourceId = 0;
+
+            if ((this._conversations.activeConversation?.id ?? null) === conversationId)
+                this._renderActiveConversation({ incremental: true });
+
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _finishConversationViewRender(conversation, entry, staleEntry) {
+        entry.lastAssistantMessageView = this._lastAssistantMessageView;
+        entry.referenceContents = this._userMessageReferenceContents;
+
+        if (conversation?.id) {
+            this._conversationViewCache.set(conversation.id, entry);
+            this._touchConversationView(entry);
+        }
+
+        this._conversationStack.set_visible_child(entry.messages);
+
+        if (staleEntry && staleEntry !== entry)
+            this._removeConversationView(staleEntry);
+
+        this._trimConversationViewCache();
+        this._updateUsageDisplay(conversation);
+        this._scrollToBottom();
+    }
+
+    _renderConversationMessagesIncrementally(conversation, entry, staleEntry, messages) {
+        const conversationId = conversation?.id ?? null;
+        let messageIndex = 0;
+
+        this._pendingConversationView = entry;
+        this._isBatchRenderingConversation = true;
+
+        const renderBatch = () => {
+            this._conversationRenderSourceId = 0;
+
+            if ((this._conversations.activeConversation?.id ?? null) !== conversationId) {
+                this._cancelScheduledConversationRender();
+                return GLib.SOURCE_REMOVE;
+            }
+
+            const startedAt = GLib.get_monotonic_time();
+
+            do {
+                const message = messages[messageIndex];
+                this._addMessage(message.content, message.role, message);
+                messageIndex += 1;
+            } while (messageIndex < messages.length
+                && GLib.get_monotonic_time() - startedAt < CONVERSATION_RENDER_BATCH_BUDGET_US);
+
+            if (messageIndex < messages.length) {
+                this._conversationRenderSourceId = GLib.idle_add(GLib.PRIORITY_HIGH_IDLE, renderBatch);
+                return GLib.SOURCE_REMOVE;
+            }
+
+            this._pendingConversationView = null;
+            this._isBatchRenderingConversation = false;
+            this._finishConversationViewRender(conversation, entry, staleEntry);
+            return GLib.SOURCE_REMOVE;
+        };
+
+        if (messages.length === 0) {
+            this._pendingConversationView = null;
+            this._isBatchRenderingConversation = false;
+            this._finishConversationViewRender(conversation, entry, staleEntry);
+            return;
+        }
+
+        this._conversationRenderSourceId = GLib.idle_add(GLib.PRIORITY_HIGH_IDLE, renderBatch);
+    }
+
+    _renderActiveConversation(options = {}) {
         const conversation = this._conversations.activeConversation;
-        this._userMessageReferenceContents.clear();
-        this._clearBox(this._messages);
-        this._appendMessageBottomSpacer();
-        this._lastAssistantMessageView = null;
+        const cachedEntry = options.forceRebuild
+            ? null
+            : this._getCachedConversationView(conversation);
+
+        if (options.deferIfUncached && conversation && !cachedEntry) {
+            this._scheduleActiveConversationRender(conversation);
+            return;
+        }
+
+        this._cancelScheduledConversationRender();
+        this._captureCurrentConversationView();
         this._syncProviderControls(conversation);
         this._syncEmptyConversationState(conversation);
         this._renderPendingUserMessages(conversation);
 
-        for (const message of conversation?.messages ?? [])
+        if (cachedEntry) {
+            this._touchConversationView(cachedEntry);
+            this._activateConversationView(cachedEntry);
+            this._updateUsageDisplay(conversation);
+            this._scrollToBottom();
+            return;
+        }
+
+        const staleEntry = conversation?.id
+            ? this._conversationViewCache.get(conversation.id)
+            : null;
+        let entry = this._initialConversationView;
+
+        if (entry) {
+            this._initialConversationView = null;
+        } else {
+            entry = this._createConversationView();
+            this._conversationStack.add_child(entry.messages);
+        }
+
+        entry.conversationId = conversation?.id ?? null;
+        entry.fingerprint = this._conversationViewFingerprint(conversation);
+        entry.lastAssistantMessageView = null;
+        entry.referenceContents = new Set();
+        this._activateConversationView(entry, { reveal: false });
+        const messageStartIndex = this._conversationMessageStartIndex(conversation);
+        const messagesToRender = (conversation?.messages ?? []).slice(messageStartIndex);
+
+        if (messageStartIndex > 0)
+            entry.messages.prepend(this._createLoadEarlierMessagesRow(conversation, messageStartIndex));
+
+        if (options.incremental) {
+            this._renderConversationMessagesIncrementally(conversation, entry, staleEntry, messagesToRender);
+            return;
+        }
+
+        for (const message of messagesToRender)
             this._addMessage(message.content, message.role, message);
 
-        this._updateUsageDisplay(conversation);
-        this._scrollToBottom();
+        this._finishConversationViewRender(conversation, entry, staleEntry);
     }
 
     _updateUsageDisplay(conversation = this._conversations.activeConversation, pendingAssistantText = '') {
@@ -5097,8 +5801,32 @@ class CuscoWindow extends Adw.ApplicationWindow {
         }));
 
         this._windowTitle.set_subtitle(`${usage.messages} messages`);
-        this._syncComposerUsageChart();
+        this._syncComposerUsageChart(usage, conversation);
         this._syncComposerHint(Boolean(this._activeChatCancellable));
+    }
+
+    _scheduleUsageDisplayUpdate(conversation) {
+        this._pendingUsageConversationId = conversation?.id ?? null;
+
+        if (this._usageDisplaySourceId)
+            return;
+
+        this._usageDisplaySourceId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT,
+            STREAMING_USAGE_UPDATE_INTERVAL_MS,
+            () => {
+                this._usageDisplaySourceId = 0;
+                const pendingConversation = this._pendingUsageConversationId
+                    ? this._conversations.getConversation(this._pendingUsageConversationId)
+                    : null;
+                this._pendingUsageConversationId = null;
+
+                if (pendingConversation && this._isActiveConversationId(pendingConversation.id))
+                    this._updateUsageDisplay(pendingConversation);
+
+                return GLib.SOURCE_REMOVE;
+            },
+        );
     }
 
     _setComposerBusy(isBusy) {
@@ -5371,14 +6099,17 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return row;
     }
 
-    _createReasoningExpander(content, options = {}) {
+    _createReasoningExpander(contentOrFactory, options = {}) {
+        const contentFactory = typeof contentOrFactory === 'function'
+            ? contentOrFactory
+            : null;
+        let content = contentFactory ? null : contentOrFactory;
         const container = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
             spacing: 4,
             hexpand: true,
         });
         const revealer = new Gtk.Revealer({
-            child: content,
             reveal_child: false,
             transition_type: Gtk.RevealerTransitionType.SLIDE_DOWN,
         });
@@ -5405,6 +6136,18 @@ class CuscoWindow extends Adw.ApplicationWindow {
         header.append(chevron);
         headerButton.set_child(header);
 
+        const ensureContent = () => {
+            if (!content && contentFactory) {
+                content = contentFactory();
+                revealer.set_child(content);
+            }
+
+            return content;
+        };
+
+        if (content)
+            revealer.set_child(content);
+
         const updateExpandedState = (expanded) => {
             headerButton.set_tooltip_text(expanded ? 'Collapse reasoning' : 'Expand reasoning');
 
@@ -5417,6 +6160,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         headerButton.connect('clicked', () => {
             const expanded = !revealer.get_reveal_child();
 
+            if (expanded)
+                ensureContent();
+
             revealer.set_reveal_child(expanded);
             updateExpandedState(expanded);
         });
@@ -5424,22 +6170,29 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         container.append(headerButton);
         container.append(revealer);
+        container.ensureContent = ensureContent;
         return container;
     }
 
     _createAgentReasoningSegment(message) {
-        const content = createMessageContent(
-            getMessageReasoningContent(message) || ' ',
-            this._messageContentOptions({
-                role: 'assistant',
-                hexpand: true,
-                codeMinWidth: 380,
-            }),
-        );
-        const expander = this._createReasoningExpander(content);
+        let currentMessage = message;
+        let content = null;
+        const createContent = () => {
+            content = createMessageContent(
+                getMessageReasoningContent(currentMessage) || ' ',
+                this._messageContentOptions({
+                    role: 'assistant',
+                    hexpand: true,
+                    codeMinWidth: 380,
+                }),
+            );
+            return content;
+        };
+        const expander = this._createReasoningExpander(createContent);
 
         expander.updateReasoningMessage = (nextMessage) => {
-            content.updateContent(getMessageReasoningContent(nextMessage) || ' ');
+            currentMessage = nextMessage;
+            content?.updateContent(getMessageReasoningContent(nextMessage) || ' ', { defer: true });
         };
 
         return expander;
@@ -5582,15 +6335,35 @@ class CuscoWindow extends Adw.ApplicationWindow {
             valign: Gtk.Align.CENTER,
             ellipsize: Pango.EllipsizeMode.END,
         });
-        const bodyContent = createMessageContent(message.content || ' ', this._messageContentOptions({
-            role: 'system',
+        let bodyContent = null;
+        const resultCard = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 0,
             hexpand: true,
-            codeMinWidth: 380,
-        }));
+        });
+        const resultHeader = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 6,
+            margin_top: 6,
+            margin_bottom: 6,
+            margin_start: 8,
+            margin_end: 8,
+        });
+        const resultLabel = new Gtk.Label({
+            label: 'Result',
+            xalign: 0,
+            hexpand: true,
+        });
+        const copyResultButton = new Gtk.Button({
+            icon_name: 'edit-copy-symbolic',
+            tooltip_text: 'Copy result',
+            valign: Gtk.Align.CENTER,
+        });
         const revealer = new Gtk.Revealer({
-            child: bodyContent,
+            child: resultCard,
             reveal_child: false,
             transition_type: Gtk.RevealerTransitionType.SLIDE_DOWN,
+            hexpand: true,
         });
         const headerButton = new Gtk.Button({
             halign: Gtk.Align.START,
@@ -5606,7 +6379,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
             pixel_size: 14,
             valign: Gtk.Align.CENTER,
         });
-        const outputPreview = this._createBashOutputPreview('');
+        let outputPreview = null;
+        const outputPreviewSlot = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            hexpand: true,
+        });
         const imagePreview = this._createToolImagePreview();
 
         container.add_css_class('cusco-tool-result');
@@ -5616,16 +6393,47 @@ class CuscoWindow extends Adw.ApplicationWindow {
         detailLabel.add_css_class('dim-label');
         statusPill.add_css_class('cusco-tool-result-status');
         chevron.add_css_class('cusco-tool-result-toggle-icon');
-        outputPreview.set_visible(false);
+        resultCard.add_css_class('cusco-tool-result-card');
+        resultHeader.add_css_class('cusco-tool-result-card-header');
+        resultLabel.add_css_class('caption');
+        resultLabel.add_css_class('dim-label');
+        copyResultButton.add_css_class('flat');
 
-        if (!options.embedded) {
+        if (!options.embedded)
             container.set_size_request(460, -1);
-            bodyContent.add_css_class('cusco-message-bubble');
-            bodyContent.add_css_class('cusco-message-assistant');
-        }
 
         headerButton.add_css_class('flat');
         headerButton.add_css_class('cusco-tool-result-header');
+
+        copyResultButton.connect('clicked', () => {
+            copyTextToClipboard(currentMessage.content);
+        });
+        resultHeader.append(resultLabel);
+        resultHeader.append(copyResultButton);
+        resultCard.append(resultHeader);
+
+        const ensureBodyContent = () => {
+            if (bodyContent)
+                return bodyContent;
+
+            bodyContent = createMessageContent(currentMessage.content || ' ', this._messageContentOptions({
+                role: 'system',
+                hexpand: true,
+                codeMinWidth: 380,
+            }));
+            bodyContent.add_css_class('cusco-tool-result-card-content');
+            resultCard.append(bodyContent);
+            return bodyContent;
+        };
+        const ensureOutputPreview = () => {
+            if (outputPreview)
+                return outputPreview;
+
+            outputPreview = this._createBashOutputPreview('');
+            outputPreview.set_visible(false);
+            outputPreviewSlot.append(outputPreview);
+            return outputPreview;
+        };
 
         titleRow.append(actionLabel);
         titleRow.append(statusPill);
@@ -5637,6 +6445,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         headerButton.set_child(header);
         headerButton.connect('clicked', () => {
             const expanded = !revealer.get_reveal_child();
+
+            if (expanded)
+                ensureBodyContent();
 
             revealer.set_reveal_child(expanded);
             headerButton.set_tooltip_text(
@@ -5668,17 +6479,36 @@ class CuscoWindow extends Adw.ApplicationWindow {
             targetLabel.set_visible(Boolean(target));
             detailLabel.set_label(detail);
             detailLabel.set_visible(Boolean(detail));
-            bodyContent.updateContent(currentMessage.content || ' ');
-            outputPreview.updateOutputPreview(display.outputPreview);
-            outputPreview.set_visible(display.isBash && Boolean(display.outputPreview));
-            imagePreview.updateImage(currentMessage.toolCall);
+            bodyContent?.updateContent(currentMessage.content || ' ');
+            copyResultButton.set_sensitive(Boolean(String(currentMessage.content ?? '').trim()));
+            const showOutputPreview = display.isBash
+                && display.status === 'running'
+                && Boolean(display.outputPreview);
+
+            if (showOutputPreview) {
+                const preview = ensureOutputPreview();
+                preview.updateOutputPreview(display.outputPreview);
+                preview.set_visible(true);
+            } else {
+                outputPreview?.set_visible(false);
+            }
+
+            const toolCall = currentMessage.toolCall;
+            const hasImagePreview = Boolean(String(toolCall?.imagePath ?? '').trim())
+                || (toolCall?.artifacts ?? []).some((artifact) => artifact?.kind === 'image');
+
+            if (hasImagePreview)
+                imagePreview.updateImage(toolCall);
+            else
+                imagePreview.set_visible(false);
+
             headerButton.set_tooltip_text(
                 `${revealer.get_reveal_child() ? 'Collapse' : 'Expand'} ${display.label} result`,
             );
         };
 
         container.append(headerButton);
-        container.append(outputPreview);
+        container.append(outputPreviewSlot);
         container.append(imagePreview);
         container.append(revealer);
         container.updateToolMessage = (nextMessage) => {
@@ -5689,8 +6519,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (currentMessage.toolCall)
                 currentMessage.toolCall.outputPreview = output;
 
-            outputPreview.updateOutputPreview(output);
-            outputPreview.set_visible(Boolean(output));
+            if (!output) {
+                outputPreview?.set_visible(false);
+                return;
+            }
+
+            const preview = ensureOutputPreview();
+            preview.updateOutputPreview(output);
+            preview.set_visible(true);
         };
 
         updateFromMessage();
@@ -5750,16 +6586,21 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const isStreamingAssistant = kind === 'assistant' && !message;
         let reasoningContent = null;
         let reasoningExpander = null;
+        let reasoningBodyText = reasoningText || ' ';
 
-        if (kind === 'assistant') {
-            reasoningContent = createMessageContent(reasoningText || ' ', this._messageContentOptions({
-                role: 'assistant',
-                hexpand: true,
-                codeMinWidth: 380,
-            }));
-            reasoningContent.add_css_class('cusco-message-bubble');
-            reasoningContent.add_css_class('cusco-message-assistant');
-            reasoningExpander = this._createReasoningExpander(reasoningContent, {
+        if (kind === 'assistant' && (reasoningText || isStreamingAssistant)) {
+            const createReasoningContent = () => {
+                reasoningContent = createMessageContent(reasoningBodyText, this._messageContentOptions({
+                    role: 'assistant',
+                    hexpand: true,
+                    codeMinWidth: 380,
+                }));
+                reasoningContent.add_css_class('cusco-message-bubble');
+                reasoningContent.add_css_class('cusco-message-assistant');
+                return reasoningContent;
+            };
+
+            reasoningExpander = this._createReasoningExpander(createReasoningContent, {
                 isActive: isStreamingAssistant,
             });
             reasoningExpander.set_visible(Boolean(reasoningText));
@@ -5828,7 +6669,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             currentBodyText = nextText;
             clearLoading();
             bodyContent.set_visible(true);
-            bodyContent.updateContent(nextText);
+            bodyContent.updateContent(nextText, { defer: isStreamingAssistant });
         };
 
         let agentActivityBox = null;
@@ -5890,19 +6731,27 @@ class CuscoWindow extends Adw.ApplicationWindow {
             set_status: showLoading,
             clear_loading: clearLoading,
             set_reasoning: (text) => {
-                if (!reasoningContent || !reasoningExpander)
+                if (!reasoningExpander)
                     return;
 
                 const nextText = String(text ?? '').trim();
-                reasoningContent.updateContent(nextText || ' ');
+                reasoningBodyText = nextText || ' ';
+
+                if (nextText) {
+                    reasoningContent = reasoningExpander.ensureContent();
+                    reasoningContent?.updateContent(reasoningBodyText, { defer: isStreamingAssistant });
+                }
+
                 reasoningExpander.set_visible(Boolean(nextText));
             },
             append_tool_result: appendToolResult,
             append_reasoning_segment: appendReasoningSegment,
             has_tool_results: () => hasToolResults,
             remove: () => {
-                if (wrapper.get_parent())
-                    this._messages.remove(wrapper);
+                const parent = wrapper.get_parent();
+
+                if (typeof parent?.remove === 'function')
+                    parent.remove(wrapper);
 
                 if (this._lastAssistantMessageView === messageView)
                     this._lastAssistantMessageView = null;
@@ -6224,6 +7073,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
     _scrollToBottom(options = {}) {
         if (!this._scroller)
             return;
+
+        if (this._isBatchRenderingConversation) {
+            const passes = Math.max(1, Math.round(options.passes ?? 1));
+            this._scrollToBottomPasses = Math.max(this._scrollToBottomPasses, passes);
+            return;
+        }
 
         if (options.animate && !this._followLatestMessage) {
             this._animateScrollToBottom();

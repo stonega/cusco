@@ -212,4 +212,33 @@ reloaded.deleteConversation(reloadedChat.id);
 if (reloaded.allConversations.length !== 0)
     throw new Error('Conversation was not deleted');
 
+const selectionDatabasePath = GLib.build_filenamev([
+    GLib.get_tmp_dir(),
+    `cusco-conversation-selection-${GLib.uuid_string_random()}`,
+    'conversations.json',
+]);
+const selectionFileStore = new ConversationFileStore({ path: selectionDatabasePath });
+const selectionConversations = new ConversationManager({
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
+    store: selectionFileStore,
+});
+const selectedChat = selectionConversations.createConversation({ title: 'Selected chat' });
+selectionConversations.createConversation({ title: 'Other chat' });
+const [, databaseBeforeSelection] = GLib.file_get_contents(selectionDatabasePath);
+selectionConversations.selectConversation(selectedChat.id);
+const [, databaseAfterSelection] = GLib.file_get_contents(selectionDatabasePath);
+
+if (new TextDecoder().decode(databaseAfterSelection) !== new TextDecoder().decode(databaseBeforeSelection))
+    throw new Error('Selecting a conversation rewrote the transcript database');
+
+const reloadedSelection = new ConversationManager({
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
+    store: selectionFileStore,
+});
+
+if (reloadedSelection.activeConversation?.id !== selectedChat.id)
+    throw new Error('Lightweight active conversation state was not restored');
+
 print('Cusco conversation store smoke passed');

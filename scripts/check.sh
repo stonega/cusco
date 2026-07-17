@@ -33,6 +33,7 @@ gjs -m tests/image-generation-smoke.js
 gjs -m tests/tools-smoke.js
 gjs -m tests/cron-smoke.js
 gjs -m tests/agent-mode-smoke.js
+gjs -m tests/ask-user-smoke.js
 gjs -m tests/accessibility-smoke.js
 gjs -m tests/computer-use-image-views-smoke.js
 gjs -m tests/computer-use-smoke.js

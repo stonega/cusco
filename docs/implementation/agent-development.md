@@ -12,6 +12,7 @@ Cusco already has the first useful pieces of an agent harness:
 - Provider abstraction in `src/providers/provider.js`.
 - Provider adapters in `src/providers/remoteProvider.js`.
 - Slash-command tools in `src/tools/tools.js`.
+- Agent-to-user question tool contract in `src/tools/askUser.js`.
 - Provider-neutral Agent Mode prompt and tool-call parsing in `src/chat/agentMode.js`.
 - Central tool permission decisions in `src/tools/permissions.js`.
 - Explicit memory controls in `src/memory/memory.js`.
@@ -28,6 +29,8 @@ The core runtime path is:
 When `agentModeEnabled` is set on a conversation, Cusco adds an Agent Mode system prompt and lets the model request one existing tool at a time with a `<cusco_tool_call>` JSON tag. Cusco validates the request, applies permissions, appends visible tool audit rows, feeds the result back to the model, and repeats until the model returns final text or the iteration limit is reached.
 
 Current built-in tools are `calc`, `data`, `search`, `file_list`, `file_read`, and `bash`. Search, file access, and bash are approval-gated. File reads are size-limited, file listings are item-limited, bash has a timeout and bounded stdout/stderr, and sensitive home-directory paths such as SSH keys, GnuPG data, keyrings, and browser profiles are blocked.
+
+Cusco also registers the local `ask_user` Agent tool. It suspends the tool loop while the native composer collects up to five sequential answers, returns answers keyed by question ID, and treats Escape as a non-cancelling `null` response. The composer preserves its draft and hides normal provider, attachment, usage, and send-hint controls during the question session.
 
 Keep this path boring and explicit. Most agent features should attach around it, not replace it.
 

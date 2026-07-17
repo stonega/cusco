@@ -89,6 +89,7 @@ skill_sources = files(
 )
 
 tool_sources = files(
+  'tools/askUser.js',
   'tools/display.js',
   'tools/permissions.js',
   'tools/tools.js',

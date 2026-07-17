@@ -163,12 +163,15 @@ export class ConversationManager {
         if (!conversation)
             throw new Error(`Conversation does not exist: ${conversationId}`);
 
+        if (this._activeConversationId === conversationId)
+            return conversation;
+
         this._activeConversationId = conversationId;
-        this._persist();
+        this._persistActiveConversationId();
         return conversation;
     }
 
-    appendMessage(conversationId, message) {
+    appendMessage(conversationId, message, options = {}) {
         const conversation = this.getConversation(conversationId);
 
         if (!conversation)
@@ -182,16 +185,16 @@ export class ConversationManager {
             conversation.title = createTitleFromMessage(normalizedMessage.content);
 
         this._moveToTop(conversationId);
-        this._persist();
+        this._persistMutation(options);
         return conversation;
     }
 
-    updateMessageContent(conversationId, messageId, content) {
+    updateMessageContent(conversationId, messageId, content, options = {}) {
         const { conversation, message } = this._getMessageRecord(conversationId, messageId);
 
         message.content = String(content ?? '');
         conversation.updatedAt = now();
-        this._persist();
+        this._persistMutation(options);
         return message;
     }
 
@@ -392,30 +395,30 @@ export class ConversationManager {
         return conversation;
     }
 
-    updateMessageReasoning(conversationId, messageId, reasoning) {
+    updateMessageReasoning(conversationId, messageId, reasoning, options = {}) {
         const { conversation, message } = this._getMessageRecord(conversationId, messageId);
 
         message.reasoning = normalizeReasoning(reasoning);
         conversation.updatedAt = now();
-        this._persist();
+        this._persistMutation(options);
         return message;
     }
 
-    updateMessageArtifacts(conversationId, messageId, artifacts) {
+    updateMessageArtifacts(conversationId, messageId, artifacts, options = {}) {
         const { conversation, message } = this._getMessageRecord(conversationId, messageId);
 
         message.artifacts = normalizeArtifacts(artifacts);
         conversation.updatedAt = now();
-        this._persist();
+        this._persistMutation(options);
         return message;
     }
 
-    updateMessageUsage(conversationId, messageId, usage) {
+    updateMessageUsage(conversationId, messageId, usage, options = {}) {
         const { conversation, message } = this._getMessageRecord(conversationId, messageId);
 
         message.usage = normalizeUsage(usage);
         conversation.updatedAt = now();
-        this._persist();
+        this._persistMutation(options);
         return message;
     }
 
@@ -451,6 +454,10 @@ export class ConversationManager {
         this._moveToTop(conversationId);
         this._persist();
         return conversation;
+    }
+
+    persist() {
+        this._persist();
     }
 
     _moveToTop(conversationId) {
@@ -501,9 +508,28 @@ export class ConversationManager {
             this._store.save({
                 conversations: this._conversations,
                 activeConversationId: this._activeConversationId,
-            });
+            }, { normalized: true });
         } catch (error) {
             logError(error, 'Failed to save local conversation database');
+        }
+    }
+
+    _persistMutation(options) {
+        if (options.persist !== false)
+            this._persist();
+    }
+
+    _persistActiveConversationId() {
+        if (!this._store)
+            return;
+
+        try {
+            if (typeof this._store.saveActiveConversationId === 'function')
+                this._store.saveActiveConversationId(this._activeConversationId);
+            else
+                this._persist();
+        } catch (error) {
+            logError(error, 'Failed to save active conversation state');
         }
     }
 }

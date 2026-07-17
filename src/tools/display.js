@@ -73,6 +73,15 @@ const TOOL_DISPLAY_PRESETS = {
             cancelled: 'Image generation stopped',
         },
     },
+    ask_user: {
+        label: 'Ask User',
+        actions: {
+            running: 'Waiting for answer',
+            completed: 'Asked user',
+            failed: 'Question failed',
+            cancelled: 'Question stopped',
+        },
+    },
 };
 
 const FALLBACK_DISPLAY = {
@@ -108,6 +117,22 @@ function toolPreset(name) {
     return TOOL_DISPLAY_PRESETS[name] ?? FALLBACK_DISPLAY;
 }
 
+function askUserQuestion(toolCall) {
+    const firstQuestion = Array.isArray(toolCall?.questions) ? toolCall.questions[0] : null;
+
+    if (firstQuestion?.question)
+        return normalizeString(firstQuestion.question);
+
+    try {
+        const parsed = JSON.parse(String(toolCall?.input ?? ''));
+        const question = Array.isArray(parsed?.questions) ? parsed.questions[0] : parsed;
+
+        return normalizeString(question?.question, normalizeString(question?.prompt));
+    } catch (_error) {
+        return '';
+    }
+}
+
 function statusLabel(status) {
     if (status === 'running')
         return 'running';
@@ -133,6 +158,9 @@ function targetForTool(name, toolCall) {
 
     if (name === 'image_gen')
         return normalizeString(toolCall?.prompt, normalizeString(toolCall?.input));
+
+    if (name === 'ask_user')
+        return askUserQuestion(toolCall) || 'Waiting for your response';
 
     return normalizeString(toolCall?.target, normalizeString(toolCall?.input));
 }
@@ -272,6 +300,8 @@ export function createToolCallFromResult(result, options = {}) {
         imagePath: result?.imagePath ?? '',
         mimeType: result?.mimeType ?? '',
         detail: result?.detail ?? '',
+        questions: Array.isArray(result?.questions) ? result.questions : [],
+        answers: result?.answers ?? null,
         completedAt: options.completedAt ?? new Date().toISOString(),
     };
 }

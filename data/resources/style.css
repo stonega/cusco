@@ -335,6 +335,26 @@
     opacity: 0.74;
 }
 
+.cusco-agent-question-panel {
+    padding: 2px 4px 0;
+}
+
+.cusco-agent-question-prompt {
+    font-weight: 600;
+}
+
+.cusco-agent-question-options {
+    margin-top: 2px;
+}
+
+.cusco-agent-question-option {
+    padding: 6px 10px;
+}
+
+.cusco-agent-question-option-title {
+    font-weight: 600;
+}
+
 .cusco-tool-result {
     margin-top: 2px;
     margin-bottom: 2px;
@@ -342,6 +362,25 @@
 
 .cusco-tool-result-header {
     padding: 4px 6px;
+}
+
+.cusco-tool-result-card {
+    border-radius: 8px;
+    background-color: alpha(@window_fg_color, 0.06);
+    border: 1px solid alpha(@window_fg_color, 0.08);
+    margin: 2px 6px 4px;
+}
+
+.cusco-high-contrast .cusco-tool-result-card {
+    border: 1px solid @window_fg_color;
+}
+
+.cusco-tool-result-card-header {
+    border-bottom: 1px solid alpha(@window_fg_color, 0.08);
+}
+
+.cusco-tool-result-card-content {
+    padding: 10px 12px;
 }
 
 .cusco-tool-result-action {

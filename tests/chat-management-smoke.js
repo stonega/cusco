@@ -28,6 +28,52 @@ conversations.selectConversation(firstChat.id);
 if (conversations.activeConversation.id !== firstChat.id)
     throw new Error('Conversation selection did not update the active chat');
 
+let fullSaveCount = 0;
+let selectionSaveCount = 0;
+let usedNormalizedSave = false;
+const selectionStore = {
+    load: () => ({ conversations: [], activeConversationId: null }),
+    save: (_database, options = {}) => {
+        fullSaveCount += 1;
+        usedNormalizedSave = options.normalized === true;
+    },
+    saveActiveConversationId: () => {
+        selectionSaveCount += 1;
+    },
+};
+const persistedSelectionConversations = new ConversationManager({
+    providerId: defaultProvider.id,
+    modelId: defaultModel.id,
+    store: selectionStore,
+});
+const persistedFirstChat = persistedSelectionConversations.createConversation({ title: 'Persisted first chat' });
+const persistedSecondChat = persistedSelectionConversations.createConversation({ title: 'Persisted second chat' });
+
+fullSaveCount = 0;
+persistedSelectionConversations.selectConversation(persistedFirstChat.id);
+
+if (fullSaveCount !== 0 || selectionSaveCount !== 1)
+    throw new Error('Conversation selection rewrote the full conversation database');
+
+persistedSelectionConversations.selectConversation(persistedFirstChat.id);
+
+if (selectionSaveCount !== 1)
+    throw new Error('Selecting the active conversation persisted redundant state');
+
+persistedSelectionConversations.appendMessage(
+    persistedSecondChat.id,
+    createMessage('assistant', 'Deferred streaming update'),
+    { persist: false },
+);
+
+if (fullSaveCount !== 0)
+    throw new Error('Deferred conversation mutation persisted synchronously');
+
+persistedSelectionConversations.persist();
+
+if (fullSaveCount !== 1 || !usedNormalizedSave)
+    throw new Error('Explicit conversation persistence did not use the normalized fast path');
+
 conversations.updateProviderConfig(firstChat.id, {
     providerId: defaultProvider.id,
     modelId: 'glm-5-turbo',

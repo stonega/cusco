@@ -9,6 +9,7 @@ import {
     pruneComputerUseObservationImages,
 } from '../src/chat/agentMode.js';
 import { createToolPermissionDecision, TOOL_PERMISSION_DENY } from '../src/tools/permissions.js';
+import { createAskUserTool } from '../src/tools/askUser.js';
 import { ToolManager } from '../src/tools/tools.js';
 
 const tools = new ToolManager();
@@ -20,6 +21,7 @@ const nativeSearchPrompt = buildAgentModeSystemPrompt(
 );
 const nativeToolPrompt = buildAgentModeSystemPrompt([
     ...tools.listTools(),
+    createAskUserTool(async () => ({ answers: null })),
     {
         name: 'computer_step',
         label: 'Act and observe desktop window',
@@ -56,6 +58,7 @@ if (!nativeSearchPrompt.includes('Provider-managed search tools are enabled: web
 }
 
 if (!nativeToolPrompt.includes('native function-calling interface')
+    || !nativeToolPrompt.includes('call ask_user instead of asking in ordinary assistant text')
     || !nativeToolPrompt.includes('prefer computer_step')
     || !nativeToolPrompt.includes('first call computer_act with create_workspace')
     || !nativeToolPrompt.includes('maximize it when canMaximize is true')

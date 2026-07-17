@@ -87,6 +87,7 @@ Some smoke tests skip automatically when the current environment has no display 
 
 - [Architecture](docs/design/architecture.md)
 - [Setup](docs/implementation/setup.md)
+- [Chat Switching Performance](docs/implementation/chat-performance.md)
 - [User Getting Started](docs/user/getting-started.md)
 - [Computer Use](docs/user/computer-use.md)
 - [Computer-Use Architecture](docs/implementation/computer-use.md)

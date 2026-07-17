@@ -43,6 +43,10 @@ export function buildAgentModeSystemPrompt(tools, {
     const hasComputerStep = (tools ?? []).some(tool => tool?.name === 'computer_step');
     const hasComputerAct = (tools ?? []).some(tool => tool?.name === 'computer_act');
     const hasComputerRegion = (tools ?? []).some(tool => tool?.name === 'computer_observe_region');
+    const hasAskUser = (tools ?? []).some(tool => tool?.name === 'ask_user');
+    const askUserInstruction = hasAskUser
+        ? 'When required information or a user choice is missing, call ask_user instead of asking in ordinary assistant text. Ask only the questions needed to continue.'
+        : '';
     const computerUseInstruction = hasComputerStep
         ? [
             'For computer use, prefer computer_step after the initial observation. Attached computer screenshots may contain a synthetic coordinate grid that is not part of the application. Coordinates are normalized from 0 to 1000 and computer_step returns the post-action screenshot.',
@@ -70,6 +74,7 @@ export function buildAgentModeSystemPrompt(tools, {
         'Tools whose names start with mcp__ are configured MCP server tools exposed through Cusco. If the user asks to use an MCP server such as Context7 and a matching mcp__ tool is listed, use that tool instead of saying the MCP server is not configured.',
         'For MCP tools, pass JSON matching the listed input fields. Include every required or clearly relevant field from the input description.',
         `You have at most ${maxIterations} tool-use iterations for this response.`,
+        askUserInstruction,
         computerUseInstruction,
         '',
         ...toolProtocol,

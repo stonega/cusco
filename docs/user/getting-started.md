@@ -10,7 +10,7 @@ gjs -m src/main.js
 
 The first window has a persistent conversation sidebar, markdown-capable transcript, and composer with provider/model selection plus estimated context usage. Hover the composer context ring for token details. When a chat reaches 80% of the selected model's context window, Cusco automatically summarizes older messages into a context checkpoint and keeps the recent conversation active. The Preferences button opens chat settings plus provider management, including opt-in provider fallback and Secret Service API key storage for remote providers.
 
-Messages can be edited, retried, regenerated, or branched from the transcript. Fenced code blocks render with syntax highlighting and copy buttons.
+Messages can be edited, retried, regenerated, or branched from the transcript. Fenced code blocks render with syntax highlighting and copy buttons. Long conversations open at their latest messages for faster switching; select **Show earlier messages** above the transcript to load older history without removing anything from the conversation.
 
 The Custom APIs list in Preferences accepts multiple OpenAI-compatible endpoints. Add a name, base URL, and API key; Cusco stores each key separately in Secret Service and fetches that endpoint's models from `GET /models`. Model IDs can still be entered manually when an endpoint does not support discovery.
 
@@ -19,6 +19,8 @@ Provider settings can refresh model lists from supported remote APIs after crede
 Memory is opt-in at write time. When a message looks like a useful long-term fact, Cusco asks before saving it. The Memory page in Preferences can search, edit, pin, disable, delete, import, and export memories. When memories are used in a chat, Cusco records a local audit entry without adding a transcript note.
 
 Tools can be requested from the composer with `/search`, `/calc`, and `/data`. Web search asks for permission before sending a query and returns cited results. The attachment button adds local file context or image attachment notes to the next message.
+
+In Agent mode, the model can pause its work with an `ask_user` request when it needs information or a choice. Cusco temporarily replaces the provider controls with one question and its suggested options while keeping a custom-answer input. Multiple questions are shown sequentially. Select an option or type an answer and press Enter; press Escape to return a `null` answer and let the agent continue. Any existing composer draft is restored afterward.
 
 The composer also provides inline references. Type `$` to filter enabled skills, `@` to find files under your Home folder, or `#` to find executable commands available on `PATH`. Use the arrow keys and Enter or Tab to insert a styled reference, or Escape to close the list. Referenced files are attached to the message, referenced skills are loaded for that turn, and referenced commands are never executed automatically.
 

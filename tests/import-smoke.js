@@ -57,6 +57,7 @@ import { WorkspaceManager } from '../src/workspace/workspace.js';
 import {
     composerHintPresentation,
     formatConversationUpdatedAt,
+    normalizeConversationMessageStartIndex,
     shouldSendLongResponseNotification,
 } from '../src/window.js';
 
@@ -121,6 +122,23 @@ if (formatConversationUpdatedAt('2026-07-17T10:00:00+08:00', timestampNow) !== '
 const olderChatTimestamp = formatConversationUpdatedAt('2026-07-16T23:59:00+08:00', timestampNow);
 if (!olderChatTimestamp || olderChatTimestamp.includes('ago'))
     throw new Error('A chat updated before today did not use a calendar date subtitle');
+
+const continuationMessages = Array.from({ length: 20 }, () => ({
+    role: 'system',
+    toolCall: { agentMode: true },
+}));
+continuationMessages[13] = { role: 'assistant', content: 'Agent response' };
+
+if (normalizeConversationMessageStartIndex(continuationMessages, 15) !== 13)
+    throw new Error('Transcript paging split a nearby Agent Mode message group');
+
+if (normalizeConversationMessageStartIndex(
+    Array.from({ length: 20 }, () => ({ toolCall: { agentMode: true } })),
+    15,
+    2,
+) !== 13) {
+    throw new Error('Transcript paging exceeded its bounded context window');
+}
 
 if (typeof ProviderConfigStore !== 'function')
     throw new Error('ProviderConfigStore did not import as a class');
