@@ -1,5 +1,6 @@
 import Adw from 'gi://Adw?version=1';
 import Gtk from 'gi://Gtk?version=4.0';
+import Pango from 'gi://Pango?version=1.0';
 
 import { createProviderIcon } from '../providers/icons.js';
 import { createAppInfoSettingsPage } from './appInfoSettings.js';
@@ -14,6 +15,25 @@ function createStringList(values) {
         list.append(value);
 
     return list;
+}
+
+function createFullModelNameFactory() {
+    const factory = new Gtk.SignalListItemFactory();
+
+    factory.connect('setup', (_factory, listItem) => {
+        listItem.set_child(new Gtk.Label({
+            ellipsize: Pango.EllipsizeMode.NONE,
+            single_line_mode: true,
+            xalign: 0,
+        }));
+    });
+    factory.connect('bind', (_factory, listItem) => {
+        const label = listItem.get_child();
+        const modelName = listItem.get_item()?.get_string() ?? '';
+        label.set_label(modelName);
+        label.set_tooltip_text(modelName);
+    });
+    return factory;
 }
 
 function stringListMatches(list, values) {
@@ -117,7 +137,7 @@ function getWebSearchApiKeySubtitle(providerConfigs) {
 }
 
 function canDiscoverModels(provider) {
-    return Boolean(provider.apiFormat)
+    return Boolean(provider?.apiFormat)
         && provider.supportsModelDiscovery !== false
         && (!provider.apiKeyRequired || provider.apiKeyConfigured)
         && (!provider.customizable || Boolean(provider.baseUrl));
@@ -141,7 +161,7 @@ function createProviderEnabledSwitch() {
     });
 }
 
-function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows) {
+function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows, options = {}) {
     const provider = providerConfigs.getProvider(providerId);
     const row = new Adw.ExpanderRow({
         title: provider.name,
@@ -168,6 +188,7 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows) 
     const applyCustomProviderConfig = () => {
         try {
             providerConfigs.setCustomProviderConfig(providerId, {
+                name: row._nameRow?.get_text(),
                 baseUrl: row._endpointRow?.get_text() ?? '',
                 models: row._modelsEntryRow?.get_text() ?? '',
             });
@@ -180,6 +201,15 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows) 
     };
 
     if (provider.customizable) {
+        const nameRow = new Adw.EntryRow({
+            title: 'Name',
+            text: provider.name,
+        });
+        nameRow.set_show_apply_button(true);
+        nameRow.connect('apply', applyCustomProviderConfig);
+        row.add_row(nameRow);
+        row._nameRow = nameRow;
+
         const endpointRow = new Adw.EntryRow({
             title: 'Base URL',
             text: provider.baseUrl,
@@ -207,6 +237,7 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows) 
             model: modelNames,
             sensitive: provider.models.length > 0,
         });
+        modelRow.set_list_factory(createFullModelNameFactory());
         modelRow.connect('notify::selected', () => {
             if (modelRow._syncing)
                 return;
@@ -251,26 +282,33 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows) 
         discoverButton.add_css_class('flat');
         discoverButton.connect('clicked', async () => {
             discoverButton.set_sensitive(false);
+            row._discoveryStatus = 'Fetching models…';
+            discoveryRow.set_subtitle(row._discoveryStatus);
 
             try {
                 await providerConfigs.discoverModels(providerId);
+                const modelCount = providerConfigs.getProvider(providerId)?.models.length ?? 0;
+                row._discoveryStatus = `Found ${modelCount} model${modelCount === 1 ? '' : 's'}.`;
                 syncAllRows();
                 onChanged();
             } catch (error) {
+                row._discoveryStatus = error.userMessage ?? error.message ?? 'Could not fetch models.';
                 syncAllRows();
                 logError(error, 'Failed to discover provider models');
             } finally {
+                discoveryRow.set_subtitle(row._discoveryStatus || 'Refresh the model list from this provider.');
                 discoverButton.set_sensitive(canDiscoverModels(providerConfigs.getProvider(providerId)));
             }
         });
         discoveryRow.add_suffix(discoverButton);
         row.add_row(discoveryRow);
+        row._discoveryRow = discoveryRow;
         row._discoverButton = discoverButton;
     }
 
     if (provider.apiKeyRequired) {
         const apiKeyRow = new Adw.PasswordEntryRow({
-            title: 'API key',
+            title: `API key (${provider.apiKeyEnvVar})`,
         });
         apiKeyRow.set_show_apply_button(true);
         apiKeyRow.connect('apply', () => {
@@ -324,9 +362,33 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows) 
         row.add_row(row._apiKeyStatusRow);
     }
 
+    if (provider.customizable && options.onRemove) {
+        const removeRow = new Adw.ActionRow({
+            title: 'Remove custom API',
+            subtitle: 'Delete this endpoint and its stored API key.',
+        });
+        const removeButton = new Gtk.Button({
+            icon_name: 'user-trash-symbolic',
+            tooltip_text: 'Remove custom API',
+            valign: Gtk.Align.CENTER,
+        });
+        removeButton.add_css_class('flat');
+        removeButton.add_css_class('destructive-action');
+        removeButton.connect('clicked', () => options.onRemove(providerId));
+        removeRow.add_suffix(removeButton);
+        row.add_row(removeRow);
+        row._removeButton = removeButton;
+    }
+
     const sync = () => {
         const currentProvider = providerConfigs.getProvider(providerId);
+
+        if (!currentProvider)
+            return;
+
         const canEnableProvider = providerConfigs.canEnableProvider(providerId);
+
+        row.set_title(currentProvider.name);
 
         enabledSwitch._syncing = true;
         enabledSwitch.set_active(currentProvider.enabled);
@@ -336,6 +398,9 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows) 
                 : canEnableProvider));
         enabledSwitch.set_tooltip_text(getEnabledRowSubtitle(currentProvider, canEnableProvider));
         enabledSwitch._syncing = false;
+
+        if (row._nameRow)
+            row._nameRow.set_text(currentProvider.name);
 
         if (row._endpointRow)
             row._endpointRow.set_text(currentProvider.baseUrl ?? '');
@@ -357,6 +422,7 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows) 
 
         row._apiKeyStatusRow?.set_subtitle(getApiKeySubtitle(providerConfigs, currentProvider));
         row._clearKeyButton?.set_sensitive(providerConfigs.getApiKeyStatus(providerId).source === 'secret');
+        row._discoveryRow?.set_subtitle(row._discoveryStatus || 'Refresh the model list from this provider.');
         row._discoverButton?.set_sensitive(canDiscoverModels(currentProvider));
     };
 
@@ -382,6 +448,7 @@ function createImageGenerationSettingsGroup(providerConfigs, onChanged, syncAllR
         subtitle: 'Default image generation model.',
         model: modelNames,
     });
+    modelRow.set_list_factory(createFullModelNameFactory());
     const customImageModelsEntryRow = new Adw.EntryRow({
         title: 'Custom image model IDs',
     });
@@ -589,6 +656,148 @@ function createWebSearchSettingsGroup(providerConfigs, onChanged, syncAllRows) {
     return { group, sync };
 }
 
+function showProviderMessage(parent, heading, body) {
+    const dialog = new Adw.AlertDialog({
+        heading,
+        body: String(body ?? ''),
+    });
+    dialog.add_response('close', 'Close');
+    dialog.set_default_response('close');
+    dialog.set_close_response('close');
+    dialog.choose(parent, null, (_dialog, result) => dialog.choose_finish(result));
+}
+
+function createDialogField(labelText, entry) {
+    const field = new Gtk.Box({
+        orientation: Gtk.Orientation.VERTICAL,
+        spacing: 4,
+    });
+    const label = new Gtk.Label({
+        label: labelText,
+        xalign: 0,
+    });
+    label.add_css_class('dim-label');
+    field.append(label);
+    field.append(entry);
+    return field;
+}
+
+function presentAddCustomProviderDialog(parent, providerConfigs, onChanged, syncAllRows) {
+    const content = new Gtk.Box({
+        orientation: Gtk.Orientation.VERTICAL,
+        spacing: 10,
+        margin_top: 6,
+        margin_bottom: 6,
+        margin_start: 6,
+        margin_end: 6,
+    });
+    const nameEntry = new Gtk.Entry({
+        placeholder_text: 'My API',
+        activates_default: true,
+        hexpand: true,
+    });
+    const endpointEntry = new Gtk.Entry({
+        placeholder_text: 'https://api.example.com/v1',
+        activates_default: true,
+        hexpand: true,
+    });
+    const apiKeyEntry = new Gtk.Entry({
+        placeholder_text: 'API key',
+        activates_default: true,
+        hexpand: true,
+        visibility: false,
+        input_purpose: Gtk.InputPurpose.PASSWORD,
+    });
+    const dialog = new Adw.AlertDialog({
+        heading: 'Add Custom API',
+        body: 'Cusco will securely store the key and fetch available models from the OpenAI-compatible /models endpoint.',
+    });
+
+    content.append(createDialogField('Name', nameEntry));
+    content.append(createDialogField('Base URL', endpointEntry));
+    content.append(createDialogField('API key', apiKeyEntry));
+    dialog.set_extra_child(content);
+    dialog.add_response('cancel', 'Cancel');
+    dialog.add_response('add', 'Add');
+    dialog.set_default_response('add');
+    dialog.set_close_response('cancel');
+    dialog.set_response_appearance('add', Adw.ResponseAppearance.SUGGESTED);
+
+    const syncAddEnabled = () => {
+        dialog.set_response_enabled('add', Boolean(
+            nameEntry.get_text().trim()
+            && endpointEntry.get_text().trim()
+            && apiKeyEntry.get_text().trim()
+        ));
+    };
+
+    nameEntry.connect('changed', syncAddEnabled);
+    endpointEntry.connect('changed', syncAddEnabled);
+    apiKeyEntry.connect('changed', syncAddEnabled);
+    syncAddEnabled();
+
+    dialog.choose(parent, null, async (_dialog, result) => {
+        if (dialog.choose_finish(result) !== 'add')
+            return;
+
+        let provider = null;
+
+        try {
+            provider = providerConfigs.addCustomProvider({
+                name: nameEntry.get_text(),
+                baseUrl: endpointEntry.get_text(),
+                apiKey: apiKeyEntry.get_text(),
+            });
+            syncAllRows();
+            await providerConfigs.discoverModels(provider.id);
+        } catch (error) {
+            const heading = provider
+                ? 'Custom API Added Without Models'
+                : 'Could Not Add Custom API';
+            const detail = provider
+                ? `${error.userMessage ?? error.message}\n\nYou can edit the endpoint or enter model IDs manually, then refresh models.`
+                : error.userMessage ?? error.message;
+            showProviderMessage(parent, heading, detail);
+            logError(error, 'Failed to add custom provider');
+        } finally {
+            syncAllRows();
+
+            if (provider)
+                onChanged();
+        }
+    });
+}
+
+function presentRemoveCustomProviderDialog(parent, providerConfigs, providerId, onChanged, syncAllRows) {
+    const provider = providerConfigs.getProvider(providerId);
+
+    if (!provider)
+        return;
+
+    const dialog = new Adw.AlertDialog({
+        heading: `Remove ${provider.name}?`,
+        body: 'This removes the endpoint, its model list, and its stored API key.',
+    });
+    dialog.add_response('cancel', 'Cancel');
+    dialog.add_response('remove', 'Remove');
+    dialog.set_default_response('cancel');
+    dialog.set_close_response('cancel');
+    dialog.set_response_appearance('remove', Adw.ResponseAppearance.DESTRUCTIVE);
+    dialog.choose(parent, null, (_dialog, result) => {
+        if (dialog.choose_finish(result) !== 'remove')
+            return;
+
+        try {
+            providerConfigs.removeCustomProvider(providerId);
+            syncAllRows();
+            onChanged();
+        } catch (error) {
+            showProviderMessage(parent, 'Could Not Remove Custom API', error.userMessage ?? error.message);
+            logError(error, 'Failed to remove custom provider');
+        }
+    });
+}
+
 export function createProviderSettingsPage(providerConfigs, onChanged) {
     providerConfigs.refreshApiKeyStatus();
 
@@ -597,16 +806,35 @@ export function createProviderSettingsPage(providerConfigs, onChanged) {
         icon_name: 'network-server-symbolic',
     });
 
-    const group = new Adw.PreferencesGroup({
-        title: 'Provider Management',
-        description: 'Choose which providers are available and configure default models.',
+    const builtInGroup = new Adw.PreferencesGroup({
+        title: 'Built-in Providers',
+        description: 'Choose which built-in providers are available and configure default models.',
     });
+    const customGroup = new Adw.PreferencesGroup({
+        title: 'Custom APIs',
+        description: 'Connect multiple OpenAI-compatible services. Each endpoint keeps its own models and credentials.',
+    });
+    const addCustomProviderRow = new Adw.ActionRow({
+        title: 'Add Custom API',
+        subtitle: 'Add an endpoint and fetch its available models automatically.',
+    });
+    const addCustomProviderButton = new Gtk.Button({
+        icon_name: 'list-add-symbolic',
+        tooltip_text: 'Add custom API',
+        valign: Gtk.Align.CENTER,
+    });
+    addCustomProviderButton.add_css_class('flat');
+    addCustomProviderRow.add_suffix(addCustomProviderButton);
+    customGroup.add(addCustomProviderRow);
 
     const providerRows = [];
+    const customProviderRows = new Map();
     let imageGenerationSettings = null;
     let webSearchSettings = null;
+    let syncCustomProviderRows = () => {};
     const syncAllRows = () => {
         providerConfigs.refreshApiKeyStatus();
+        syncCustomProviderRows();
         imageGenerationSettings?.sync();
         webSearchSettings?.sync();
 
@@ -614,16 +842,69 @@ export function createProviderSettingsPage(providerConfigs, onChanged) {
             providerRow.sync();
     };
 
+    const settingsParent = () => page.get_root() ?? page;
+
+    syncCustomProviderRows = () => {
+        const customProviders = providerConfigs.listProviders()
+            .filter((provider) => provider.customizable);
+        const currentProviderIds = new Set(customProviders.map((provider) => provider.id));
+
+        for (const [providerId, providerRow] of customProviderRows) {
+            if (currentProviderIds.has(providerId))
+                continue;
+
+            customGroup.remove(providerRow.row);
+            customProviderRows.delete(providerId);
+        }
+
+        for (const provider of customProviders) {
+            let providerRow = customProviderRows.get(provider.id);
+
+            if (!providerRow) {
+                providerRow = createProviderRow(
+                    providerConfigs,
+                    provider.id,
+                    onChanged,
+                    syncAllRows,
+                    {
+                        onRemove: (providerId) => presentRemoveCustomProviderDialog(
+                            settingsParent(),
+                            providerConfigs,
+                            providerId,
+                            onChanged,
+                            syncAllRows,
+                        ),
+                    },
+                );
+                customProviderRows.set(provider.id, providerRow);
+                customGroup.remove(addCustomProviderRow);
+                customGroup.add(providerRow.row);
+                customGroup.add(addCustomProviderRow);
+            }
+
+            providerRow.sync();
+        }
+    };
+
+    addCustomProviderButton.connect('clicked', () => presentAddCustomProviderDialog(
+        settingsParent(),
+        providerConfigs,
+        onChanged,
+        syncAllRows,
+    ));
+
     imageGenerationSettings = createImageGenerationSettingsGroup(providerConfigs, onChanged, syncAllRows);
     webSearchSettings = createWebSearchSettingsGroup(providerConfigs, onChanged, syncAllRows);
 
-    for (const provider of providerConfigs.listProviders()) {
+    for (const provider of providerConfigs.listProviders().filter((item) => !item.customizable)) {
         const providerRow = createProviderRow(providerConfigs, provider.id, onChanged, syncAllRows);
         providerRows.push(providerRow);
-        group.add(providerRow.row);
+        builtInGroup.add(providerRow.row);
     }
 
-    page.add(group);
+    syncCustomProviderRows();
+    page.add(builtInGroup);
+    page.add(customGroup);
     page.add(webSearchSettings.group);
     page.add(imageGenerationSettings.group);
     return page;
@@ -664,8 +945,12 @@ export function presentProviderSettingsDialog(
     });
     dialog.set_transient_for(parent);
 
-    if (appSettings)
-        dialog.add(createApplicationSettingsPage(appSettings, onChanged));
+    if (appSettings) {
+        dialog.add(createApplicationSettingsPage(appSettings, onChanged, {
+            archivedChatCount: options.archivedChatCount ?? 0,
+            onOpenArchivedChats: options.onOpenArchivedChats,
+        }));
+    }
 
     if (memoryManager)
         dialog.add(createMemorySettingsPage(dialog, memoryManager, onChanged));

@@ -116,15 +116,20 @@
       <summary>Computer use action timeout</summary>
       <description>Maximum number of seconds allowed for one computer-use operation.</description>
     </key>
+    <key name="custom-openai-compatible-providers" type="s">
+      <default>'[]'</default>
+      <summary>Custom OpenAI-compatible providers</summary>
+      <description>JSON array containing user-defined OpenAI-compatible provider configurations.</description>
+    </key>
     <key name="custom-openai-compatible-base-url" type="s">
       <default>''</default>
-      <summary>Custom API base URL</summary>
-      <description>Base URL for the user-defined OpenAI-compatible provider.</description>
+      <summary>Legacy custom API base URL</summary>
+      <description>Legacy base URL migrated into the custom provider list.</description>
     </key>
     <key name="custom-openai-compatible-models" type="as">
       <default>[]</default>
-      <summary>Custom API models</summary>
-      <description>Model identifiers for the user-defined OpenAI-compatible provider.</description>
+      <summary>Legacy custom API models</summary>
+      <description>Legacy model identifiers migrated into the custom provider list.</description>
     </key>
   </schema>
 </schemalist>

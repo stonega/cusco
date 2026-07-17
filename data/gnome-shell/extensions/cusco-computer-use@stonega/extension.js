@@ -11,9 +11,10 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 
 import {clutterKeySuffix} from './keyNames.js';
+import {describeComputerUseOperation, ellipsizeIndicatorStatus} from './indicatorStatus.js';
 
 const OBJECT_PATH = '/io/github/stonega/Cusco/ComputerUse';
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 3;
 const MAX_TYPE_CHARACTERS = 10_000;
 
 const INTERFACE_XML = `
@@ -81,6 +82,53 @@ function windowId(window) {
     return String(window.get_id());
 }
 
+function shellMajorVersion() {
+    return Number.parseInt(String(Config.PACKAGE_VERSION ?? '').split('.')[0], 10) || 0;
+}
+
+function windowIsMaximized(window) {
+    try {
+        if (typeof window.is_maximized === 'function')
+            return Boolean(window.is_maximized());
+
+        if (typeof window.get_maximized === 'function') {
+            const flags = window.get_maximized();
+            const both = Meta.MaximizeFlags?.BOTH;
+            return both === undefined ? Boolean(flags) : (flags & both) === both;
+        }
+    } catch (_error) {
+        // Fall through to properties shared by older Mutter releases.
+    }
+
+    return Boolean(window.maximized_horizontally && window.maximized_vertically);
+}
+
+function windowCanMaximize(window) {
+    if (windowIsMaximized(window))
+        return true;
+
+    try {
+        return typeof window.can_maximize === 'function'
+            ? Boolean(window.can_maximize())
+            : true;
+    } catch (_error) {
+        return false;
+    }
+}
+
+function maximizeWindow(window) {
+    if (windowIsMaximized(window))
+        return true;
+    if (!windowCanMaximize(window))
+        return false;
+
+    if (shellMajorVersion() >= 49)
+        window.maximize();
+    else
+        window.maximize(Meta.MaximizeFlags.BOTH);
+    return true;
+}
+
 function windowRecord(window, tracker) {
     const rect = window.get_frame_rect();
     const app = tracker.get_window_app(window);
@@ -101,6 +149,8 @@ function windowRecord(window, tracker) {
         height: rect.height,
         focused: global.display.focus_window === window,
         minimized: window.minimized,
+        maximized: windowIsMaximized(window),
+        canMaximize: windowCanMaximize(window),
         onAllWorkspaces: window.is_on_all_workspaces(),
     };
 }
@@ -127,8 +177,9 @@ function namedKeysym(name) {
 }
 
 class ComputerUseBridge {
-    constructor(indicator) {
+    constructor(indicator, statusLabel) {
         this._indicator = indicator;
+        this._statusLabel = statusLabel;
         this._tracker = Shell.WindowTracker.get_default();
         this._clientSender = '';
         this._clientPid = 0;
@@ -136,6 +187,13 @@ class ComputerUseBridge {
         const seat = Clutter.get_default_backend().get_default_seat();
         this._pointer = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
         this._keyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+    }
+
+    _setStatus(description) {
+        const status = ellipsizeIndicatorStatus(description);
+
+        this._statusLabel.text = status;
+        this._indicator.accessible_name = `${status}. Click to stop computer use and return to Cusco.`;
     }
 
     _senderPid(sender) {
@@ -183,6 +241,16 @@ class ComputerUseBridge {
         return found;
     }
 
+    _workspace(indexValue) {
+        const index = Number(indexValue);
+        if (!Number.isInteger(index) || index < 0)
+            throw new Error('workspaceIndex must be a non-negative integer.');
+        const workspace = global.workspace_manager.get_workspace_by_index(index);
+        if (!workspace)
+            throw new Error(`Workspace ${indexValue} was not found.`);
+        return workspace;
+    }
+
     _activate(window) {
         if (window.minimized)
             window.unminimize();
@@ -192,6 +260,7 @@ class ComputerUseBridge {
     _cancel() {
         this._generation += 1;
         this._indicator.visible = false;
+        this._setStatus(describeComputerUseOperation('idle'));
     }
 
     onClientVanished(sender) {
@@ -249,6 +318,9 @@ class ComputerUseBridge {
                 windowCapture: true,
                 virtualInput: true,
                 workspaceSwitching: true,
+                workspaceCreation: true,
+                windowWorkspaceMovement: true,
+                windowMaximizing: true,
             }));
         } catch (error) {
             returnError(invocation, error);
@@ -258,6 +330,8 @@ class ComputerUseBridge {
     SetActiveAsync([active], invocation) {
         try {
             this._requireClient(invocation);
+            if (active && !this._indicator.visible)
+                this._setStatus(describeComputerUseOperation('active'));
             this._indicator.visible = Boolean(active);
             if (!active)
                 this._generation += 1;
@@ -270,6 +344,7 @@ class ComputerUseBridge {
     ListDesktopAsync(_parameters, invocation) {
         try {
             this._requireClient(invocation);
+            this._setStatus(describeComputerUseOperation('list_desktop'));
             const manager = global.workspace_manager;
             const activeIndex = manager.get_active_workspace_index();
             const workspaces = [];
@@ -295,6 +370,9 @@ class ComputerUseBridge {
             this._requireClient(invocation);
             const generation = this._generation;
             const window = this._window(id);
+            this._setStatus(describeComputerUseOperation('capture', {
+                windowTitle: window.get_title(),
+            }));
             this._activate(window);
             await delay(180);
             if (generation !== this._generation)
@@ -321,14 +399,22 @@ class ComputerUseBridge {
         const rect = window.get_frame_rect();
         if (!Number.isFinite(request[xName]) || !Number.isFinite(request[yName]))
             throw new Error(`${xName} and ${yName} must be finite window-relative coordinates.`);
+        const windowPoint = {
+            x: clamp(request[xName], 0, Math.max(0, rect.width - 1)),
+            y: clamp(request[yName], 0, Math.max(0, rect.height - 1)),
+        };
         return {
-            x: rect.x + clamp(request[xName], 0, Math.max(0, rect.width - 1)),
-            y: rect.y + clamp(request[yName], 0, Math.max(0, rect.height - 1)),
+            window: windowPoint,
+            desktop: {
+                x: rect.x + windowPoint.x,
+                y: rect.y + windowPoint.y,
+            },
         };
     }
 
     _move(point) {
-        this._pointer.notify_absolute_motion(nowMicros(), point.x, point.y);
+        const desktop = point.desktop ?? point;
+        this._pointer.notify_absolute_motion(nowMicros(), desktop.x, desktop.y);
     }
 
     async _click(point, buttonName = 'left', count = 1) {
@@ -397,8 +483,8 @@ class ComputerUseBridge {
                     throw new Error('Computer use was stopped.');
                 const fraction = index / 12;
                 this._move({
-                    x: start.x + ((end.x - start.x) * fraction),
-                    y: start.y + ((end.y - start.y) * fraction),
+                    x: start.desktop.x + ((end.desktop.x - start.desktop.x) * fraction),
+                    y: start.desktop.y + ((end.desktop.y - start.desktop.y) * fraction),
                 });
                 await delay(12);
             }
@@ -413,62 +499,142 @@ class ComputerUseBridge {
             const request = JSON.parse(payload);
             const action = String(request.action ?? '');
             const generation = this._generation;
+            let coordinates = null;
+
+            if (action === 'create_workspace') {
+                this._setStatus(describeComputerUseOperation(action));
+                const manager = global.workspace_manager;
+                const workspace = manager.append_new_workspace(true, eventTime())
+                    ?? manager.get_active_workspace();
+                invocation.return_value(responseVariant({
+                    performed: action,
+                    created: true,
+                    workspaceIndex: workspace.index(),
+                }));
+                return;
+            }
 
             if (action === 'switch_workspace') {
-                const index = Number(request.workspaceIndex);
-                if (!Number.isInteger(index) || index < 0)
-                    throw new Error('workspaceIndex must be a non-negative integer.');
-                const workspace = global.workspace_manager.get_workspace_by_index(index);
-                if (!workspace)
-                    throw new Error(`Workspace ${request.workspaceIndex} was not found.`);
+                this._setStatus(describeComputerUseOperation(action, request));
+                const workspace = this._workspace(request.workspaceIndex);
+                const index = workspace.index();
                 workspace.activate(eventTime());
                 invocation.return_value(responseVariant({performed: action, workspaceIndex: index}));
                 return;
             }
 
-            const window = this._window(request.windowId);
-            this._activate(window);
-            await delay(80);
+            const hasWindowId = String(request.windowId ?? '').trim().length > 0;
+            const isGlobalKeyboardAction = !hasWindowId
+                && (action === 'keypress' || action === 'type');
+            const window = isGlobalKeyboardAction ? null : this._window(request.windowId);
+            const targetWorkspace = action === 'move_to_workspace'
+                ? this._workspace(request.workspaceIndex)
+                : null;
+
+            this._setStatus(describeComputerUseOperation(action, {
+                ...request,
+                windowTitle: window?.get_title(),
+            }));
+
+            if (window && action !== 'move_to_workspace') {
+                this._activate(window);
+                await delay(80);
+            }
             if (generation !== this._generation)
                 throw new Error('Computer use was stopped.');
 
             switch (action) {
             case 'focus':
                 break;
+            case 'maximize':
+                maximizeWindow(window);
+                break;
+            case 'move_to_workspace':
+                window.change_workspace(targetWorkspace);
+                targetWorkspace.activate(eventTime());
+                this._activate(window);
+                break;
             case 'move':
-                this._move(this._point(window, request));
+                coordinates = this._point(window, request);
+                this._move(coordinates);
                 break;
-            case 'click':
-                await this._click(this._point(window, request), request.button, 1);
+            case 'click': {
+                coordinates = this._point(window, request);
+                await this._click(coordinates, request.button, 1);
                 break;
-            case 'double_click':
-                await this._click(this._point(window, request), request.button, 2);
+            }
+            case 'double_click': {
+                coordinates = this._point(window, request);
+                await this._click(coordinates, request.button, 2);
                 break;
+            }
             case 'type':
-                if (Number.isFinite(request.x) && Number.isFinite(request.y))
-                    await this._click(this._point(window, request), 'left', 1);
+                if ((Number.isFinite(request.x) || Number.isFinite(request.y)) && !window)
+                    throw new Error('Global type cannot use window-relative coordinates.');
+                if (window && Number.isFinite(request.x) && Number.isFinite(request.y)) {
+                    coordinates = this._point(window, request);
+                    await this._click(coordinates, 'left', 1);
+                }
                 await this._type(request.text, generation);
                 break;
             case 'keypress':
                 await this._keypress(request.keys);
                 break;
             case 'scroll':
-                await this._scroll(this._point(window, request), request);
+                coordinates = this._point(window, request);
+                await this._scroll(coordinates, request);
                 break;
-            case 'drag':
-                await this._drag(
-                    this._point(window, request),
-                    this._point(window, request, 'endX', 'endY'),
-                    generation,
-                );
+            case 'drag': {
+                const start = this._point(window, request);
+                const end = this._point(window, request, 'endX', 'endY');
+                coordinates = {
+                    window: start.window,
+                    desktop: start.desktop,
+                    endWindow: end.window,
+                    endDesktop: end.desktop,
+                };
+                await this._drag(start, end, generation);
                 break;
+            }
             default:
                 throw new Error(`Unsupported action: ${action}`);
             }
 
+            if (action === 'maximize' || action === 'move_to_workspace')
+                await delay(120);
+            if (generation !== this._generation)
+                throw new Error('Computer use was stopped.');
+
+            const record = window ? windowRecord(window, this._tracker) : null;
+            let verified = false;
+            let verificationReason = 'The input event was dispatched; application-level effects require a post-action observation.';
+
+            if (action === 'focus') {
+                verified = record.focused;
+                verificationReason = verified
+                    ? 'Window focus was verified.'
+                    : 'The focus request was dispatched but the window is not focused.';
+            } else if (action === 'maximize') {
+                verified = record.maximized;
+                verificationReason = verified
+                    ? 'The window is maximized.'
+                    : (record.canMaximize
+                        ? 'The maximize request was dispatched but the window is not maximized.'
+                        : 'This window does not support maximizing.');
+            } else if (action === 'move_to_workspace') {
+                verified = record.workspaceIndex === targetWorkspace.index();
+                verificationReason = verified
+                    ? `The window is on workspace ${targetWorkspace.index()}.`
+                    : 'The workspace move was dispatched but could not be verified.';
+            }
+
             invocation.return_value(responseVariant({
                 performed: action,
-                window: windowRecord(window, this._tracker),
+                dispatchStatus: 'dispatched',
+                verified,
+                verificationReason,
+                window: record,
+                coordinates,
             }));
         } catch (error) {
             returnError(invocation, error);
@@ -479,18 +645,29 @@ class ComputerUseBridge {
 export default class CuscoComputerUseExtension extends Extension {
     enable() {
         this._indicator = new PanelMenu.Button(0, 'Cusco computer use', false);
-        this._indicator.add_child(new St.Icon({
-            style_class: 'cusco-computer-use-indicator',
-            accessible_name: 'Stop computer use and return to Cusco',
+        this._indicator.add_style_class_name('cusco-computer-use-button');
+        const content = new St.BoxLayout({
+            style_class: 'cusco-computer-use-content',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        content.add_child(new St.Icon({
+            style_class: 'cusco-computer-use-icon',
             gicon: new Gio.FileIcon({
                 file: Gio.File.new_for_path(`${this.path}/computer-use-active-symbolic.svg`),
             }),
             icon_size: 18,
         }));
+        this._statusLabel = new St.Label({
+            style_class: 'cusco-computer-use-label',
+            text: describeComputerUseOperation('idle'),
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        content.add_child(this._statusLabel);
+        this._indicator.add_child(content);
         this._indicator.visible = false;
         Main.panel.addToStatusArea(this.uuid, this._indicator);
 
-        this._bridge = new ComputerUseBridge(this._indicator);
+        this._bridge = new ComputerUseBridge(this._indicator, this._statusLabel);
         this._bridge._exported = Gio.DBusExportedObject.wrapJSObject(INTERFACE_XML, this._bridge);
         this._bridge._exported.export(Gio.DBus.session, OBJECT_PATH);
         this._indicator.connect('button-press-event', () => {
@@ -520,5 +697,6 @@ export default class CuscoComputerUseExtension extends Extension {
         this._indicator?.destroy();
         this._bridge = null;
         this._indicator = null;
+        this._statusLabel = null;
     }
 }

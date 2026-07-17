@@ -12,7 +12,7 @@ The first window has a persistent conversation sidebar, markdown-capable transcr
 
 Messages can be edited, retried, regenerated, or branched from the transcript. Fenced code blocks render with syntax highlighting and copy buttons.
 
-The Custom API provider accepts an OpenAI-compatible base URL and comma-separated model IDs in Preferences. Its API key is stored through Secret Service like the built-in remote providers.
+The Custom APIs list in Preferences accepts multiple OpenAI-compatible endpoints. Add a name, base URL, and API key; Cusco stores each key separately in Secret Service and fetches that endpoint's models from `GET /models`. Model IDs can still be entered manually when an endpoint does not support discovery.
 
 Provider settings can refresh model lists from supported remote APIs after credentials are configured. Cusco keeps a supported built-in model matrix with per-model thinking levels in [Provider Models](provider-models.md).
 

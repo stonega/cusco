@@ -1,8 +1,11 @@
 import GLib from 'gi://GLib?version=2.0';
+import Gio from 'gi://Gio?version=2.0';
 import Soup from 'gi://Soup?version=3.0';
 
 import {
     discoverOpenAiCompatibleModels,
+    isNetworkError,
+    isTransientTlsError,
     OpenAiCompatibleChatProvider,
 } from '../src/providers/remoteProvider.js';
 import { createMessage } from '../src/providers/provider.js';
@@ -11,6 +14,38 @@ function assertEqual(actual, expected, label) {
     if (actual !== expected)
         throw new Error(`${label}: expected ${expected}, got ${actual}`);
 }
+
+const tlsHandshakeError = new GLib.Error(
+    Gio.tls_error_quark(),
+    Gio.TlsError.HANDSHAKE,
+    'TLS handshake failed',
+);
+const tlsEofError = new GLib.Error(
+    Gio.tls_error_quark(),
+    Gio.TlsError.EOF,
+    'TLS connection terminated',
+);
+const badCertificateError = new GLib.Error(
+    Gio.tls_error_quark(),
+    Gio.TlsError.BAD_CERTIFICATE,
+    'Bad certificate',
+);
+const networkUnreachableError = new GLib.Error(
+    Gio.io_error_quark(),
+    Gio.IOErrorEnum.NETWORK_UNREACHABLE,
+    'Network unreachable',
+);
+const cancelledError = new GLib.Error(
+    Gio.io_error_quark(),
+    Gio.IOErrorEnum.CANCELLED,
+    'Cancelled',
+);
+
+assertEqual(isTransientTlsError(tlsHandshakeError), true, 'TLS handshake errors are transient');
+assertEqual(isTransientTlsError(tlsEofError), true, 'TLS EOF errors are transient');
+assertEqual(isTransientTlsError(badCertificateError), false, 'Certificate errors are not transient');
+assertEqual(isNetworkError(networkUnreachableError), true, 'Network unreachable errors are retryable');
+assertEqual(isNetworkError(cancelledError), false, 'Cancellation errors are not retryable');
 
 function setJsonResponse(message, body) {
     message.set_status(Soup.Status.OK, null);
@@ -28,6 +63,7 @@ function requestJson(message) {
 
 const server = new Soup.Server();
 let sawNativeTools = false;
+let rateLimitedRequestCount = 0;
 
 GLib.setenv('NO_PROXY', '127.0.0.1,localhost', true);
 GLib.setenv('no_proxy', '127.0.0.1,localhost', true);
@@ -61,6 +97,7 @@ server.add_handler('/v1/chat/completions', (_server, message) => {
 });
 
 server.add_handler('/v1/rate-limited', (_server, message) => {
+    rateLimitedRequestCount++;
     setJsonErrorResponse(message, 429, {
         error: {
             message: 'Rate limit exceeded',
@@ -69,6 +106,7 @@ server.add_handler('/v1/rate-limited', (_server, message) => {
 });
 
 let listening = false;
+let localProviderConfig = null;
 
 try {
     server.listen_local(0, Soup.ServerListenOptions.IPV4_ONLY);
@@ -87,6 +125,7 @@ if (listening) {
             apiKey: 'test-key',
             defaultModelId: 'local-model',
         };
+        localProviderConfig = config;
 
         const models = await discoverOpenAiCompatibleModels(config, { timeoutSeconds: 5 });
         assertEqual(models.length, 1, 'Discovered model count');
@@ -132,9 +171,30 @@ if (listening) {
 
         if (!sawRateLimitError)
             throw new Error('429 response did not fail the provider request');
+
+        assertEqual(rateLimitedRequestCount, 1, 'HTTP errors are not retried');
     } finally {
         server.disconnect();
     }
+
+    const disconnectedProvider = new OpenAiCompatibleChatProvider(localProviderConfig);
+    let disconnectedRequestFailed = false;
+    let reconnectStatusCount = 0;
+
+    try {
+        for await (const chunk of disconnectedProvider.streamChat([createMessage('user', 'Hello')], { timeoutSeconds: 1 })) {
+            if (chunk?.type === 'status')
+                reconnectStatusCount++;
+        }
+    } catch (error) {
+        disconnectedRequestFailed = true;
+
+        if (!isNetworkError(error))
+            throw new Error(`Disconnected provider did not surface a network error: ${error.message}`);
+    }
+
+    assertEqual(disconnectedRequestFailed, true, 'Disconnected provider request failed');
+    assertEqual(reconnectStatusCount, 5, 'Disconnected provider reconnect count');
 
     print('Cusco remote provider HTTP smoke passed');
 }

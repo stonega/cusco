@@ -576,11 +576,32 @@ function createCodeThemeList(options) {
     return list;
 }
 
-export function createApplicationSettingsPage(appSettings, onChanged) {
+export function createApplicationSettingsPage(appSettings, onChanged, options = {}) {
     const page = new Adw.PreferencesPage({
         title: 'Chat',
         icon_name: 'preferences-system-symbolic',
     });
+
+    const chatsGroup = new Adw.PreferencesGroup({
+        title: 'Chats',
+    });
+    const archivedChatCount = Math.max(0, Number(options.archivedChatCount) || 0);
+    const archivedChatsRow = new Adw.ActionRow({
+        title: 'Archived Chats',
+        activatable: true,
+    });
+    const syncArchivedChatCount = (count) => {
+        const normalizedCount = Math.max(0, Number(count) || 0);
+        archivedChatsRow.set_subtitle(normalizedCount === 1
+            ? '1 archived chat'
+            : `${normalizedCount} archived chats`);
+    };
+    syncArchivedChatCount(archivedChatCount);
+    archivedChatsRow.add_suffix(new Gtk.Image({ icon_name: 'go-next-symbolic' }));
+    archivedChatsRow.connect('activated', () => {
+        options.onOpenArchivedChats?.(page.get_root() ?? page, syncArchivedChatCount);
+    });
+    chatsGroup.add(archivedChatsRow);
 
     const composerGroup = new Adw.PreferencesGroup({
         title: 'Composer',
@@ -718,5 +739,6 @@ export function createApplicationSettingsPage(appSettings, onChanged) {
     page.add(providerGroup);
     page.add(appearanceGroup);
     page.add(accessibilityGroup);
+    page.add(chatsGroup);
     return page;
 }

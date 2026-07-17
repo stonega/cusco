@@ -101,11 +101,10 @@ export class ConversationManager {
         this._defaultModelId = modelId;
         this._defaultThinkingLevel = normalizeThinkingLevel(thinkingLevel);
 
-        if (stored.activeConversationId && this.getConversation(stored.activeConversationId))
+        if (stored.activeConversationId && !this.getConversation(stored.activeConversationId)?.archived)
             this._activeConversationId = stored.activeConversationId;
         else
             this._activeConversationId = this._conversations.find((conversation) => !conversation.archived)?.id
-                ?? this._conversations[0]?.id
                 ?? null;
     }
 
@@ -254,7 +253,7 @@ export class ConversationManager {
 
         if (this._activeConversationId === conversationId && conversation.archived)
             this._activeConversationId = this._conversations.find((item) => !item.archived)?.id
-                ?? conversation.id;
+                ?? null;
 
         this._persist();
         return conversation;
@@ -270,7 +269,6 @@ export class ConversationManager {
 
         if (this._activeConversationId === conversationId)
             this._activeConversationId = this._conversations.find((item) => !item.archived)?.id
-                ?? this._conversations[0]?.id
                 ?? null;
 
         this._persist();

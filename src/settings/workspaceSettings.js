@@ -62,6 +62,7 @@ function createTextInput(placeholder, options = {}) {
     if (!options.multiline) {
         const entry = new Gtk.Entry({
             placeholder_text: placeholder,
+            text: String(options.initialText ?? ''),
             hexpand: true,
         });
 
@@ -83,6 +84,8 @@ function createTextInput(placeholder, options = {}) {
         buffer.get_tag_table().add(variableTag);
         buffer.connect('changed', () => highlightPromptVariables(buffer, variableTag));
     }
+
+    buffer.set_text(String(options.initialText ?? ''), -1);
 
     const textView = new Gtk.TextView({
         buffer,
@@ -147,7 +150,7 @@ function promptForText(parent, heading, placeholder, onSave, options = {}) {
     });
 }
 
-function addRecordRows(group, records, collectionName, workspaceManager, refresh) {
+function addRecordRows(group, records, collectionName, workspaceManager, refresh, options = {}) {
     const rows = [];
 
     for (const record of records) {
@@ -159,6 +162,11 @@ function addRecordRows(group, records, collectionName, workspaceManager, refresh
             title: record.title ?? record.name ?? record.key ?? 'Record',
             subtitle,
         });
+        if (options.onEdit) {
+            row.add_suffix(createActionButton('document-edit-symbolic', 'Edit prompt', () => {
+                options.onEdit(record);
+            }));
+        }
         row.add_suffix(createActionButton('user-trash-symbolic', 'Delete', () => {
             try {
                 workspaceManager.deleteRecord(collectionName, record.id);
@@ -262,14 +270,6 @@ export function createWorkspaceSettingsPage(
         onChanged();
     };
 
-    if (options.appSettings) {
-        page.add(createComputerUseSettingsGroup(
-            options.appSettings,
-            options.computerUse ?? null,
-            onChanged,
-        ));
-    }
-
     const promptsGroup = new Adw.PreferencesGroup({
         title: 'Prompt Library',
     });
@@ -298,7 +298,38 @@ export function createWorkspaceSettingsPage(
         for (const row of promptRows)
             promptsGroup.remove(row);
 
-        promptRows = addRecordRows(promptsGroup, workspaceManager.prompts, 'prompts', workspaceManager, refresh);
+        promptRows = addRecordRows(
+            promptsGroup,
+            workspaceManager.prompts,
+            'prompts',
+            workspaceManager,
+            refresh,
+            {
+                onEdit: (prompt) => {
+                    promptForText(
+                        parent,
+                        'Edit Prompt',
+                        ADD_PROMPT_HELPER_TEXT,
+                        (content) => {
+                            try {
+                                workspaceManager.updatePrompt(prompt.id, {
+                                    title: content.slice(0, 48) || 'Untitled Prompt',
+                                    content,
+                                });
+                                refresh();
+                            } catch (error) {
+                                logError(error, 'Failed to edit prompt');
+                            }
+                        },
+                        {
+                            multiline: true,
+                            highlightVariables: true,
+                            initialText: prompt.content,
+                        },
+                    );
+                },
+            },
+        );
     };
     refreshers.push(renderPrompts);
     renderPrompts();
@@ -307,6 +338,14 @@ export function createWorkspaceSettingsPage(
 
     if (mcpManager)
         page.add(createMcpConfigGroup(parent, mcpManager, onChanged));
+
+    if (options.appSettings) {
+        page.add(createComputerUseSettingsGroup(
+            options.appSettings,
+            options.computerUse ?? null,
+            onChanged,
+        ));
+    }
 
     return page;
 }

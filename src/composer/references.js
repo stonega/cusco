@@ -29,10 +29,24 @@ function normalizedSearchText(value) {
     return String(value ?? '').trim().toLocaleLowerCase();
 }
 
-function fuzzyMatchScore(value, query) {
-    const candidate = normalizedSearchText(value);
-    const needle = normalizedSearchText(query);
+function searchTextMasks(value) {
+    let primary = 0;
+    let secondary = 0;
 
+    for (const character of value) {
+        const codePoint = character.codePointAt(0);
+        const mixed = Math.imul(codePoint ^ (codePoint >>> 16), 0x45d9f3b);
+        primary |= 1 << (codePoint & 31);
+        secondary |= 1 << ((mixed ^ (mixed >>> 16)) & 31);
+    }
+
+    return {
+        primary: primary >>> 0,
+        secondary: secondary >>> 0,
+    };
+}
+
+function fuzzyMatchScore(candidate, needle) {
     if (!needle)
         return 0;
 
@@ -67,11 +81,52 @@ function fuzzyMatchScore(value, query) {
     return 40 + firstMatch + (lastMatch - firstMatch - needle.length + 1);
 }
 
-function itemMatchScore(item, query) {
-    const titleScore = fuzzyMatchScore(item.title, query);
-    const searchScore = fuzzyMatchScore(item.searchText ?? item.subtitle, query);
+function itemMatchScore(item, query, queryMasks) {
+    if (Number.isInteger(item.searchMaskPrimary)
+        && Number.isInteger(item.searchMaskSecondary)
+        && (((item.searchMaskPrimary & queryMasks.primary) >>> 0) !== queryMasks.primary
+            || ((item.searchMaskSecondary & queryMasks.secondary) >>> 0) !== queryMasks.secondary))
+        return Number.POSITIVE_INFINITY;
+
+    const title = item.normalizedTitle ?? normalizedSearchText(item.title);
+    const searchText = item.normalizedSearchText
+        ?? normalizedSearchText(item.searchText ?? item.subtitle);
+    const titleScore = fuzzyMatchScore(title, query);
+    const searchScore = fuzzyMatchScore(searchText, query);
 
     return Math.min(titleScore, searchScore + 5);
+}
+
+function insertRankedItem(items, rankedItem, compare, limit) {
+    let start = 0;
+    let end = items.length;
+
+    while (start < end) {
+        const middle = Math.floor((start + end) / 2);
+
+        if (compare(rankedItem, items[middle]) < 0)
+            end = middle;
+        else
+            start = middle + 1;
+    }
+
+    if (start >= limit)
+        return;
+
+    items.splice(start, 0, rankedItem);
+
+    if (items.length > limit)
+        items.pop();
+}
+
+function compareRankedItems(left, right) {
+    return left.score - right.score
+        || String(left.item.title).localeCompare(String(right.item.title))
+        || left.index - right.index;
+}
+
+function rankedItemFor(item, index, query, queryMasks) {
+    return { item, index, score: itemMatchScore(item, query, queryMasks) };
 }
 
 function isPathInsideHome(path, homePath) {
@@ -140,21 +195,15 @@ export function filterComposerSuggestions(items, query, limit = 8) {
         return safeItems.slice(0, safeLimit);
 
     const rankedItems = [];
-    const compareRankedItems = (left, right) => left.score - right.score
-        || String(left.item.title).localeCompare(String(right.item.title))
-        || left.index - right.index;
+    const queryMasks = searchTextMasks(normalizedQuery);
 
     safeItems.forEach((item, index) => {
-        const rankedItem = { item, index, score: itemMatchScore(item, normalizedQuery) };
+        const rankedItem = rankedItemFor(item, index, normalizedQuery, queryMasks);
 
         if (!Number.isFinite(rankedItem.score))
             return;
 
-        rankedItems.push(rankedItem);
-        rankedItems.sort(compareRankedItems);
-
-        if (rankedItems.length > safeLimit)
-            rankedItems.pop();
+        insertRankedItem(rankedItems, rankedItem, compareRankedItems, safeLimit);
     });
 
     return rankedItems.map(({ item }) => item);
@@ -234,6 +283,7 @@ export class HomeFileIndex {
         this._directories = [];
         this._cancellable = null;
         this._lastChangeTime = 0;
+        this._searchCache = null;
         this.loading = false;
         this.complete = false;
         this.truncated = false;
@@ -241,6 +291,79 @@ export class HomeFileIndex {
 
     get items() {
         return this._items;
+    }
+
+    search(query, limit = 8) {
+        const safeLimit = Math.max(0, Number(limit) || 0);
+        const normalizedQuery = normalizedSearchText(query);
+
+        if (safeLimit === 0)
+            return [];
+
+        if (!normalizedQuery)
+            return this._items.slice(0, safeLimit);
+
+        const previous = this._searchCache;
+        const queryMasks = searchTextMasks(normalizedQuery);
+
+        if (previous?.query === normalizedQuery && previous.limit === safeLimit) {
+            for (let index = previous.itemCount; index < this._items.length; index += 1) {
+                const rankedItem = rankedItemFor(
+                    this._items[index],
+                    index,
+                    normalizedQuery,
+                    queryMasks,
+                );
+
+                if (!Number.isFinite(rankedItem.score))
+                    continue;
+
+                previous.matches.push(index);
+                insertRankedItem(
+                    previous.rankedItems,
+                    rankedItem,
+                    compareRankedItems,
+                    safeLimit,
+                );
+            }
+
+            previous.itemCount = this._items.length;
+            return previous.rankedItems.map(({ item }) => item);
+        }
+
+        const canNarrowPreviousSearch = previous?.query
+            && normalizedQuery.startsWith(previous.query);
+        const matches = [];
+        const rankedItems = [];
+        const considerItem = (index) => {
+            const rankedItem = rankedItemFor(this._items[index], index, normalizedQuery, queryMasks);
+
+            if (!Number.isFinite(rankedItem.score))
+                return;
+
+            matches.push(index);
+            insertRankedItem(rankedItems, rankedItem, compareRankedItems, safeLimit);
+        };
+
+        if (canNarrowPreviousSearch) {
+            for (const index of previous.matches)
+                considerItem(index);
+
+            for (let index = previous.itemCount; index < this._items.length; index += 1)
+                considerItem(index);
+        } else {
+            for (let index = 0; index < this._items.length; index += 1)
+                considerItem(index);
+        }
+
+        this._searchCache = {
+            query: normalizedQuery,
+            limit: safeLimit,
+            itemCount: this._items.length,
+            matches,
+            rankedItems,
+        };
+        return rankedItems.map(({ item }) => item);
     }
 
     start() {
@@ -401,12 +524,20 @@ export class HomeFileIndex {
 
                     this._seenFiles.add(path);
                     const displayPath = homeDisplayPath(path, this.homePath);
+                    const searchText = `${name} ${displayPath}`;
+                    const normalizedTitle = normalizedSearchText(name);
+                    const normalizedFileSearchText = normalizedSearchText(searchText);
+                    const searchMasks = searchTextMasks(normalizedFileSearchText);
                     this._items.push({
                         kind: 'file',
                         value: path,
                         title: name,
                         subtitle: displayPath,
-                        searchText: `${name} ${displayPath}`,
+                        searchText,
+                        normalizedTitle,
+                        normalizedSearchText: normalizedFileSearchText,
+                        searchMaskPrimary: searchMasks.primary,
+                        searchMaskSecondary: searchMasks.secondary,
                         insertText: `@${displayPath}`,
                     });
                     changed = true;

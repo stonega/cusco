@@ -9,7 +9,7 @@ put together. For installation and everyday use, start with the
 - Support GNOME Shell on Wayland directly.
 - Avoid a cross-platform backend-selection layer.
 - Keep capture, input, and workspace switching separately user-controlled.
-- Give the user a visible emergency stop in both GNOME Shell and Cusco.
+- Give the user a visible Shell emergency stop and a compact Escape hint in Cusco.
 - Limit privileged Shell methods to the running Cusco process.
 - Keep screenshots private and short-lived.
 
@@ -24,7 +24,7 @@ or `wtype` layers. Attribution and the pinned upstream revision are in
 Chat with Agent enabled
         │
         ▼
-computer_list / computer_observe / computer_act
+computer_list / computer_observe / computer_observe_region / computer_step / computer_act
         │
         ▼
 ComputerUseService (Cusco process)
@@ -41,9 +41,11 @@ GNOME Shell extension
 |---|---|---|
 | Tool definitions | `src/computerUse/tools.js` | Defines model-visible schemas and converts tool input/output. |
 | App-side service | `src/computerUse/service.js` | Enforces settings, calls D-Bus, maps coordinates, caches screenshots, and handles cancellation. |
+| Image views | `src/computerUse/imageViews.js` | Creates model-only coordinate grids and enlarged region views without altering clean screenshots. |
+| Accessibility adapter | `src/computerUse/accessibility.js` | Reads AT-SPI interactive elements and executes verified semantic activation and text actions. |
 | Settings UI | `src/settings/computerUseSettings.js` | Exposes capability switches, timeout, and live integration status. |
-| Window integration | `src/window.js` | Registers tools, attaches observations, displays the in-app stop control, and stops the provider turn. |
-| Shell extension | `data/gnome-shell/extensions/cusco-computer-use@stonega/` | Performs GNOME-specific discovery, capture, input, workspace activation, and top-panel UI. |
+| Window integration | `src/window.js` | Registers tools, attaches observations, displays the cyan Escape hint, and stops the provider turn. |
+| Shell extension | `data/gnome-shell/extensions/cusco-computer-use@stonega/` | Performs GNOME-specific discovery, capture, input, workspace creation/window movement, maximizing, and top-panel UI. |
 | Persistent settings | `data/io.github.stonega.Cusco.gschema.xml` | Stores the feature and capability gates in GSettings. |
 
 ## D-Bus contract
@@ -54,7 +56,7 @@ The extension exports this interface on the user's session bus:
 Bus name:   org.gnome.Shell
 Object:     /io/github/stonega/Cusco/ComputerUse
 Interface:  io.github.stonega.Cusco.ComputerUse
-Protocol:   1
+Protocol:   3
 ```
 
 The extension exports an object under GNOME Shell's existing bus name; it does
@@ -74,7 +76,7 @@ an `UnknownMethod` or “Object does not exist” error even while
 | `StopRequested` | Tells Cusco that the Shell stop control was clicked. |
 
 Payloads are JSON strings inside typed D-Bus parameters. App and extension
-both require protocol version `1`; a version mismatch is shown in settings
+both require protocol version `3`; a version mismatch is shown in settings
 instead of allowing actions against an incompatible bridge.
 
 ## Registration and trust boundary
@@ -102,7 +104,8 @@ returns:
 
 - each workspace's zero-based index, active state, and window count;
 - each controllable window's ID, title, application, PID, workspace, monitor,
-  frame rectangle, focus/minimized state, and sticky-workspace state; and
+  frame rectangle, focus/minimized/maximized state, maximize support, and
+  sticky-workspace state; and
 - the GNOME stage dimensions.
 
 Skip-taskbar windows are omitted.
@@ -118,25 +121,107 @@ The extension returns base64 PNG data over D-Bus. The service:
 1. rejects empty data and images larger than 25 MB;
 2. writes the PNG with mode `0600` inside a mode `0700` per-window session
    directory under the user cache;
-3. records screenshot and window-frame dimensions for coordinate mapping; and
-4. attaches the image to the next model turn.
+3. scales the clean model-sized screenshot to at most 1600 pixels on its
+   longest edge;
+4. fingerprints that clean image for change detection;
+5. creates a same-size Cairo-rendered copy with a synthetic normalized grid;
+6. records an observation ID plus screenshot and window-frame dimensions for
+   coordinate mapping; and
+7. attaches the gridded copy to the next model turn while retaining the clean
+   path for UI display, cropping, and verification.
+
+The grid uses `0`–`1000` independently on both axes, with major lines every
+100 units and minor lines every 50 units. It never changes image dimensions,
+adds padding, or participates in the screenshot fingerprint. If grid rendering
+fails, capture remains usable and the clean image is attached as a fallback.
+
+When the target application exposes AT-SPI, the observation also contains a
+bounded list of visible interactive elements. Each element has an
+observation-scoped reference, role, accessible name, state, and normalized
+bounds. Duplicate or out-of-window AT-SPI geometry is marked unreliable and
+the element's bounds are returned as `null`, while its name and semantic ref
+remain available. Password text values are never exposed. Applications that
+do not publish an accessibility tree continue through visual targeting.
 
 The cache directory is recursively removed when the Cusco window shuts down.
 
-### 3. Act
+### 3. Region observation
 
-`computer_act` requires input permission. Workspace switching additionally
-requires the workspace-switching setting. Coordinate actions require a prior
-observation of the same window.
+`computer_observe_region` derives an enlarged view from the latest clean
+screenshot without capturing the application again. Its region is expressed
+in normalized coordinates relative to the referenced full or region view.
+Pixel rounding is recorded and the effective crop is mapped back to the root
+window frame, so coordinates from the enlarged image remain exact.
 
-Cusco converts screenshot pixels back to the current window-frame coordinate
-space before sending the action. This handles cases where PNG dimensions and
-logical Mutter frame dimensions differ, such as HiDPI scaling. The extension
-then adds the window's current frame origin and clamps the point to its bounds.
+Each region receives its own observation ID and records its parent and root
+observation IDs. A later `computer_step` can use the region ID directly; its
+`0`–`1000` coordinates are local to that enlarged view. Capturing a new full
+window invalidates all region views derived from the previous screenshot.
+AT-SPI elements with reliable bounds are filtered to the crop and remapped to
+the local coordinate space. The workflow contains no application-specific
+browser, toolkit, or DOM integration.
+
+### 4. Step
+
+`computer_step` is the preferred window-control tool. It accepts up to eight
+actions for one window, using normalized coordinates from `0` to `1000`, then
+waits briefly and captures the resulting window in the same tool call. The
+result reports whether the screenshot changed, whether the target window is
+focused, and whether repeated unchanged steps indicate a stall.
+
+A coordinate click cannot be batched with later typing or key presses, and a
+coordinate-bearing `type` action is rejected by `computer_step`. The agent must
+click, inspect the post-action observation, and only then enter input in a
+separate step. After two unchanged coordinate steps, full-window coordinate
+targeting is blocked. A region observation, semantic action, keyboard strategy,
+fresh explicit observation, or user help provides a deliberate recovery path.
+
+When semantic elements are available, `click_element` invokes the element's
+AT-SPI action. If a focusable element exposes no action, Cusco focuses it and
+dispatches Return, leaving final verification to the post-action observation
+or an explicit expectation. `set_text_element` uses the editable-text
+interface and reads the value back to verify the change. Element references
+expire on the next observation.
+
+For search results, the Agent prompt prefers keyboard selection over estimated
+row coordinates. Coordinate clicks that choose a named item or navigate to a
+new view should include an expectation for the intended destination; without
+one, the tool reports the coordinate action as unverified.
+
+Before attaching a step or observation image to the provider, Cusco removes
+older computer-use image attachments from the live Agent runtime. Textual tool
+history remains available, but only the latest desktop screenshot consumes
+image context.
+
+### 5. Act
+
+`computer_act` requires input permission. Workspace creation, activation, and
+window movement additionally require the workspace-switching setting.
+Coordinate actions require a prior observation of the same window.
+
+Cusco converts either screenshot pixels or normalized `0`–`1000` coordinates
+back to the current window-frame coordinate space before sending the action.
+This handles resized model screenshots and cases where PNG dimensions and
+logical Mutter frame dimensions differ, such as HiDPI scaling. Actions may
+include the latest observation ID; stale IDs are rejected. The extension then
+adds the window's current frame origin and clamps the point to its bounds.
+
+Coordinate action results include the model-requested point, its model-image
+pixel position, the mapped window-relative point, and the final clamped desktop
+point reported by the Shell extension. `dispatchStatus: dispatched` only means
+that the virtual input event was sent; it does not claim the application
+accepted it.
 
 The Shell side uses Clutter virtual devices for pointer and keyboard events.
 Supported actions are `focus`, `move`, `click`, `double_click`, `type`,
-`keypress`, `scroll`, `drag`, and `switch_workspace`.
+`keypress`, `scroll`, `drag`, `create_workspace`, `switch_workspace`,
+`move_to_workspace`, and `maximize`. Global `type` and `keypress` actions may
+omit a window ID, allowing the GNOME overview to launch an app without
+reactivating a window on an older workspace.
+
+The Agent prompt treats app launch as a guarded sequence: create and activate
+a workspace, launch there, list the resulting windows, move the new window
+back if the application placed it elsewhere, and maximize it when supported.
 
 ## Settings and permission layers
 
@@ -147,7 +232,7 @@ Computer use enabled
     ├── list windows/workspaces
     ├── capture enabled ── observe window
     └── input enabled ──── pointer/keyboard actions
-            └── workspace switching enabled ── switch workspace
+            └── workspace switching enabled ── create/switch workspace, move window
 ```
 
 Tool registration also requires Agent mode in the chat, and every
@@ -157,14 +242,18 @@ timeout applies to each app-to-Shell operation and is clamped to 5–120 seconds
 ## Cancellation and emergency stop
 
 `ComputerUseService` tracks every active D-Bus call with a `Gio.Cancellable`.
-The first computer-use operation in an agent turn shows both stop controls.
-They remain visible between observe/act calls while the agent decides its next
-step, then hide when the turn completes or is cancelled.
+The first computer-use operation in an agent turn shows the Shell stop control
+with its cyan icon and a short description of the current operation, such as
+**Viewing Firefox** or **Typing in Terminal**. Window titles are collapsed to
+one line and the complete status is limited to 36 characters with an ending
+ellipsis. Typed content is never included. The control and the composer's cyan
+**Esc to quit** hint remain visible between observe/act calls while the agent
+decides its next step, then hide when the turn completes or is cancelled.
 
-Clicking the in-app control cancels active D-Bus work and the current provider
-turn, presents Cusco, and focuses the composer. Clicking the Shell control also
-invalidates long-running Shell work, emits `StopRequested`, activates Cusco's
-window (including its workspace), and triggers the same app-side stop path.
+Pressing Escape in Cusco cancels the current provider turn and its active D-Bus
+work. Clicking the Shell control also invalidates long-running Shell work,
+emits `StopRequested`, activates Cusco's window (including its workspace), and
+triggers the same app-side stop path.
 
 Cancellation is cooperative. Typing and dragging check a generation counter
 during their loops, and capture checks it after its focus delay. An input event
@@ -187,6 +276,11 @@ extension replacement, followed by:
 gnome-extensions enable cusco-computer-use@stonega
 ```
 
+For extension-only development, `scripts/update-computer-use-extension.sh`
+packages this directory and updates the current user's installed extension
+without running Meson or installing the Cusco application. Pass `--build-only`
+to create the bundle without installing it.
+
 Until the extension is loaded, GNOME Shell owns `org.gnome.Shell` but the
 Cusco object path does not exist. The app converts that D-Bus failure into an
 installation/enablement hint in the settings status row.
@@ -202,13 +296,14 @@ installation/enablement hint in the settings status row.
 - Shell extension disappears: active work is cancelled and registration is
   cleared.
 - Operation timeout or provider cancellation: the active `Gio.Cancellable`
-  stops the D-Bus request and hides the indicators.
+  stops the D-Bus request and hides the Shell indicator and Escape highlight.
 - App shutdown: Cusco unregisters, disconnects signals, and removes screenshots.
 
 ## Current limitations
 
-- Observation is screenshot-first; AT-SPI accessibility trees and OCR are not
-  included in model context.
+- Chrome and some Electron configurations do not expose AT-SPI unless browser
+  accessibility is enabled. These windows continue to require visual
+  targeting; OCR and a browser-specific adapter are not yet included.
 - A vision-capable provider/model is required for reliable coordinate selection.
 - Virtual keyboard behavior needs broader testing with non-Latin input methods
   and custom keyboard layouts.
@@ -216,8 +311,9 @@ installation/enablement hint in the settings status row.
   release must be compatibility-tested. Metadata currently declares 45–50.
 - Flatpak packaging needs a separate Shell-extension delivery and D-Bus
   permission design.
-- Window screenshots may become stale after moving, resizing, or changing a
-  window; the agent must observe again.
+- Screenshot-only actions cannot confirm which application element received an
+  input event. Post-action capture detects visible changes, while semantic
+  verification is available only when the target exposes an AT-SPI element.
 - Stop cannot reverse side effects already accepted by another application.
 
 ## Relevant tests

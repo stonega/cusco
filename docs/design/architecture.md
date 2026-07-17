@@ -59,7 +59,7 @@ Cusco starts as a standalone native GNOME application.
 - Conversations persist through a small local JSON database with schema versioning and atomic writes.
 - Provider availability, default models, active selection, and chat preferences are persisted with GSettings.
 - API keys are stored in Secret Service; environment variables remain a development fallback.
-- The custom OpenAI-compatible provider stores its base URL and model IDs in GSettings, while its API key stays in Secret Service.
+- Custom OpenAI-compatible providers are stored as a multi-entry list in GSettings, while each stable provider ID keeps an independent API key in Secret Service. Legacy singleton settings migrate into the list.
 - Provider model discovery refreshes model lists from supported provider APIs and persists discovered model metadata in GSettings. Provider/model capability metadata, including supported thinking levels, lives in the provider registry and is documented in `docs/user/provider-models.md`.
 - Memory writes are never implicit: user messages can trigger a proposal dialog, and only explicit approval stores memory.
 - Memory use is per-chat controllable and creates a stored usage audit entry without adding a transcript system message.
