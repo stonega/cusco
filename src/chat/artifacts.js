@@ -1,6 +1,7 @@
 import GLib from 'gi://GLib?version=2.0';
 
 import { APP_ID } from '../appInfo.js';
+import { normalizeArtifactReference } from '../artifacts/model.js';
 import { parseMarkdownBlocks } from './markdown.js';
 
 export const ARTIFACT_TEXT_MAX_BYTES = 1024 * 1024;
@@ -115,6 +116,11 @@ export function normalizeArtifact(artifact) {
     if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact))
         return null;
 
+    const managedReference = normalizeArtifactReference(artifact);
+
+    if (managedReference && (artifact.artifactId || artifact.revisionId))
+        return managedReference;
+
     const kind = normalizeArtifactKind(artifact.kind);
 
     if (!kind)
@@ -194,12 +200,35 @@ export function extractArtifactsFromMarkdown(markdown, options = {}) {
         if (!kind)
             return;
 
-        const artifact = saveTextArtifact(kind, block.content, {
-            ...options,
-            sourceBlockIndex: index,
-            sourceLanguage: block.language,
-            title: kind === 'svg' ? 'SVG artifact' : 'HTML artifact',
-        });
+        let artifact;
+
+        if (options.artifactManager) {
+            const title = kind === 'svg' ? 'SVG artifact' : 'HTML artifact';
+            const filename = kind === 'svg' ? 'artifact.svg' : 'index.html';
+            const created = options.artifactManager.createArtifact({
+                kind,
+                title,
+                mimeType: ARTIFACT_MIME_TYPES[kind],
+                content: block.content,
+                filename,
+                entrypoint: filename,
+                preferredPresentation: options.preferredPresentation ?? (kind === 'html' ? 'panel' : 'inline'),
+                sourceBlockIndex: index,
+                sourceLanguage: block.language,
+                generatedBy: options.generatedBy,
+            }, {
+                originConversationId: options.originConversationId,
+                createdBy: options.generatedBy ?? 'assistant',
+            });
+            artifact = created.reference;
+        } else {
+            artifact = saveTextArtifact(kind, block.content, {
+                ...options,
+                sourceBlockIndex: index,
+                sourceLanguage: block.language,
+                title: kind === 'svg' ? 'SVG artifact' : 'HTML artifact',
+            });
+        }
 
         if (artifact)
             artifacts.push(artifact);

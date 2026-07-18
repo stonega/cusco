@@ -6,6 +6,7 @@ import Gtk from 'gi://Gtk?version=4.0';
 import GtkSource from 'gi://GtkSource?version=5';
 import Pango from 'gi://Pango?version=1.0';
 
+import { createManagedArtifactCard } from '../artifacts/views/artifactCard.js';
 import { artifactForCodeBlock } from './artifacts.js';
 import {
     inlineMarkdownToPangoMarkup,
@@ -618,6 +619,14 @@ function createArtifactSourcePreview(source, language, options = {}) {
 }
 
 export function createArtifactCard(artifact, options = {}) {
+    if (artifact?.artifactId) {
+        return createManagedArtifactCard(artifact, {
+            ...options,
+            artifactManager: options.artifactManager,
+            artifactRegistry: options.artifactRegistry,
+        });
+    }
+
     const source = String(options.source ?? '');
     const card = new Gtk.Box({
         orientation: Gtk.Orientation.VERTICAL,
@@ -718,10 +727,17 @@ function createCodeBlock(block, options) {
 
 export function renderMessageContent(container, body, options = {}) {
     clearBox(container);
+    const renderedArtifacts = new Set();
+    const artifactKey = (artifact) => artifact?.artifactId
+        ? `${artifact.artifactId}/${artifact.revisionId}`
+        : artifact?.id ?? artifact?.path ?? artifact;
 
     for (const [index, block] of parseMarkdownBlocks(body).entries()) {
         if (block.type === 'code') {
             const artifact = artifactForCodeBlock(options.artifacts, index, block);
+
+            if (artifact)
+                renderedArtifacts.add(artifactKey(artifact));
 
             container.append(artifact
                 ? createArtifactCard(artifact, {
@@ -737,6 +753,13 @@ export function renderMessageContent(container, body, options = {}) {
         } else {
             container.append(createMarkdownLabel(block.content, options));
         }
+    }
+
+    for (const artifact of Array.isArray(options.artifacts) ? options.artifacts : []) {
+        if (renderedArtifacts.has(artifactKey(artifact)))
+            continue;
+
+        container.append(createArtifactCard(artifact, options));
     }
 }
 

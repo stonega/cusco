@@ -12,6 +12,7 @@ Cusco starts as a standalone native GNOME application.
 - Skill layer: local SKILL.md discovery, metadata persistence, and provider-context assembly.
 - Tool layer: web search, file context, calculations, and namespaced MCP tools.
 - Workspace layer: prompt library, agent profiles, folders, tags, export, local cache, plugin tools, and user-managed MCP server configs.
+- Artifact layer: immutable revisions, managed file bundles, message references, typed renderers, export, and an isolated HTML runtime.
 - Storage layer: local conversations, memory, workspace database, and Secret Service for credentials.
 
 ## Initial Structure
@@ -23,6 +24,10 @@ Cusco starts as a standalone native GNOME application.
 - `src/chat/conversation.js`: conversation manager for chat creation, active selection, titles, archive/delete/search, provider/model assignment, and messages.
 - `src/chat/markdown.js`: small markdown-to-Pango parser plus fenced code block splitting.
 - `src/chat/messageView.js`: transcript message renderer with markdown labels, GtkSourceView code blocks, and code copy actions.
+- `src/artifacts/manager.js`: artifact lifecycle, immutable revisions, optimistic concurrency, legacy import, and export.
+- `src/artifacts/renderers/registry.js`: artifact renderer selection for inline and workspace presentation.
+- `src/artifacts/web/runtime.js`: restricted `cusco-artifact://` WebKit origin and capability policy.
+- `src/artifacts/views/workspace.js`: native artifact switcher, preview/source views, revision selection, editing, rename, fork, archive, and export.
 - `src/chat/usage.js`: approximate transcript usage estimator for composer context display.
 - `src/memory/memory.js`: user-approved memory proposal, lookup, management, import/export, and audit logic.
 - `src/mcp/config.js`: MCP server config normalization and `mcp.json` loading.
@@ -50,6 +55,9 @@ Cusco starts as a standalone native GNOME application.
 ## Early Design Decisions
 
 - Native widgets first. Web rendering can be added for rich markdown/code views only when needed.
+- HTML is an artifact format, not application chrome. HTML artifacts use WebKitGTK behind a custom origin; transcript, controls, revision history, permissions, and workspace navigation stay native.
+- Messages reference exact artifact revisions. Artifact updates create a new immutable revision, so later edits cannot rewrite conversation history.
+- Artifact bodies stay outside the conversation database. The transcript stores compact references while the artifact store keeps bounded file bundles under the application data directory.
 - Provider orchestration is a core domain layer, not UI-specific code.
 - Streaming is represented as an async iterator so real API clients and local providers can use the same UI path.
 - Provider fallback is opt-in and retries failed requests with another enabled provider, excluding user-cancelled requests.

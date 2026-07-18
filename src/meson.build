@@ -26,6 +26,26 @@ chat_sources = files(
   'chat/usage.js',
 )
 
+artifact_sources = files(
+  'artifacts/manager.js',
+  'artifacts/model.js',
+)
+
+artifact_renderer_sources = files(
+  'artifacts/renderers/native.js',
+  'artifacts/renderers/registry.js',
+  'artifacts/renderers/web.js',
+)
+
+artifact_view_sources = files(
+  'artifacts/views/artifactCard.js',
+  'artifacts/views/workspace.js',
+)
+
+artifact_web_sources = files(
+  'artifacts/web/runtime.js',
+)
+
 composer_sources = files(
   'composer/references.js',
 )
@@ -79,6 +99,7 @@ secret_sources = files(
 )
 
 storage_sources = files(
+  'storage/artifactStore.js',
   'storage/conversationStore.js',
   'storage/memoryStore.js',
   'storage/workspaceStore.js',
@@ -89,6 +110,7 @@ skill_sources = files(
 )
 
 tool_sources = files(
+  'tools/artifacts.js',
   'tools/askUser.js',
   'tools/display.js',
   'tools/permissions.js',
@@ -109,6 +131,26 @@ install_data(
 install_data(
   chat_sources,
   install_dir: pkgdatadir / 'chat',
+)
+
+install_data(
+  artifact_sources,
+  install_dir: pkgdatadir / 'artifacts',
+)
+
+install_data(
+  artifact_renderer_sources,
+  install_dir: pkgdatadir / 'artifacts' / 'renderers',
+)
+
+install_data(
+  artifact_view_sources,
+  install_dir: pkgdatadir / 'artifacts' / 'views',
+)
+
+install_data(
+  artifact_web_sources,
+  install_dir: pkgdatadir / 'artifacts' / 'web',
 )
 
 install_data(

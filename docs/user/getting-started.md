@@ -22,7 +22,9 @@ Tools can be requested from the composer with `/search`, `/calc`, and `/data`. W
 
 In Agent mode, the model can pause its work with an `ask_user` request when it needs information or a choice. Cusco temporarily replaces the provider controls with one question and its suggested options while keeping a custom-answer input. Multiple questions are shown sequentially. Select an option or type an answer and press Enter; press Escape to return a `null` answer and let the agent continue. Any existing composer draft is restored afterward.
 
-The composer also provides inline references. Type `$` to filter enabled skills, `@` to find files under your Home folder, or `#` to find executable commands available on `PATH`. Use the arrow keys and Enter or Tab to insert a styled reference, or Escape to close the list. Referenced files are attached to the message, referenced skills are loaded for that turn, and referenced commands are never executed automatically.
+The composer also provides inline references. Type `$` to filter enabled skills, `@` to find files under your Home folder, `@artifact:` to reference an exact artifact revision, or `#` to find executable commands available on `PATH`. Use the arrow keys and Enter or Tab to insert a styled reference, or Escape to close the list. Referenced files are attached to the message, referenced skills are loaded for that turn, referenced artifacts provide bounded working context, and referenced commands are never executed automatically.
+
+Assistant HTML and SVG documents can become durable artifacts. Compact artifacts appear in the transcript; select **Open artifact workspace** for a larger preview, source editing, revision history, rename, fork, archive, and export. See [Artifacts](artifacts.md) for formats and security behavior.
 
 GNOME integration includes desktop actions for New Chat and Quick Prompt, shell search over saved conversations, long-response notifications, and shortcuts: Ctrl+N for a new chat, Ctrl+, for Preferences, Ctrl+K for the command palette, and Ctrl+L to focus the composer. High contrast, reduced motion, and response timeout are available in Preferences.
 

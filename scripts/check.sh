@@ -23,6 +23,10 @@ fi
 
 gjs -m tests/import-smoke.js
 gjs -m tests/artifacts-smoke.js
+gjs -m tests/artifact-manager-smoke.js
+gjs -m tests/artifact-web-security-smoke.js
+gjs -m tests/artifact-tools-smoke.js
+gjs -m tests/artifact-workspace-smoke.js
 gjs -m tests/attachments-smoke.js
 gjs -m tests/markdown-smoke.js
 gjs -m tests/message-view-smoke.js

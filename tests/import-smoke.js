@@ -6,6 +6,10 @@ import {
 } from '../src/appInfo.js';
 import GLib from 'gi://GLib';
 import { APP_ID as APPLICATION_APP_ID, CuscoApplication } from '../src/application.js';
+import { ArtifactManager } from '../src/artifacts/manager.js';
+import { createDefaultArtifactRendererRegistry } from '../src/artifacts/renderers/registry.js';
+import { createArtifactWorkspace } from '../src/artifacts/views/workspace.js';
+import { artifactContentSecurityPolicy } from '../src/artifacts/web/runtime.js';
 import { buildAgentModeSystemPrompt, parseAgentToolCall } from '../src/chat/agentMode.js';
 import { extractArtifactsFromMarkdown } from '../src/chat/artifacts.js';
 import { buildCompactionPrompt, getContextUsageState } from '../src/chat/compaction.js';
@@ -46,6 +50,7 @@ import {
     getAlwaysAvailableSkills,
     loadSkillFromPath,
 } from '../src/skills/skills.js';
+import { ArtifactFileStore } from '../src/storage/artifactStore.js';
 import { ConversationFileStore } from '../src/storage/conversationStore.js';
 import { MemoryFileStore } from '../src/storage/memoryStore.js';
 import { WorkspaceFileStore } from '../src/storage/workspaceStore.js';
@@ -160,6 +165,14 @@ if (typeof buildCompactionPrompt !== 'function' || typeof getContextUsageState !
 
 if (typeof extractArtifactsFromMarkdown !== 'function')
     throw new Error('Artifact helpers did not import');
+
+if (typeof ArtifactManager !== 'function'
+    || typeof ArtifactFileStore !== 'function'
+    || typeof createDefaultArtifactRendererRegistry !== 'function'
+    || typeof createArtifactWorkspace !== 'function'
+    || typeof artifactContentSecurityPolicy !== 'function') {
+    throw new Error('Full artifact support modules did not import');
+}
 
 if (typeof CronJobManager !== 'function' || typeof createCronCreateTool !== 'function')
     throw new Error('Cron manager helpers did not import');
