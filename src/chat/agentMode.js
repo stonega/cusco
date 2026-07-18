@@ -56,10 +56,10 @@ export function buildAgentModeSystemPrompt(tools, {
             hasComputerRegion
                 ? 'For a small visual target, an uncertain point, or a blocked coordinate retry, call computer_observe_region and then use the returned region observation ID. Region coordinates are local; do not manually add its offset.'
                 : '',
-            'Prefer deterministic keyboard actions over pixel clicks. Never assume typing or clicking succeeded: inspect verification and the returned screenshot. Never batch a coordinate click with typing or key presses; click and verify first, then enter input in a separate step.',
+            'Prefer deterministic keyboard actions and semantic set_text_element over pixel clicks. When accessibility is unavailable and an empty visual text field must be filled, use one computer_step type action with x, y, and text so focus and typing are dispatched atomically. Never batch an explicit coordinate click with typing or key presses. Never assume typing or clicking succeeded: inspect verification and the returned screenshot; when inputVerified is null, visually confirm the intended field contains the value before continuing.',
             'When a focused search field shows a result list and the intended item is first, prefer keypress Down followed by Return instead of estimating a row coordinate.',
             'When a coordinate click selects a named item or navigates to another view, include an expect entry for the intended post-action label or state. Treat a coordinate click without a matching expectation as unverified.',
-            'If a step reports stalled, do not retry the same target or coordinates. Change strategy. Do not claim completion until the requested final state is visibly verified.',
+            'If a step reports stalled, coordinateActionVerified is false, or text lands in browser chrome instead of the intended field, do not retry the same target or coordinates. Change strategy, using accessibility, atomic coordinate typing, or Tab navigation. Do not claim completion until the requested final state is visibly verified.',
             hasComputerAct
                 ? 'Before giving the user your final response, whether the task succeeded or failed, always make your last computer-use action focus the Cusco app. Use computer_list to find the Cusco window first if needed, then call computer_act with focus for that window.'
                 : '',

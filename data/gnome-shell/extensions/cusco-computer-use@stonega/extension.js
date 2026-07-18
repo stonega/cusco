@@ -12,6 +12,7 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 
 import {clutterKeySuffix} from './keyNames.js';
 import {describeComputerUseOperation, ellipsizeIndicatorStatus} from './indicatorStatus.js';
+import {activateWindowIfNeeded} from './windowFocus.js';
 
 const OBJECT_PATH = '/io/github/stonega/Cusco/ComputerUse';
 const PROTOCOL_VERSION = 3;
@@ -252,9 +253,11 @@ class ComputerUseBridge {
     }
 
     _activate(window) {
-        if (window.minimized)
-            window.unminimize();
-        window.activate(eventTime());
+        return activateWindowIfNeeded(
+            window,
+            global.display.focus_window,
+            eventTime(),
+        );
     }
 
     _cancel() {
@@ -537,8 +540,10 @@ class ComputerUseBridge {
             }));
 
             if (window && action !== 'move_to_workspace') {
-                this._activate(window);
-                await delay(80);
+                const activated = this._activate(window);
+
+                if (activated)
+                    await delay(80);
             }
             if (generation !== this._generation)
                 throw new Error('Computer use was stopped.');

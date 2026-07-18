@@ -9,6 +9,11 @@ export const MIN_REGION_SIZE = 20;
 
 const REGION_TARGET_DIMENSION = 1200;
 const REGION_MAX_DIMENSION = 1600;
+const VISUAL_SIGNATURE_MAX_DIMENSION = 256;
+const VISUAL_PIXEL_DELTA_THRESHOLD = 24;
+const VISUAL_PIXEL_TOTAL_DELTA_THRESHOLD = 48;
+const VISUAL_CHANGE_MINIMUM_PIXELS = 12;
+const VISUAL_CHANGE_MINIMUM_RATIO = 0.001;
 
 function clamp(value, minimum, maximum) {
     return Math.min(maximum, Math.max(minimum, value));
@@ -21,6 +26,82 @@ function finiteNumber(value, label) {
         throw new Error(`${label} must be a finite number.`);
 
     return number;
+}
+
+export function createVisualSignature(path) {
+    const source = GdkPixbuf.Pixbuf.new_from_file(path);
+    const largestDimension = Math.max(source.get_width(), source.get_height());
+    const scale = Math.min(1, VISUAL_SIGNATURE_MAX_DIMENSION / largestDimension);
+    const width = Math.max(1, Math.round(source.get_width() * scale));
+    const height = Math.max(1, Math.round(source.get_height() * scale));
+    const image = scale < 1
+        ? source.scale_simple(width, height, GdkPixbuf.InterpType.BILINEAR)
+        : source;
+    const pixels = image.get_pixels();
+    const channels = image.get_n_channels();
+    const rowstride = image.get_rowstride();
+    const rgb = new Uint8Array(width * height * 3);
+    let outputOffset = 0;
+
+    for (let y = 0; y < height; y++) {
+        const rowOffset = y * rowstride;
+
+        for (let x = 0; x < width; x++) {
+            const pixelOffset = rowOffset + (x * channels);
+
+            rgb[outputOffset++] = pixels[pixelOffset];
+            rgb[outputOffset++] = pixels[pixelOffset + 1];
+            rgb[outputOffset++] = pixels[pixelOffset + 2];
+        }
+    }
+
+    return { width, height, pixels: rgb };
+}
+
+export function compareVisualSignatures(before, after) {
+    if (!before || !after) {
+        return {
+            changed: null,
+            changedPixels: null,
+            changeRatio: null,
+            thresholdPixels: null,
+        };
+    }
+
+    const totalPixels = Math.max(1, after.width * after.height);
+    const thresholdPixels = Math.max(
+        VISUAL_CHANGE_MINIMUM_PIXELS,
+        Math.ceil(totalPixels * VISUAL_CHANGE_MINIMUM_RATIO),
+    );
+
+    if (before.width !== after.width || before.height !== after.height) {
+        return {
+            changed: true,
+            changedPixels: totalPixels,
+            changeRatio: 1,
+            thresholdPixels,
+        };
+    }
+
+    let changedPixels = 0;
+
+    for (let offset = 0; offset < after.pixels.length; offset += 3) {
+        const redDelta = Math.abs(after.pixels[offset] - before.pixels[offset]);
+        const greenDelta = Math.abs(after.pixels[offset + 1] - before.pixels[offset + 1]);
+        const blueDelta = Math.abs(after.pixels[offset + 2] - before.pixels[offset + 2]);
+
+        if (Math.max(redDelta, greenDelta, blueDelta) >= VISUAL_PIXEL_DELTA_THRESHOLD
+            && redDelta + greenDelta + blueDelta >= VISUAL_PIXEL_TOTAL_DELTA_THRESHOLD) {
+            changedPixels += 1;
+        }
+    }
+
+    return {
+        changed: changedPixels >= thresholdPixels,
+        changedPixels,
+        changeRatio: changedPixels / totalPixels,
+        thresholdPixels,
+    };
 }
 
 export function normalizeRegion(region) {

@@ -113,8 +113,10 @@ Skip-taskbar windows are omitted.
 ### 2. Observe
 
 `computer_observe` requires capture permission and a window ID from the list.
-The extension unminimizes and focuses the window, waits briefly for it to
-settle, then captures its frame rectangle with `Shell.Screenshot`.
+The extension unminimizes and focuses the window only when it is not already
+focused, waits briefly for it to settle, then captures its frame rectangle
+with `Shell.Screenshot`. Avoiding redundant activation preserves the focused
+child control in browsers and other multi-process applications.
 
 The extension returns base64 PNG data over D-Bus. The service:
 
@@ -123,7 +125,8 @@ The extension returns base64 PNG data over D-Bus. The service:
    directory under the user cache;
 3. scales the clean model-sized screenshot to at most 1600 pixels on its
    longest edge;
-4. fingerprints that clean image for change detection;
+4. fingerprints that clean image and creates a downscaled visual signature for
+   cursor-insensitive change detection;
 5. creates a same-size Cairo-rendered copy with a synthetic normalized grid;
 6. records an observation ID plus screenshot and window-frame dimensions for
    coordinate mapping; and
@@ -166,15 +169,22 @@ browser, toolkit, or DOM integration.
 `computer_step` is the preferred window-control tool. It accepts up to eight
 actions for one window, using normalized coordinates from `0` to `1000`, then
 waits briefly and captures the resulting window in the same tool call. The
-result reports whether the screenshot changed, whether the target window is
-focused, and whether repeated unchanged steps indicate a stall.
+result reports whether the screenshot changed meaningfully, whether the target
+window is focused, and whether repeated unchanged steps indicate a stall.
 
-A coordinate click cannot be batched with later typing or key presses, and a
-coordinate-bearing `type` action is rejected by `computer_step`. The agent must
-click, inspect the post-action observation, and only then enter input in a
-separate step. After two unchanged coordinate steps, full-window coordinate
-targeting is blocked. A region observation, semantic action, keyboard strategy,
-fresh explicit observation, or user help provides a deliberate recovery path.
+An explicit coordinate click cannot be batched with later typing or key
+presses. One coordinate-bearing `type` action is allowed when it is the only
+action in the step: the Shell bridge focuses the point and types immediately
+in one `PerformAction` request. This is the visual fallback for an empty text
+field when AT-SPI is unavailable. After two meaningfully unchanged coordinate
+steps, full-window coordinate targeting is blocked. A region observation,
+semantic action, keyboard strategy, fresh explicit observation, or user help
+provides a deliberate recovery path.
+
+Change detection compares downscaled RGB signatures with a small changed-pixel
+threshold. Pointer movement, a blinking caret, and compression noise therefore
+do not reset stall detection by themselves. The exact fingerprint remains
+available as a fallback if a visual signature cannot be created.
 
 When semantic elements are available, `click_element` invokes the element's
 AT-SPI action. If a focusable element exposes no action, Cusco focuses it and
@@ -213,6 +223,9 @@ that the virtual input event was sent; it does not claim the application
 accepted it.
 
 The Shell side uses Clutter virtual devices for pointer and keyboard events.
+Before capture or input it activates the target only when the window is not
+already focused; repeated activation must not replace a focused web control
+with browser chrome focus.
 Supported actions are `focus`, `move`, `click`, `double_click`, `type`,
 `keypress`, `scroll`, `drag`, `create_workspace`, `switch_workspace`,
 `move_to_workspace`, and `maximize`. Global `type` and `keypress` actions may

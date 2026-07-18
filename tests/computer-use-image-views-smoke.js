@@ -4,8 +4,10 @@ import GLib from 'gi://GLib?version=2.0';
 
 import {
     accessibilityForRegion,
+    compareVisualSignatures,
     createCoordinateGridOverlay,
     createRegionScreenshot,
+    createVisualSignature,
     mapRegionPoint,
     normalizeRegion,
     regionPixelBounds,
@@ -19,6 +21,8 @@ GLib.mkdir_with_parents(directory, 0o700);
 const sourcePath = GLib.build_filenamev([directory, 'source.png']);
 const gridPath = GLib.build_filenamev([directory, 'grid.png']);
 const regionPath = GLib.build_filenamev([directory, 'region.png']);
+const cursorOnlyPath = GLib.build_filenamev([directory, 'cursor-only.png']);
+const changedPath = GLib.build_filenamev([directory, 'changed.png']);
 const surface = new Cairo.ImageSurface(Cairo.Format.RGB24, 400, 200);
 const cr = new Cairo.Context(surface);
 cr.setSourceRGB(0.08, 0.09, 0.1);
@@ -29,6 +33,49 @@ cr.fill();
 surface.writeToPNG(sourcePath);
 cr.$dispose();
 surface.finish();
+
+const cursorOnlySurface = new Cairo.ImageSurface(Cairo.Format.RGB24, 400, 200);
+const cursorOnlyContext = new Cairo.Context(cursorOnlySurface);
+cursorOnlyContext.setSourceRGB(0.08, 0.09, 0.1);
+cursorOnlyContext.paint();
+cursorOnlyContext.setSourceRGB(0.9, 0.9, 0.9);
+cursorOnlyContext.rectangle(100, 50, 200, 100);
+cursorOnlyContext.fill();
+cursorOnlyContext.setSourceRGB(0.1, 0.8, 1);
+cursorOnlyContext.rectangle(20, 20, 3, 3);
+cursorOnlyContext.fill();
+cursorOnlySurface.writeToPNG(cursorOnlyPath);
+cursorOnlyContext.$dispose();
+cursorOnlySurface.finish();
+
+const changedSurface = new Cairo.ImageSurface(Cairo.Format.RGB24, 400, 200);
+const changedContext = new Cairo.Context(changedSurface);
+changedContext.setSourceRGB(0.08, 0.09, 0.1);
+changedContext.paint();
+changedContext.setSourceRGB(0.9, 0.9, 0.9);
+changedContext.rectangle(100, 50, 200, 100);
+changedContext.fill();
+changedContext.setSourceRGB(0.1, 0.8, 1);
+changedContext.rectangle(20, 20, 80, 40);
+changedContext.fill();
+changedSurface.writeToPNG(changedPath);
+changedContext.$dispose();
+changedSurface.finish();
+
+const sourceSignature = createVisualSignature(sourcePath);
+const cursorOnlyChange = compareVisualSignatures(
+    sourceSignature,
+    createVisualSignature(cursorOnlyPath),
+);
+const meaningfulChange = compareVisualSignatures(
+    sourceSignature,
+    createVisualSignature(changedPath),
+);
+if (cursorOnlyChange.changed !== false
+    || meaningfulChange.changed !== true
+    || meaningfulChange.changedPixels <= meaningfulChange.thresholdPixels) {
+    throw new Error(`Visual change filtering was incorrect: ${JSON.stringify({ cursorOnlyChange, meaningfulChange })}`);
+}
 
 const [, sourceBytesBefore] = GLib.file_get_contents(sourcePath);
 const sourceHashBefore = GLib.compute_checksum_for_data(GLib.ChecksumType.SHA256, sourceBytesBefore);
@@ -72,7 +119,7 @@ if (regionalAccessibility.elements.length !== 1
     throw new Error(`Region accessibility mapping failed: ${JSON.stringify(regionalAccessibility)}`);
 }
 
-for (const path of [sourcePath, gridPath, regionPath]) {
+for (const path of [sourcePath, gridPath, regionPath, cursorOnlyPath, changedPath]) {
     if (GLib.file_test(path, GLib.FileTest.EXISTS))
         GLib.unlink(path);
 }

@@ -41,6 +41,7 @@ if [ ! -f "$source_dir/metadata.json" ] \
   || [ ! -f "$source_dir/extension.js" ] \
   || [ ! -f "$source_dir/keyNames.js" ] \
   || [ ! -f "$source_dir/indicatorStatus.js" ] \
+  || [ ! -f "$source_dir/windowFocus.js" ] \
   || [ ! -f "$source_dir/computer-use-active-symbolic.svg" ]; then
   printf 'Computer-use extension sources are incomplete: %s\n' "$source_dir" >&2
   exit 1
@@ -54,6 +55,7 @@ mkdir -p "$output_dir"
     --out-dir="$output_dir" \
     --extra-source=keyNames.js \
     --extra-source=indicatorStatus.js \
+    --extra-source=windowFocus.js \
     --extra-source=computer-use-active-symbolic.svg \
     .
 )

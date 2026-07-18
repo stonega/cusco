@@ -5,8 +5,10 @@ import GLib from 'gi://GLib?version=2.0';
 import { AccessibilitySnapshotService } from './accessibility.js';
 import {
     accessibilityForRegion,
+    compareVisualSignatures,
     createCoordinateGridOverlay,
     createRegionScreenshot,
+    createVisualSignature,
     normalizeRegion,
     NORMALIZED_COORDINATE_SIZE,
 } from './imageViews.js';
@@ -217,6 +219,15 @@ function modelGridFor(path) {
     }
 }
 
+function visualSignatureFor(path) {
+    try {
+        return createVisualSignature(path);
+    } catch (error) {
+        logError(error, 'Failed to create a computer-use visual signature');
+        return null;
+    }
+}
+
 function isNormalizedCoordinateSpace(value) {
     return ['normalized', 'normalized_1000'].includes(String(value ?? '').trim().toLowerCase());
 }
@@ -227,10 +238,11 @@ function hasCoordinates(action) {
 }
 
 function unsafePointerInputBatch(actions) {
-    if (actions.some(action => action?.action === 'type'
-        && (action.x !== undefined || action.y !== undefined))) {
+    const coordinateTypes = actions.filter(action => action?.action === 'type'
+        && (action.x !== undefined || action.y !== undefined));
+
+    if (coordinateTypes.length > 0 && actions.length !== 1)
         return true;
-    }
 
     const firstClick = actions.findIndex(action => CLICK_ACTIONS.has(action?.action));
 
@@ -703,6 +715,7 @@ export class ComputerUseService {
             rootObservationId: observationId,
             parentObservationId: null,
             fingerprint,
+            visualSignature: visualSignatureFor(path),
             imagePath: path,
             modelImagePath: modelView.modelImagePath,
             grid: modelView.grid,
@@ -802,6 +815,7 @@ export class ComputerUseService {
             rootObservationId: root.rootObservationId,
             parentObservationId: parent.observationId,
             fingerprint: root.fingerprint,
+            visualSignature: root.visualSignature,
             imagePath: cleanPath,
             modelImagePath: modelView.modelImagePath,
             grid: modelView.grid,
@@ -848,6 +862,12 @@ export class ComputerUseService {
         }
 
         const actionWindowId = String(action?.windowId ?? '');
+
+        if (action?.action === 'type'
+            && ((action.x === undefined) !== (action.y === undefined))) {
+            throw createUserError('A coordinate-targeted type action requires both x and y.');
+        }
+
         const referencedObservation = actionWindowId
             ? this._resolveObservation(actionWindowId, action?.observationId)
             : null;
@@ -953,7 +973,7 @@ export class ComputerUseService {
 
         if (unsafePointerInputBatch(actionList)) {
             throw createUserError(
-                'Do not batch coordinate clicks with typing or key presses. Click first, inspect the returned screenshot, then enter text in a separate step.',
+                'Do not batch an explicit coordinate click with typing or key presses. Use one coordinate-targeted type action for an empty visual field, or click and inspect before a later keyboard step.',
             );
         }
 
@@ -1012,8 +1032,13 @@ export class ComputerUseService {
         }
         const observationMilliseconds = elapsedMilliseconds(observationStartedAt);
         const currentObservation = this._observations.get(windowId) ?? null;
+        const visualChange = compareVisualSignatures(
+            previousObservation?.visualSignature,
+            currentObservation?.visualSignature,
+        );
         const screenChanged = previousObservation
-            ? previousObservation.fingerprint !== currentObservation?.fingerprint
+            ? visualChange.changed
+                ?? (previousObservation.fingerprint !== currentObservation?.fingerprint)
             : null;
         const semanticActions = results.filter(result => (
             result.performed === 'click_element' || result.performed === 'set_text_element'
@@ -1024,9 +1049,19 @@ export class ComputerUseService {
         const inputResults = results.filter(result => (
             result.performed === 'type' || result.performed === 'set_text_element'
         ));
-        const inputVerified = inputResults.length > 0
-            ? inputResults.every(result => result.verified === true)
-            : null;
+        const semanticInputResults = inputResults.filter(result => (
+            result.performed === 'set_text_element'
+        ));
+        const inputExpectations = expectationResult.results.filter(result => (
+            result.state === 'value_equals' || result.state === 'value_contains'
+        ));
+        let inputVerified = null;
+
+        if (semanticInputResults.length > 0) {
+            inputVerified = semanticInputResults.every(result => result.verified === true);
+        } else if (inputResults.length > 0 && inputExpectations.length > 0) {
+            inputVerified = inputExpectations.every(result => result.passed === true);
+        }
         const unchangedCount = screenChanged === false && semanticActionsVerified !== true
             ? (this._unchangedStepCounts.get(windowId) ?? 0) + 1
             : 0;
@@ -1052,6 +1087,7 @@ export class ComputerUseService {
             observation,
             verification: {
                 screenChanged,
+                visualChange,
                 focused: Boolean(observation.window?.focused),
                 unchangedCount,
                 stalled: unchangedCount >= STALLED_STEP_THRESHOLD,

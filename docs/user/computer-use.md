@@ -137,10 +137,16 @@ rejected rather than clicking against a stale layout.
 Grid lines and labels are targeting aids added by Cusco; they are not part of
 the application. Region observations use their own local `0`–`1000` space and
 Cusco maps the point back to the full window automatically. After two visual
-click attempts leave the screen unchanged, further full-window coordinate
-clicks are blocked until the agent changes strategy. Coordinate clicks and
-typing are deliberately split into separate steps so a missed click cannot
-send text to the wrong target.
+actions leave the screen meaningfully unchanged, further full-window
+coordinate targeting is blocked until the agent changes strategy. Small
+cursor or caret changes are ignored by this check.
+
+An explicit `click` cannot be batched with later typing or key presses. When
+accessibility is unavailable and an empty visual text field must be filled,
+the agent can instead send one coordinate-targeted `type` action. Cusco clicks
+the point and types in one Shell request so browser focus cannot change between
+the two operations. The returned screenshot remains visually unverified until
+the intended field and value are inspected.
 
 When an application exposes desktop accessibility information, observations
 also include named elements such as buttons and text fields. The agent can
@@ -164,7 +170,7 @@ so Cusco always keeps the application-independent visual fallback available.
 | `move` | Moves the pointer to a window-relative position. |
 | `click` | Clicks the left, middle, or right pointer button. |
 | `double_click` | Double-clicks at a position. |
-| `type` | Types text into the current focus. `computer_act` retains optional coordinate targeting for compatibility; safe stepped workflows click and verify first. |
+| `type` | Types into the current focus, or atomically clicks `x`,`y` and types when it is the only `computer_step` action. |
 | `keypress` | Sends a key or shortcut such as `CTRL` + `L`. |
 | `scroll` | Scrolls horizontally or vertically at a position. |
 | `drag` | Drags from one window-relative position to another. |

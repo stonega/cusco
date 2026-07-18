@@ -8,6 +8,7 @@ import {
     ellipsizeIndicatorStatus,
     MAX_INDICATOR_STATUS_CHARACTERS,
 } from '../data/gnome-shell/extensions/cusco-computer-use@stonega/indicatorStatus.js';
+import { activateWindowIfNeeded } from '../data/gnome-shell/extensions/cusco-computer-use@stonega/windowFocus.js';
 import { ComputerUseService } from '../src/computerUse/service.js';
 import { createComputerUseTools } from '../src/computerUse/tools.js';
 
@@ -31,6 +32,31 @@ if (clutterKeySuffix('Return') !== 'Return'
     || clutterKeySuffix('backspace') !== 'BackSpace'
     || clutterKeySuffix('page-down') !== 'Page_Down')
     throw new Error('Computer-use key aliases were not normalized');
+
+const focusCalls = [];
+const alreadyFocusedWindow = {
+    minimized: false,
+    unminimize() {
+        focusCalls.push('unminimize');
+    },
+    activate(timestamp) {
+        focusCalls.push(`activate:${timestamp}`);
+    },
+};
+if (activateWindowIfNeeded(alreadyFocusedWindow, alreadyFocusedWindow, 10)
+    || focusCalls.length !== 0) {
+    throw new Error('An already-focused window was activated again');
+}
+if (!activateWindowIfNeeded(alreadyFocusedWindow, {}, 20)
+    || focusCalls.join(',') !== 'activate:20') {
+    throw new Error('An unfocused window was not activated');
+}
+focusCalls.length = 0;
+alreadyFocusedWindow.minimized = true;
+if (!activateWindowIfNeeded(alreadyFocusedWindow, alreadyFocusedWindow, 30)
+    || focusCalls.join(',') !== 'unminimize,activate:30') {
+    throw new Error('A minimized focused window was not restored and activated');
+}
 
 const longWindowStatus = describeComputerUseOperation('capture', {
     windowTitle: 'A very long application window title that should not take over the top panel',
@@ -183,7 +209,7 @@ const step = await byName.get('computer_step').run(JSON.stringify({
 }), { marker: 'step' });
 if (step.imagePath !== '/tmp/updated-test-window.png'
     || !step.output.includes('post-action screenshot')
-    || !step.output.includes('remains unverified')
+    || !step.output.includes('remains visually unverified')
     || step.verification.coordinateActionVerified !== false
     || step.performed.join(',') !== 'click') {
     throw new Error('Computer step did not return its post-action observation');
@@ -192,6 +218,25 @@ const stepCall = calls.find(call => call[0] === 'step');
 if (stepCall[1][0].coordinateSpace !== 'normalized_1000'
     || stepCall[1][0].windowId !== '42') {
     throw new Error('Computer step did not normalize its action coordinates');
+}
+
+const atomicTypeStep = await byName.get('computer_step').run(JSON.stringify({
+    windowId: '42',
+    observationId: 'next-observation',
+    actions: [
+        { action: 'type', x: 455, y: 275, text: 'wallet-address' },
+    ],
+    settleMs: 0,
+}));
+const atomicTypeCall = calls.filter(call => call[0] === 'step').at(-1);
+if (atomicTypeCall[1].length !== 1
+    || atomicTypeCall[1][0].action !== 'type'
+    || atomicTypeCall[1][0].x !== 455
+    || atomicTypeCall[1][0].y !== 275
+    || atomicTypeCall[1][0].text !== 'wallet-address'
+    || atomicTypeStep.verification.coordinateActionVerified !== false
+    || !atomicTypeStep.output.includes('visually unverified')) {
+    throw new Error('Computer step did not preserve atomic coordinate-targeted typing');
 }
 
 let unsafeBatchRejected = false;
@@ -210,6 +255,21 @@ try {
 if (!unsafeBatchRejected)
     throw new Error('Computer step allowed an unverified coordinate click and input batch');
 
+let incompleteAtomicTargetRejected = false;
+try {
+    await byName.get('computer_step').run(JSON.stringify({
+        windowId: '42',
+        observationId: 'first-observation',
+        actions: [
+            { action: 'type', x: 500, text: 'Hello' },
+        ],
+    }));
+} catch (error) {
+    incompleteAtomicTargetRejected = error.userMessage?.includes('both x and y');
+}
+if (!incompleteAtomicTargetRejected)
+    throw new Error('Computer step allowed an incomplete atomic type target');
+
 let rejectedInvalidInput = false;
 try {
     await byName.get('computer_observe').run('not-json');
@@ -219,7 +279,7 @@ try {
 if (!rejectedInvalidInput)
     throw new Error('Invalid computer-use input was not rejected');
 
-if (calls.length !== 8)
+if (calls.length !== 9)
     throw new Error(`Unexpected computer-use call count: ${calls.length}`);
 
 const fixturePath = GLib.build_filenamev([
@@ -455,6 +515,42 @@ if (keyboardActivationInput.action !== 'keypress'
     throw new Error('Focusable semantic element was not activated with Return');
 }
 
+const atomicInputStep = await computerUse.step([{
+    action: 'type',
+    windowId: '42',
+    observationId: captured.observationId,
+    coordinateSpace: 'normalized_1000',
+    x: 500,
+    y: 500,
+    text: 'wallet-address',
+}], { settleMs: 0 });
+performed = proxyCalls.filter(call => call.method === 'PerformAction').at(-1);
+const atomicInputRequest = JSON.parse(performed.parameters[0]);
+if (atomicInputRequest.action !== 'type'
+    || atomicInputRequest.x !== 50
+    || atomicInputRequest.y !== 30
+    || atomicInputRequest.text !== 'wallet-address'
+    || atomicInputStep.results.length !== 1
+    || atomicInputStep.verification.inputVerified !== null) {
+    throw new Error(`Atomic coordinate input was not dispatched safely: ${JSON.stringify(atomicInputStep)}`);
+}
+
+let incompleteServiceTargetRejected = false;
+try {
+    await computerUse.act({
+        action: 'type',
+        windowId: '42',
+        observationId: atomicInputStep.observation.observationId,
+        coordinateSpace: 'normalized_1000',
+        x: 500,
+        text: 'unsafe',
+    });
+} catch (error) {
+    incompleteServiceTargetRejected = error.userMessage?.includes('both x and y');
+}
+if (!incompleteServiceTargetRejected)
+    throw new Error('Computer-use service allowed an incomplete atomic type target');
+
 const recaptured = await computerUse.observe('42');
 let staleRegionRejected = false;
 try {
@@ -538,8 +634,18 @@ try {
 if (!unsafeServiceBatchRejected)
     throw new Error('Computer-use service allowed an unverified click and input batch');
 
-if (activeStates.join(',') !== 'true,false,true,false,true,false,true,false,true,false,true,false')
-    throw new Error(`Computer-use active state did not balance: ${activeStates.join(',')}`);
+function assertBalancedStateTransitions(states, label) {
+    if (states.length % 2 !== 0)
+        throw new Error(`${label} left an active transition open: ${states.join(',')}`);
+
+    for (let index = 0; index < states.length; index += 2) {
+        if (states[index] !== true || states[index + 1] !== false)
+            throw new Error(`${label} produced unbalanced transitions: ${states.join(',')}`);
+    }
+}
+
+assertBalancedStateTransitions(activeStates, 'Computer-use active state');
+const balancedActiveStateCount = activeStates.length;
 
 const turnCancellable = new Gio.Cancellable();
 await computerUse.act(
@@ -613,17 +719,19 @@ if (recoveryStep.verification.coordinateMissCount !== 1
     throw new Error('A region observation did not unlock a safer coordinate retry');
 }
 if (!computerUse.active
-    || activeStates.join(',') !== 'true,false,true,false,true,false,true,false,true,false,true,false,true') {
+    || activeStates.length !== balancedActiveStateCount + 1
+    || activeStates.at(-1) !== true) {
     throw new Error(`Computer-use indicator did not stay active for the turn: ${activeStates.join(',')}`);
 }
 if (!computerUse.finishTurn(turnCancellable) || computerUse.active)
     throw new Error('Computer-use turn did not finish cleanly');
-if (activeStates.join(',') !== 'true,false,true,false,true,false,true,false,true,false,true,false,true,false')
+if (activeStates.length !== balancedActiveStateCount + 2 || activeStates.at(-1) !== false)
     throw new Error(`Computer-use turn state did not balance: ${activeStates.join(',')}`);
+assertBalancedStateTransitions(activeStates, 'Computer-use turn state');
 const remoteActiveStates = proxyCalls
     .filter(call => call.method === 'SetActive')
     .map(call => String(call.parameters[0]));
-if (remoteActiveStates.join(',') !== 'true,false,true,false,true,false,true,false,true,false,true,false,true,false')
+if (remoteActiveStates.join(',') !== activeStates.map(String).join(','))
     throw new Error(`GNOME indicator state flickered during the turn: ${remoteActiveStates.join(',')}`);
 
 computerUse.shutdown();

@@ -56,10 +56,11 @@ const CLICK_ACTION_NAMES = new Set(['click', 'double_click']);
 const FOLLOWUP_INPUT_ACTION_NAMES = new Set(['type', 'keypress']);
 
 function hasUnsafePointerInputBatch(actions) {
-    if (actions.some(action => action?.action === 'type'
-        && (action.x !== undefined || action.y !== undefined))) {
+    const coordinateTypes = actions.filter(action => action?.action === 'type'
+        && (action.x !== undefined || action.y !== undefined));
+
+    if (coordinateTypes.length > 0 && actions.length !== 1)
         return true;
-    }
 
     const clickIndex = actions.findIndex(action => CLICK_ACTION_NAMES.has(action?.action));
     return clickIndex >= 0
@@ -194,8 +195,8 @@ export function createComputerUseTools(service) {
         {
             name: 'computer_step',
             label: 'Act and observe desktop window',
-            description: 'Perform one or more bounded actions on one observed window, wait briefly, and return the updated screenshot plus semantic, coordinate, change, and stall feedback. Prefer accessibility refs when available. Visual coordinates are normalized 0..1000 in the attached full or region grid. Never batch a coordinate click with typing or key presses: click, inspect the returned screenshot, then enter input in a separate step. For small targets or a blocked retry, use computer_observe_region. Coordinate clicks that navigate should include an expect entry.',
-            inputDescription: 'JSON: {"windowId":"ID","observationId":"latest full or region observation ID","actions":[{"action":"click","x":480,"y":280}],"settleMs":250}. Run typing in a later step after visually verifying the click. Semantic actions include click_element {ref} and set_text_element {ref,text}; other actions include type, keypress, maximize, move_to_workspace, scroll, and drag. All visual coordinates are normalized 0..1000. Maximum 8 actions.',
+            description: 'Perform one or more bounded actions on one observed window, wait briefly, and return the updated screenshot plus semantic, coordinate, change, and stall feedback. Prefer accessibility refs when available. Visual coordinates are normalized 0..1000 in the attached full or region grid. A single type action may include x and y to focus an empty visual text field and type atomically. Never batch an explicit coordinate click with typing or key presses. For small targets or a blocked retry, use computer_observe_region. Coordinate actions that navigate or enter input should include an expect entry when accessibility is available.',
+            inputDescription: 'JSON: {"windowId":"ID","observationId":"latest full or region observation ID","actions":[{"action":"click","x":480,"y":280}],"settleMs":250}. For an inaccessible empty text field, use exactly one atomic action: {"action":"type","x":480,"y":280,"text":"value"}. Semantic actions include click_element {ref} and set_text_element {ref,text}; other actions include type, keypress, maximize, move_to_workspace, scroll, and drag. Never combine an explicit click with keyboard input. All visual coordinates are normalized 0..1000. Maximum 8 actions.',
             inputSchema: {
                 type: 'object',
                 additionalProperties: false,
@@ -262,7 +263,18 @@ export function createComputerUseTools(service) {
 
                 if (hasUnsafePointerInputBatch(args.actions)) {
                     throw userError(
-                        'computer_step cannot batch a coordinate click with typing or key presses. Click first and inspect the returned screenshot.',
+                        'computer_step cannot batch an explicit coordinate click with typing or key presses. Use one coordinate-targeted type action for an empty visual field, or click and inspect before a later keyboard step.',
+                    );
+                }
+
+                const incompleteCoordinateType = args.actions.some(action => (
+                    action?.action === 'type'
+                    && ((action.x === undefined) !== (action.y === undefined))
+                ));
+
+                if (incompleteCoordinateType) {
+                    throw userError(
+                        'A coordinate-targeted type action requires both x and y.',
                     );
                 }
 
@@ -280,12 +292,16 @@ export function createComputerUseTools(service) {
                     expectations,
                 });
                 const { observation, ...stepResult } = step;
-                const hasCoordinateClick = actions.some(action => (
-                    action.action === 'click' || action.action === 'double_click'
+                const hasCoordinateTarget = actions.some(action => (
+                    action.action === 'click'
+                    || action.action === 'double_click'
+                    || (action.action === 'type'
+                        && action.x !== undefined
+                        && action.y !== undefined)
                 ));
                 stepResult.verification = {
                     ...stepResult.verification,
-                    coordinateActionVerified: hasCoordinateClick
+                    coordinateActionVerified: hasCoordinateTarget
                         ? expectations.length > 0
                             && stepResult.verification?.expectationsMet === true
                         : null,
@@ -299,8 +315,8 @@ export function createComputerUseTools(service) {
                 } else if (expectations.length > 0
                     && stepResult.verification.expectationsMet !== true) {
                     instruction = 'The post-action screenshot is attached, but the expected target state was not found. Do not treat the action as successful; inspect the screen and change strategy.';
-                } else if (hasCoordinateClick && expectations.length === 0) {
-                    instruction = 'The post-action screenshot is attached, but this coordinate click had no semantic expectation and remains unverified. Inspect the screen before continuing; prefer a named ref, keyboard navigation, or retry with expect.';
+                } else if (hasCoordinateTarget && expectations.length === 0) {
+                    instruction = 'The post-action screenshot is attached, but this coordinate-targeted action had no semantic expectation and remains visually unverified. Inspect the intended target and any entered value before continuing; prefer a named ref or keyboard navigation when available.';
                 }
                 const transcript = {
                     ...stepResult,

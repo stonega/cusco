@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Computer-use focus regression</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: system-ui, sans-serif;
+    }
+
+    body {
+      align-items: center;
+      background: #08090b;
+      display: flex;
+      justify-content: center;
+      margin: 0;
+      min-height: 100vh;
+    }
+
+    form {
+      background: #111318;
+      border: 1px solid #2c3038;
+      border-radius: 12px;
+      display: grid;
+      gap: 14px;
+      padding: 28px;
+      width: min(560px, calc(100vw - 80px));
+    }
+
+    label {
+      font-weight: 700;
+    }
+
+    input {
+      background: #090a0d;
+      border: 1px solid #343943;
+      border-radius: 8px;
+      color: #f4f5f7;
+      font: inherit;
+      padding: 12px 14px;
+    }
+
+    input:focus {
+      border-color: #42e6f5;
+      outline: 2px solid rgb(66 230 245 / 30%);
+    }
+
+    output {
+      color: #aeb4bf;
+      min-height: 1.5em;
+    }
+  </style>
+</head>
+<body>
+  <form id="fixture-form">
+    <label for="wallet-address">Wallet Address</label>
+    <input
+      id="wallet-address"
+      name="walletAddress"
+      placeholder="Enter a test address"
+      autocomplete="off"
+    >
+    <output id="fixture-status">focus: none; value: empty</output>
+  </form>
+  <script>
+    const form = document.querySelector('#fixture-form');
+    const input = document.querySelector('#wallet-address');
+    const status = document.querySelector('#fixture-status');
+
+    function updateStatus() {
+      const focused = document.activeElement === input ? 'wallet-address' : 'other';
+      status.value = `focus: ${focused}; value: ${input.value || 'empty'}`;
+    }
+
+    form.addEventListener('submit', event => event.preventDefault());
+    document.addEventListener('focusin', updateStatus);
+    document.addEventListener('focusout', updateStatus);
+    input.addEventListener('input', updateStatus);
+    updateStatus();
+  </script>
+</body>
+</html>
