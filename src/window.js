@@ -17,7 +17,10 @@ import {
     parseAgentToolCall,
     pruneComputerUseObservationImages,
 } from './chat/agentMode.js';
-import { extractArtifactsFromMarkdown } from './chat/artifacts.js';
+import {
+    extractArtifactsFromMarkdown,
+    imageArtifactForToolCall,
+} from './chat/artifacts.js';
 import {
     createFileAttachment,
     fileAttachmentSummary,
@@ -36,6 +39,7 @@ import {
     copyTextToClipboard,
     createArtifactCard,
     createMessageContent,
+    setLoadedPicturePaintable,
 } from './chat/messageView.js';
 import { estimateConversationUsage } from './chat/usage.js';
 import {
@@ -3389,10 +3393,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 attachment.path,
                 COMPOSER_ATTACHMENT_THUMBNAIL_WIDTH,
                 COMPOSER_ATTACHMENT_THUMBNAIL_HEIGHT,
-                (paintable) => {
-                    if (paintable && picture.get_parent())
-                        picture.set_paintable(paintable);
-                },
+                (paintable) => setLoadedPicturePaintable(picture, paintable),
             );
         } else {
             const icon = new Gtk.Image({
@@ -6264,22 +6265,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         frame.updateImage = (toolCall = {}) => {
             this._clearBox(frame);
 
-            const artifact = (toolCall.artifacts ?? []).find((item) => item?.kind === 'image')
-                ?? (String(toolCall.imagePath ?? '').trim()
-                    ? {
-                        kind: 'image',
-                        title: 'Generated image',
-                        mimeType: toolCall.mimeType ?? 'image/png',
-                        path: toolCall.imagePath,
-                        sourceBlockIndex: -1,
-                        sourceLanguage: '',
-                        createdAt: toolCall.completedAt ?? toolCall.createdAt ?? new Date().toISOString(),
-                        generatedBy: 'image_gen',
-                    }
-                    : null);
-            const imagePath = String(toolCall.imagePath ?? '').trim();
+            const artifact = imageArtifactForToolCall(toolCall);
 
-            if (!artifact || (!imagePath && !artifact.path)) {
+            if (!artifact) {
                 frame.set_visible(false);
                 return;
             }

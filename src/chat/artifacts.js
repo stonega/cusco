@@ -130,7 +130,7 @@ export function normalizeArtifact(artifact) {
             ? 'HTML artifact'
             : kind === 'svg'
                 ? 'SVG artifact'
-                : 'Generated image'),
+                : 'Image artifact'),
         mimeType: normalizeString(artifact.mimeType, ARTIFACT_MIME_TYPES[kind]),
         path,
         sourceBlockIndex: Number.isInteger(sourceBlockIndex) && sourceBlockIndex >= 0
@@ -219,17 +219,38 @@ export function artifactForCodeBlock(artifacts, blockIndex, block) {
         ?? null;
 }
 
+export function imageArtifactForToolCall(toolCall = {}) {
+    const existing = normalizeArtifacts(toolCall.artifacts)
+        .find((artifact) => artifact.kind === 'image');
+
+    if (existing)
+        return existing;
+
+    const imagePath = normalizeString(toolCall.imagePath);
+
+    if (!imagePath)
+        return null;
+
+    const toolName = normalizeString(toolCall.name);
+    return createImageArtifactFromPath(imagePath, {
+        title: toolName === 'image_gen' ? 'Generated image' : 'Tool result image',
+        mimeType: normalizeString(toolCall.mimeType, ARTIFACT_MIME_TYPES.image),
+        createdAt: toolCall.completedAt ?? toolCall.createdAt,
+        generatedBy: toolName || 'tool',
+    });
+}
+
 export function createImageArtifactFromPath(path, options = {}) {
     const artifact = normalizeArtifact({
         id: options.id,
         kind: 'image',
-        title: options.title ?? 'Generated image',
+        title: options.title,
         mimeType: options.mimeType ?? ARTIFACT_MIME_TYPES.image,
         path,
         sourceBlockIndex: -1,
         sourceLanguage: '',
         createdAt: options.createdAt,
-        generatedBy: options.generatedBy ?? 'image_gen',
+        generatedBy: options.generatedBy,
     });
 
     return artifact?.path ? artifact : null;

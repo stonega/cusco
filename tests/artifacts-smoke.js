@@ -4,6 +4,7 @@ import {
     artifactKindForCodeBlock,
     createImageArtifactFromPath,
     extractArtifactsFromMarkdown,
+    imageArtifactForToolCall,
     normalizeArtifacts,
 } from '../src/chat/artifacts.js';
 
@@ -64,5 +65,21 @@ assertEqual(normalized[0].mimeType, 'image/svg+xml', 'Normalized SVG MIME type')
 const imageArtifact = createImageArtifactFromPath('/tmp/generated.png', { mimeType: 'image/png' });
 assertEqual(imageArtifact.kind, 'image', 'Image artifact kind');
 assertEqual(imageArtifact.path, '/tmp/generated.png', 'Image artifact path');
+assertEqual(imageArtifact.title, 'Image artifact', 'Generic image artifact title');
+
+const toolResultImage = imageArtifactForToolCall({
+    name: 'computer_observe',
+    imagePath: '/tmp/observation.png',
+    mimeType: 'image/png',
+});
+assertEqual(toolResultImage.title, 'Tool result image', 'Tool result image title');
+assertEqual(toolResultImage.generatedBy, 'computer_observe', 'Tool result image source');
+
+const generatedImage = imageArtifactForToolCall({
+    name: 'image_gen',
+    imagePath: '/tmp/generated.png',
+    mimeType: 'image/png',
+});
+assertEqual(generatedImage.title, 'Generated image', 'Generated image title');
 
 print('Cusco artifacts smoke passed');

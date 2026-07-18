@@ -1,5 +1,6 @@
 import {
     applyReferenceTextStyles,
+    setLoadedPicturePaintable,
 } from '../src/chat/messageView.js';
 
 function assert(condition, message) {
@@ -42,5 +43,19 @@ do {
 } while (iterator.next());
 
 assert(styledFileToken, 'Unicode file reference did not receive the expected byte range');
+
+const cachedPaintable = {};
+let assignedPaintable = null;
+const parentlessPicture = {
+    set_paintable(paintable) {
+        assignedPaintable = paintable;
+    },
+};
+
+setLoadedPicturePaintable(parentlessPicture, cachedPaintable);
+assert(
+    assignedPaintable === cachedPaintable,
+    'A cached image paintable was not assigned before its picture received a parent',
+);
 
 print('Cusco message view smoke passed');

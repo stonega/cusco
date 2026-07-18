@@ -47,6 +47,13 @@ const PENDING_ARTIFACT_TEXTURES = [];
 let syntaxHighlightSourceId = 0;
 let artifactTextureSourceId = 0;
 
+export function setLoadedPicturePaintable(picture, paintable) {
+    // Cache hits can complete while a newly constructed picture is still parentless.
+    // Gtk.Picture accepts a paintable before it is added to the widget tree.
+    if (paintable)
+        picture.set_paintable(paintable);
+}
+
 function queueArtifactTexture(pixbuf, onCreated) {
     PENDING_ARTIFACT_TEXTURES.push({ pixbuf, onCreated });
 
@@ -553,7 +560,7 @@ function createArtifactHeader(artifact, source, options = {}) {
     return header;
 }
 
-function createArtifactImagePreview(artifact) {
+function createArtifactImagePreview(artifact, options = {}) {
     if (!artifactFileExists(artifact)) {
         const missing = new Gtk.Label({
             label: 'Artifact file is missing.',
@@ -577,11 +584,22 @@ function createArtifactImagePreview(artifact) {
     picture.set_content_fit(Gtk.ContentFit.CONTAIN);
     picture.set_size_request(360, 240);
     picture.add_css_class('cusco-artifact-picture');
-    loadArtifactPreviewAsync(artifact.path, (paintable) => {
-        if (paintable && picture.get_parent())
-            picture.set_paintable(paintable);
+    loadArtifactPreviewAsync(
+        artifact.path,
+        (paintable) => setLoadedPicturePaintable(picture, paintable),
+    );
+
+    const openButton = new Gtk.Button({
+        child: picture,
+        tooltip_text: 'Open image',
+        halign: Gtk.Align.START,
     });
-    return picture;
+    openButton.add_css_class('flat');
+    openButton.add_css_class('cusco-artifact-picture-button');
+    openButton.connect('clicked', () => {
+        openArtifactExternally(artifact, options.parentWindow);
+    });
+    return openButton;
 }
 
 function createArtifactSourcePreview(source, language, options = {}) {
@@ -612,10 +630,10 @@ export function createArtifactCard(artifact, options = {}) {
     card.append(createArtifactHeader(artifact, source, options));
 
     if (artifact.kind === 'image') {
-        card.append(createArtifactImagePreview(artifact));
+        card.append(createArtifactImagePreview(artifact, options));
     } else if (artifact.kind === 'svg') {
         card.append(artifactFileExists(artifact) || !source
-            ? createArtifactImagePreview(artifact)
+            ? createArtifactImagePreview(artifact, options)
             : createArtifactSourcePreview(source, 'xml', options));
     } else {
         card.append(createArtifactSourcePreview(artifactSourceText(artifact, source), 'html', options));
