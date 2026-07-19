@@ -16,8 +16,8 @@ import {
 export const COMPUTER_USE_BUS_NAME = 'org.gnome.Shell';
 export const COMPUTER_USE_OBJECT_PATH = '/io/github/stonega/Cusco/ComputerUse';
 export const COMPUTER_USE_INTERFACE = 'io.github.stonega.Cusco.ComputerUse';
-export const COMPUTER_USE_PROTOCOL_VERSION = 3;
-export const COMPUTER_USE_AGENT_PROTOCOL_VERSION = 3;
+export const COMPUTER_USE_PROTOCOL_VERSION = 4;
+export const COMPUTER_USE_AGENT_PROTOCOL_VERSION = 4;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_SCREENSHOT_BYTES = 25 * 1024 * 1024;
@@ -864,8 +864,21 @@ export class ComputerUseService {
         const actionWindowId = String(action?.windowId ?? '');
 
         if (action?.action === 'type'
-            && ((action.x === undefined) !== (action.y === undefined))) {
-            throw createUserError('A coordinate-targeted type action requires both x and y.');
+            && (action.x !== undefined || action.y !== undefined)
+            && (!Number.isFinite(action.x) || !Number.isFinite(action.y))) {
+            throw createUserError(
+                'A coordinate-targeted type action requires both x and y as finite numbers.',
+            );
+        }
+
+        if (action?.replace !== undefined
+            && (typeof action.replace !== 'boolean'
+                || action.action !== 'type'
+                || (action.replace === true
+                    && (!Number.isFinite(action.x) || !Number.isFinite(action.y))))) {
+            throw createUserError(
+                'replace is only supported as a boolean on a coordinate-targeted type action with both x and y.',
+            );
         }
 
         const referencedObservation = actionWindowId
@@ -973,7 +986,7 @@ export class ComputerUseService {
 
         if (unsafePointerInputBatch(actionList)) {
             throw createUserError(
-                'Do not batch an explicit coordinate click with typing or key presses. Use one coordinate-targeted type action for an empty visual field, or click and inspect before a later keyboard step.',
+                'Do not batch an explicit coordinate click with typing or key presses. Use one coordinate-targeted type action, add replace:true when replacing existing field text, or click and inspect before a later keyboard step.',
             );
         }
 

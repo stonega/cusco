@@ -143,13 +143,17 @@ if (tools.length !== 5
 const desktopActionNames = byName.get('computer_act').inputSchema.properties.action.enum;
 const stepActionNames = byName.get('computer_step')
     .inputSchema.properties.actions.items.properties.action.enum;
+const stepActionProperties = byName.get('computer_step')
+    .inputSchema.properties.actions.items.properties;
 if (!['create_workspace', 'move_to_workspace', 'maximize'].every(actionName => (
     desktopActionNames.includes(actionName)
 )) || !['move_to_workspace', 'maximize'].every(actionName => stepActionNames.includes(actionName))
-    || stepActionNames.includes('create_workspace')) {
+    || stepActionNames.includes('create_workspace')
+    || stepActionProperties.replace.type !== 'boolean') {
     throw new Error('Computer-use workspace and maximize actions were not exposed correctly');
 }
-if (!byName.get('computer_step').description.includes('Never batch')
+if (!byName.get('computer_step').description.includes('replace:true')
+    || !byName.get('computer_step').description.includes('normalized')
     || !byName.get('computer_step').description.includes('computer_observe_region')) {
     throw new Error('Computer step did not describe safe visual targeting');
 }
@@ -239,6 +243,47 @@ if (atomicTypeCall[1].length !== 1
     throw new Error('Computer step did not preserve atomic coordinate-targeted typing');
 }
 
+const normalizedInsertStep = await byName.get('computer_step').run(JSON.stringify({
+    windowId: '42',
+    observationId: 'first-observation',
+    actions: [
+        { action: 'click', x: 500, y: 250 },
+        { action: 'type', text: 'Hello' },
+    ],
+}));
+const normalizedInsertCall = calls.filter(call => call[0] === 'step').at(-1);
+if (normalizedInsertCall[1].length !== 1
+    || normalizedInsertCall[1][0].action !== 'type'
+    || normalizedInsertCall[1][0].x !== 500
+    || normalizedInsertCall[1][0].y !== 250
+    || normalizedInsertCall[1][0].replace !== undefined
+    || normalizedInsertStep.actionNormalization?.mode !== 'insert') {
+    throw new Error('Computer step did not normalize click and type into atomic input');
+}
+
+const replacementText = 'HJiJBLfTUZTXsU2Sv7Qpq2L6micuX1rjpLhBtrcQ5rRd';
+const normalizedReplaceStep = await byName.get('computer_step').run(JSON.stringify({
+    windowId: '42',
+    observationId: 'region-observation',
+    actions: [
+        { action: 'click', x: 400, y: 400 },
+        { action: 'keypress', keys: ['CTRL', 'A'] },
+        { action: 'type', text: replacementText },
+    ],
+}));
+const normalizedReplaceCall = calls.filter(call => call[0] === 'step').at(-1);
+if (normalizedReplaceCall[1].length !== 1
+    || normalizedReplaceCall[1][0].action !== 'type'
+    || normalizedReplaceCall[1][0].x !== 400
+    || normalizedReplaceCall[1][0].y !== 400
+    || normalizedReplaceCall[1][0].replace !== true
+    || normalizedReplaceCall[1][0].text !== replacementText
+    || normalizedReplaceStep.actionNormalization?.mode !== 'replace'
+    || normalizedReplaceStep.verification.coordinateActionVerified !== false
+    || !normalizedReplaceStep.output.includes('"requestedActions"')) {
+    throw new Error('Computer step did not normalize visual field replacement atomically');
+}
+
 let unsafeBatchRejected = false;
 try {
     await byName.get('computer_step').run(JSON.stringify({
@@ -246,14 +291,14 @@ try {
         observationId: 'first-observation',
         actions: [
             { action: 'click', x: 500, y: 250 },
-            { action: 'type', text: 'Hello' },
+            { action: 'keypress', keys: ['Return'] },
         ],
     }));
 } catch (error) {
-    unsafeBatchRejected = error.userMessage?.includes('cannot batch');
+    unsafeBatchRejected = error.userMessage?.includes('cannot safely batch');
 }
 if (!unsafeBatchRejected)
-    throw new Error('Computer step allowed an unverified coordinate click and input batch');
+    throw new Error('Computer step allowed an arbitrary coordinate click and keyboard batch');
 
 let incompleteAtomicTargetRejected = false;
 try {
@@ -270,6 +315,21 @@ try {
 if (!incompleteAtomicTargetRejected)
     throw new Error('Computer step allowed an incomplete atomic type target');
 
+let invalidReplaceRejected = false;
+try {
+    await byName.get('computer_step').run(JSON.stringify({
+        windowId: '42',
+        observationId: 'first-observation',
+        actions: [
+            { action: 'type', text: 'Hello', replace: true },
+        ],
+    }));
+} catch (error) {
+    invalidReplaceRejected = error.userMessage?.includes('replace is only supported');
+}
+if (!invalidReplaceRejected)
+    throw new Error('Computer step allowed replacement without a visual field target');
+
 let rejectedInvalidInput = false;
 try {
     await byName.get('computer_observe').run('not-json');
@@ -279,7 +339,7 @@ try {
 if (!rejectedInvalidInput)
     throw new Error('Invalid computer-use input was not rejected');
 
-if (calls.length !== 9)
+if (calls.length !== 11)
     throw new Error(`Unexpected computer-use call count: ${calls.length}`);
 
 const fixturePath = GLib.build_filenamev([
@@ -327,7 +387,7 @@ const fakeProxy = {
             }
             : null;
         const payloads = {
-            Register: { protocolVersion: 3, registered: true },
+            Register: { protocolVersion: 4, registered: true },
             ListDesktop: { workspaces: [], windows: [] },
             CaptureWindow: {
                 window: { id: '42', width: 100, height: 60 },
@@ -392,7 +452,7 @@ const computerUse = new ComputerUseService({
 const captured = await computerUse.observe('42');
 if (captured.width !== 200
     || captured.height !== 100
-    || captured.agentProtocolVersion !== 3
+    || captured.agentProtocolVersion !== 4
     || !captured.observationId
     || captured.coordinateSpace?.normalized?.width !== 1000
     || !captured.grid?.enabled
@@ -535,12 +595,33 @@ if (atomicInputRequest.action !== 'type'
     throw new Error(`Atomic coordinate input was not dispatched safely: ${JSON.stringify(atomicInputStep)}`);
 }
 
+const atomicReplaceStep = await computerUse.step([{
+    action: 'type',
+    windowId: '42',
+    observationId: atomicInputStep.observation.observationId,
+    coordinateSpace: 'normalized_1000',
+    x: 500,
+    y: 500,
+    text: 'replacement-address',
+    replace: true,
+}], { settleMs: 0 });
+performed = proxyCalls.filter(call => call.method === 'PerformAction').at(-1);
+const atomicReplaceRequest = JSON.parse(performed.parameters[0]);
+if (atomicReplaceRequest.action !== 'type'
+    || atomicReplaceRequest.x !== 50
+    || atomicReplaceRequest.y !== 30
+    || atomicReplaceRequest.text !== 'replacement-address'
+    || atomicReplaceRequest.replace !== true
+    || atomicReplaceStep.results.length !== 1) {
+    throw new Error(`Atomic coordinate replacement was not dispatched safely: ${JSON.stringify(atomicReplaceStep)}`);
+}
+
 let incompleteServiceTargetRejected = false;
 try {
     await computerUse.act({
         action: 'type',
         windowId: '42',
-        observationId: atomicInputStep.observation.observationId,
+        observationId: atomicReplaceStep.observation.observationId,
         coordinateSpace: 'normalized_1000',
         x: 500,
         text: 'unsafe',
@@ -550,6 +631,21 @@ try {
 }
 if (!incompleteServiceTargetRejected)
     throw new Error('Computer-use service allowed an incomplete atomic type target');
+
+let invalidServiceReplaceRejected = false;
+try {
+    await computerUse.act({
+        action: 'type',
+        windowId: '42',
+        observationId: atomicReplaceStep.observation.observationId,
+        text: 'unsafe',
+        replace: true,
+    });
+} catch (error) {
+    invalidServiceReplaceRejected = error.userMessage?.includes('replace is only supported');
+}
+if (!invalidServiceReplaceRejected)
+    throw new Error('Computer-use service allowed replacement without a coordinate target');
 
 const recaptured = await computerUse.observe('42');
 let staleRegionRejected = false;

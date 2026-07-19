@@ -56,7 +56,7 @@ The extension exports this interface on the user's session bus:
 Bus name:   org.gnome.Shell
 Object:     /io/github/stonega/Cusco/ComputerUse
 Interface:  io.github.stonega.Cusco.ComputerUse
-Protocol:   3
+Protocol:   4
 ```
 
 The extension exports an object under GNOME Shell's existing bus name; it does
@@ -76,7 +76,7 @@ an `UnknownMethod` or “Object does not exist” error even while
 | `StopRequested` | Tells Cusco that the Shell stop control was clicked. |
 
 Payloads are JSON strings inside typed D-Bus parameters. App and extension
-both require protocol version `3`; a version mismatch is shown in settings
+both require protocol version `4`; a version mismatch is shown in settings
 instead of allowing actions against an incompatible bridge.
 
 ## Registration and trust boundary
@@ -172,14 +172,18 @@ waits briefly and captures the resulting window in the same tool call. The
 result reports whether the screenshot changed meaningfully, whether the target
 window is focused, and whether repeated unchanged steps indicate a stall.
 
-An explicit coordinate click cannot be batched with later typing or key
-presses. One coordinate-bearing `type` action is allowed when it is the only
-action in the step: the Shell bridge focuses the point and types immediately
-in one `PerformAction` request. This is the visual fallback for an empty text
-field when AT-SPI is unavailable. After two meaningfully unchanged coordinate
-steps, full-window coordinate targeting is blocked. A region observation,
-semantic action, keyboard strategy, fresh explicit observation, or user help
-provides a deliberate recovery path.
+An arbitrary explicit coordinate click cannot be batched with later typing or
+key presses. One coordinate-bearing `type` action is allowed when it is the
+only action in the step: the Shell bridge focuses the point, waits briefly for
+field focus to settle, and types in one `PerformAction` request. `replace: true`
+adds Ctrl+A before typing so an existing visual field can be replaced safely.
+At the model-facing tool boundary, the equivalent `click` → `type` and `click`
+→ Ctrl+A → `type` patterns are normalized into those atomic actions; other
+click-and-keyboard batches remain rejected. This is the visual fallback for a
+text field when AT-SPI is unavailable. After two meaningfully unchanged
+coordinate steps, full-window coordinate targeting is blocked. A region
+observation, semantic action, keyboard strategy, fresh explicit observation,
+or user help provides a deliberate recovery path.
 
 Change detection compares downscaled RGB signatures with a small changed-pixel
 threshold. Pointer movement, a blinking caret, and compression noise therefore

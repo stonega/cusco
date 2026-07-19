@@ -141,12 +141,15 @@ actions leave the screen meaningfully unchanged, further full-window
 coordinate targeting is blocked until the agent changes strategy. Small
 cursor or caret changes are ignored by this check.
 
-An explicit `click` cannot be batched with later typing or key presses. When
-accessibility is unavailable and an empty visual text field must be filled,
-the agent can instead send one coordinate-targeted `type` action. Cusco clicks
-the point and types in one Shell request so browser focus cannot change between
-the two operations. The returned screenshot remains visually unverified until
-the intended field and value are inspected.
+An arbitrary explicit `click` cannot be batched with later typing or key
+presses. When accessibility is unavailable, the agent can instead send one
+coordinate-targeted `type` action. For a field that already contains text,
+`replace: true` makes Cusco click the point, select all existing text, and type
+the replacement in one Shell request. Cusco also normalizes the equivalent
+`click` → `type` and `click` → Ctrl+A → `type` action patterns into these atomic
+forms. The bridge briefly lets field focus settle before typing so the first
+character is not lost. The returned screenshot remains visually unverified
+until the intended field and complete value are inspected.
 
 When an application exposes desktop accessibility information, observations
 also include named elements such as buttons and text fields. The agent can
@@ -170,7 +173,7 @@ so Cusco always keeps the application-independent visual fallback available.
 | `move` | Moves the pointer to a window-relative position. |
 | `click` | Clicks the left, middle, or right pointer button. |
 | `double_click` | Double-clicks at a position. |
-| `type` | Types into the current focus, or atomically clicks `x`,`y` and types when it is the only `computer_step` action. |
+| `type` | Types into the current focus, or atomically clicks `x`,`y` and types when it is the only `computer_step` action. Use `replace: true` to select all existing field text first. |
 | `keypress` | Sends a key or shortcut such as `CTRL` + `L`. |
 | `scroll` | Scrolls horizontally or vertically at a position. |
 | `drag` | Drags from one window-relative position to another. |

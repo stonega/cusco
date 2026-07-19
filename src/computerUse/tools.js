@@ -55,6 +55,65 @@ const DEFAULT_STEP_SETTLE_MS = 250;
 const CLICK_ACTION_NAMES = new Set(['click', 'double_click']);
 const FOLLOWUP_INPUT_ACTION_NAMES = new Set(['type', 'keypress']);
 
+function isPrimaryCoordinateClick(action) {
+    return action?.action === 'click'
+        && (action.button === undefined || action.button === 'left')
+        && Number.isFinite(action.x)
+        && Number.isFinite(action.y);
+}
+
+function isUnpositionedType(action) {
+    return action?.action === 'type'
+        && action.x === undefined
+        && action.y === undefined;
+}
+
+function isSelectAllKeypress(action) {
+    if (action?.action !== 'keypress' || !Array.isArray(action.keys) || action.keys.length !== 2)
+        return false;
+
+    const keys = action.keys.map(key => String(key ?? '').trim().toUpperCase());
+    return keys.includes('A') && keys.some(key => key === 'CTRL' || key === 'CONTROL');
+}
+
+function atomicTypeFromPointerInput(actions) {
+    if (!Array.isArray(actions) || ![2, 3].includes(actions.length))
+        return { actions, normalization: null };
+
+    const [click, middle, last] = actions;
+    const replacing = actions.length === 3;
+    const type = replacing ? last : middle;
+
+    if (!isPrimaryCoordinateClick(click)
+        || !isUnpositionedType(type)
+        || (replacing && !isSelectAllKeypress(middle))) {
+        return { actions, normalization: null };
+    }
+
+    const atomicType = {
+        ...type,
+        x: click.x,
+        y: click.y,
+    };
+
+    for (const property of ['windowId', 'observationId', 'coordinateSpace']) {
+        if (click[property] !== undefined)
+            atomicType[property] = click[property];
+    }
+
+    if (replacing)
+        atomicType.replace = true;
+
+    return {
+        actions: [atomicType],
+        normalization: {
+            requestedActions: actions.map(action => action?.action ?? ''),
+            performedActions: ['type'],
+            mode: replacing ? 'replace' : 'insert',
+        },
+    };
+}
+
 function hasUnsafePointerInputBatch(actions) {
     const coordinateTypes = actions.filter(action => action?.action === 'type'
         && (action.x !== undefined || action.y !== undefined));
@@ -89,6 +148,7 @@ function actionProperties(actionNames = ACTION_NAMES) {
         deltaY: { type: 'number' },
         button: { type: 'string', enum: ['left', 'middle', 'right'] },
         text: { type: 'string' },
+        replace: { type: 'boolean' },
         keys: { type: 'array', items: { type: 'string' }, minItems: 1 },
     };
 }
@@ -195,8 +255,8 @@ export function createComputerUseTools(service) {
         {
             name: 'computer_step',
             label: 'Act and observe desktop window',
-            description: 'Perform one or more bounded actions on one observed window, wait briefly, and return the updated screenshot plus semantic, coordinate, change, and stall feedback. Prefer accessibility refs when available. Visual coordinates are normalized 0..1000 in the attached full or region grid. A single type action may include x and y to focus an empty visual text field and type atomically. Never batch an explicit coordinate click with typing or key presses. For small targets or a blocked retry, use computer_observe_region. Coordinate actions that navigate or enter input should include an expect entry when accessibility is available.',
-            inputDescription: 'JSON: {"windowId":"ID","observationId":"latest full or region observation ID","actions":[{"action":"click","x":480,"y":280}],"settleMs":250}. For an inaccessible empty text field, use exactly one atomic action: {"action":"type","x":480,"y":280,"text":"value"}. Semantic actions include click_element {ref} and set_text_element {ref,text}; other actions include type, keypress, maximize, move_to_workspace, scroll, and drag. Never combine an explicit click with keyboard input. All visual coordinates are normalized 0..1000. Maximum 8 actions.',
+            description: 'Perform one or more bounded actions on one observed window, wait briefly, and return the updated screenshot plus semantic, coordinate, change, and stall feedback. Prefer accessibility refs when available. Visual coordinates are normalized 0..1000 in the attached full or region grid. A single type action may include x and y to focus a visual text field and type atomically; add replace:true to select all existing field text first. Common click-then-type and click-then-Ctrl+A-then-type calls are normalized to those atomic forms. Other explicit coordinate click and keyboard batches remain unsafe. For small targets or a blocked retry, use computer_observe_region. Coordinate actions that navigate or enter input should include an expect entry when accessibility is available.',
+            inputDescription: 'JSON: {"windowId":"ID","observationId":"latest full or region observation ID","actions":[{"action":"click","x":480,"y":280}],"settleMs":250}. For an inaccessible visual text field, use exactly one atomic action: {"action":"type","x":480,"y":280,"text":"value","replace":true}; omit replace for an empty field. Semantic actions include click_element {ref} and set_text_element {ref,text}; other actions include type, keypress, maximize, move_to_workspace, scroll, and drag. Arbitrary explicit click and keyboard batches are rejected. All visual coordinates are normalized 0..1000. Maximum 8 actions.',
             inputSchema: {
                 type: 'object',
                 additionalProperties: false,
@@ -261,24 +321,42 @@ export function createComputerUseTools(service) {
                     throw userError(`computer_step requires 1 to ${MAX_STEP_ACTIONS} actions.`);
                 }
 
-                if (hasUnsafePointerInputBatch(args.actions)) {
+                const normalizedInput = atomicTypeFromPointerInput(args.actions);
+                const requestedActions = normalizedInput.actions;
+
+                if (hasUnsafePointerInputBatch(requestedActions)) {
                     throw userError(
-                        'computer_step cannot batch an explicit coordinate click with typing or key presses. Use one coordinate-targeted type action for an empty visual field, or click and inspect before a later keyboard step.',
+                        'computer_step cannot safely batch these coordinate click and keyboard actions. Use one coordinate-targeted type action, add replace:true when replacing existing field text, or click and inspect before a later keyboard step.',
                     );
                 }
 
-                const incompleteCoordinateType = args.actions.some(action => (
+                const invalidCoordinateType = requestedActions.some(action => (
                     action?.action === 'type'
-                    && ((action.x === undefined) !== (action.y === undefined))
+                    && (action.x !== undefined || action.y !== undefined)
+                    && (!Number.isFinite(action.x) || !Number.isFinite(action.y))
                 ));
 
-                if (incompleteCoordinateType) {
+                if (invalidCoordinateType) {
                     throw userError(
-                        'A coordinate-targeted type action requires both x and y.',
+                        'A coordinate-targeted type action requires both x and y as finite numbers.',
                     );
                 }
 
-                const actions = args.actions.map((action) => ({
+                const invalidReplace = requestedActions.some(action => (
+                    action?.replace !== undefined
+                    && (typeof action.replace !== 'boolean'
+                        || action.action !== 'type'
+                        || (action.replace === true
+                            && (!Number.isFinite(action.x) || !Number.isFinite(action.y))))
+                ));
+
+                if (invalidReplace) {
+                    throw userError(
+                        'replace is only supported as a boolean on a coordinate-targeted type action with both x and y.',
+                    );
+                }
+
+                const actions = requestedActions.map((action) => ({
                     ...action,
                     windowId,
                     observationId: args.observationId,
@@ -316,16 +394,22 @@ export function createComputerUseTools(service) {
                     && stepResult.verification.expectationsMet !== true) {
                     instruction = 'The post-action screenshot is attached, but the expected target state was not found. Do not treat the action as successful; inspect the screen and change strategy.';
                 } else if (hasCoordinateTarget && expectations.length === 0) {
-                    instruction = 'The post-action screenshot is attached, but this coordinate-targeted action had no semantic expectation and remains visually unverified. Inspect the intended target and any entered value before continuing; prefer a named ref or keyboard navigation when available.';
+                    instruction = 'The post-action screenshot is attached, but this coordinate-targeted action had no semantic expectation and remains visually unverified. Inspect the intended target and the complete entered value before continuing; prefer a named ref or keyboard navigation when available.';
                 }
                 const transcript = {
                     ...stepResult,
                     observation,
+                    ...(normalizedInput.normalization
+                        ? { actionNormalization: normalizedInput.normalization }
+                        : {}),
                     instruction,
                 };
                 return {
                     ...observation,
                     ...stepResult,
+                    ...(normalizedInput.normalization
+                        ? { actionNormalization: normalizedInput.normalization }
+                        : {}),
                     output: formatted(transcript),
                 };
             },
@@ -334,7 +418,7 @@ export function createComputerUseTools(service) {
             name: 'computer_act',
             label: 'Control GNOME desktop',
             description: 'Perform one bounded desktop action without returning a screenshot. Use create_workspace before launching an app, then maximize or move its window as needed. Global type and keypress actions may omit windowId so an app can be launched on the active empty workspace. Prefer computer_step for subsequent window actions. Coordinate actions should specify screenshot_pixels or normalized_1000 explicitly.',
-            inputDescription: 'JSON with action. Supported: create_workspace; switch_workspace {workspaceIndex}; move_to_workspace {windowId,workspaceIndex}; maximize {windowId}; focus {windowId}; click/double_click/move {windowId,x,y,coordinateSpace,button?}; type {text,windowId?,x?,y?,coordinateSpace?}; keypress {keys:["CTRL","L"],windowId?}; scroll {windowId,x,y,coordinateSpace,deltaX?,deltaY?}; drag {windowId,x,y,endX,endY,coordinateSpace}.',
+            inputDescription: 'JSON with action. Supported: create_workspace; switch_workspace {workspaceIndex}; move_to_workspace {windowId,workspaceIndex}; maximize {windowId}; focus {windowId}; click/double_click/move {windowId,x,y,coordinateSpace,button?}; type {text,windowId?,x?,y?,coordinateSpace?,replace?}; keypress {keys:["CTRL","L"],windowId?}; scroll {windowId,x,y,coordinateSpace,deltaX?,deltaY?}; drag {windowId,x,y,endX,endY,coordinateSpace}. replace:true requires a coordinate-targeted type action.',
             inputSchema: {
                 type: 'object',
                 additionalProperties: true,

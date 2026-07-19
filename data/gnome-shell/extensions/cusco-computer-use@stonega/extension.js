@@ -15,8 +15,9 @@ import {describeComputerUseOperation, ellipsizeIndicatorStatus} from './indicato
 import {activateWindowIfNeeded} from './windowFocus.js';
 
 const OBJECT_PATH = '/io/github/stonega/Cusco/ComputerUse';
-const PROTOCOL_VERSION = 3;
+const PROTOCOL_VERSION = 4;
 const MAX_TYPE_CHARACTERS = 10_000;
+const TEXT_FIELD_FOCUS_SETTLE_MS = 80;
 
 const INTERFACE_XML = `
 <node>
@@ -573,15 +574,34 @@ class ComputerUseBridge {
                 await this._click(coordinates, request.button, 2);
                 break;
             }
-            case 'type':
+            case 'type': {
                 if ((Number.isFinite(request.x) || Number.isFinite(request.y)) && !window)
                     throw new Error('Global type cannot use window-relative coordinates.');
-                if (window && Number.isFinite(request.x) && Number.isFinite(request.y)) {
+                const coordinateTargeted = Boolean(window)
+                    && Number.isFinite(request.x)
+                    && Number.isFinite(request.y);
+                if (request.replace !== undefined
+                    && (typeof request.replace !== 'boolean'
+                        || (request.replace === true && !coordinateTargeted))) {
+                    throw new Error(
+                        'replace is only supported on a coordinate-targeted type action.',
+                    );
+                }
+                if (coordinateTargeted) {
                     coordinates = this._point(window, request);
                     await this._click(coordinates, 'left', 1);
+                    await delay(TEXT_FIELD_FOCUS_SETTLE_MS);
+                    if (generation !== this._generation)
+                        throw new Error('Computer use was stopped.');
+                }
+                if (request.replace === true) {
+                    await this._keypress(['CTRL', 'A']);
+                    if (generation !== this._generation)
+                        throw new Error('Computer use was stopped.');
                 }
                 await this._type(request.text, generation);
                 break;
+            }
             case 'keypress':
                 await this._keypress(request.keys);
                 break;
