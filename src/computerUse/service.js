@@ -12,6 +12,14 @@ import {
     normalizeRegion,
     NORMALIZED_COORDINATE_SIZE,
 } from './imageViews.js';
+import {
+    createComputerUseError,
+    hasComputerUseCoordinates,
+    isComputerUseError,
+    isNormalizedComputerUseCoordinateSpace,
+    validateComputerUseAction,
+    validateComputerUseStepActions,
+} from './protocol.js';
 
 export const COMPUTER_USE_BUS_NAME = 'org.gnome.Shell';
 export const COMPUTER_USE_OBJECT_PATH = '/io/github/stonega/Cusco/ComputerUse';
@@ -24,23 +32,30 @@ const MAX_SCREENSHOT_BYTES = 25 * 1024 * 1024;
 const MAX_MODEL_SCREENSHOT_DIMENSION = 1600;
 const MAX_STEP_SETTLE_MS = 2_000;
 const STALLED_STEP_THRESHOLD = 2;
-const COORDINATE_ACTIONS = new Set(['click', 'double_click', 'move', 'scroll', 'drag']);
-const CLICK_ACTIONS = new Set(['click', 'double_click']);
-const FOLLOWUP_INPUT_ACTIONS = new Set(['type', 'keypress']);
 const WORKSPACE_ACTIONS = new Set([
     'create_workspace',
     'move_to_workspace',
     'switch_workspace',
 ]);
 
-function createUserError(message) {
-    const error = new Error(message);
-    error.userMessage = message;
-    return error;
+function createUserError(message, options = {}) {
+    return createComputerUseError(message, options);
+}
+
+function remoteErrorDetails(error) {
+    const rawMessage = String(error?.message ?? error ?? '');
+    const remoteMatch = /^GDBus\.Error:([^:]+):\s*(.*)$/s.exec(rawMessage);
+
+    return {
+        message: (remoteMatch?.[2] ?? rawMessage).trim(),
+        name: remoteMatch?.[1] ?? '',
+        rawMessage,
+    };
 }
 
 function integrationErrorMessage(error) {
-    const message = String(error?.message ?? error ?? '');
+    const details = remoteErrorDetails(error);
+    const message = details.rawMessage;
 
     if (/UnknownMethod|UnknownObject|Object does not exist|No such interface/i.test(message)) {
         return 'GNOME Shell integration is not installed, enabled, or loaded. Install the current Cusco build, log out and back in, then enable cusco-computer-use@stonega.';
@@ -49,7 +64,30 @@ function integrationErrorMessage(error) {
     if (/ServiceUnknown|NameHasNoOwner/i.test(message))
         return 'GNOME Shell is unavailable on this session.';
 
-    return message || 'GNOME Shell integration is unavailable.';
+    if (/NoReply|TimedOut|timed out/i.test(message))
+        return 'GNOME Shell did not finish the computer-use operation before it timed out.';
+
+    return details.message || 'GNOME Shell integration is unavailable.';
+}
+
+function isCancelledOperation(error, cancellable = null) {
+    return Boolean(cancellable?.is_cancelled?.())
+        || (typeof error?.matches === 'function'
+            && error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED));
+}
+
+function remoteComputerUseError(error) {
+    if (isComputerUseError(error))
+        return error;
+
+    return createUserError(integrationErrorMessage(error), {
+        cause: error,
+        kind: 'remote',
+    });
+}
+
+function logRecoverableComputerUseError(error, context) {
+    console.info(`${context}: ${String(error?.message ?? error)}`);
 }
 
 function unpackJson(result, method) {
@@ -164,7 +202,7 @@ function prepareModelScreenshot(path, bytes, dimensions) {
             dimensions: { width, height },
         };
     } catch (error) {
-        logError(error, 'Failed to resize computer-use screenshot');
+        logRecoverableComputerUseError(error, 'Failed to resize computer-use screenshot');
         return {
             bytes,
             dimensions,
@@ -207,7 +245,7 @@ function modelGridFor(path) {
             },
         };
     } catch (error) {
-        logError(error, 'Failed to add the computer-use coordinate grid');
+        logRecoverableComputerUseError(error, 'Failed to add the computer-use coordinate grid');
         return {
             modelImagePath: path,
             grid: {
@@ -223,37 +261,24 @@ function visualSignatureFor(path) {
     try {
         return createVisualSignature(path);
     } catch (error) {
-        logError(error, 'Failed to create a computer-use visual signature');
+        logRecoverableComputerUseError(error, 'Failed to create a computer-use visual signature');
         return null;
     }
 }
 
-function isNormalizedCoordinateSpace(value) {
-    return ['normalized', 'normalized_1000'].includes(String(value ?? '').trim().toLowerCase());
-}
+function removeFile(path) {
+    if (!path || !GLib.file_test(path, GLib.FileTest.EXISTS))
+        return;
 
-function hasCoordinates(action) {
-    return COORDINATE_ACTIONS.has(action?.action)
-        || (action?.action === 'type' && (action.x !== undefined || action.y !== undefined));
-}
-
-function unsafePointerInputBatch(actions) {
-    const coordinateTypes = actions.filter(action => action?.action === 'type'
-        && (action.x !== undefined || action.y !== undefined));
-
-    if (coordinateTypes.length > 0 && actions.length !== 1)
-        return true;
-
-    const firstClick = actions.findIndex(action => CLICK_ACTIONS.has(action?.action));
-
-    if (firstClick < 0)
-        return false;
-
-    return actions.slice(firstClick + 1).some(action => FOLLOWUP_INPUT_ACTIONS.has(action?.action));
+    try {
+        Gio.File.new_for_path(path).delete(null);
+    } catch (error) {
+        logRecoverableComputerUseError(error, 'Failed to remove a temporary computer-use screenshot');
+    }
 }
 
 function mapActionCoordinates(request, observation) {
-    const normalized = isNormalizedCoordinateSpace(request.coordinateSpace);
+    const normalized = isNormalizedComputerUseCoordinateSpace(request.coordinateSpace);
     const coordinateWidth = normalized
         ? NORMALIZED_COORDINATE_SIZE
         : observation.imageWidth;
@@ -394,6 +419,7 @@ export class ComputerUseService {
         this._activeCount = 0;
         this._activeCancellables = new Set();
         this._activeTurnCancellable = null;
+        this._presentedActive = false;
         this._observations = new Map();
         this._observationViews = new Map();
         this._unchangedStepCounts = new Map();
@@ -506,7 +532,10 @@ export class ComputerUseService {
                 new GLib.Variant('(u)', [new Gio.Credentials().get_unix_pid()]),
             ), 'Register');
         } catch (error) {
-            throw createUserError(integrationErrorMessage(error));
+            throw createUserError(integrationErrorMessage(error), {
+                cause: error,
+                kind: 'remote',
+            });
         }
 
         if (result.protocolVersion !== COMPUTER_USE_PROTOCOL_VERSION) {
@@ -556,8 +585,20 @@ export class ComputerUseService {
                 2_000,
             );
         } catch (error) {
-            logError(error, 'Failed to update computer-use indicator');
+            logRecoverableComputerUseError(error, 'Failed to update computer-use indicator');
         }
+    }
+
+    async _setActivePresentation(active) {
+        const nextActive = Boolean(active);
+
+        if (nextActive === this._presentedActive)
+            return false;
+
+        this._presentedActive = nextActive;
+        this._onActiveChanged(nextActive);
+        await this._setRemoteActive(nextActive);
+        return true;
     }
 
     async _run(method, parameters, options = {}) {
@@ -570,10 +611,8 @@ export class ComputerUseService {
             this._activeTurnCancellable = cancellable;
         this._activeCancellables.add(cancellable);
         this._activeCount += 1;
-        if (!wasActive) {
-            this._onActiveChanged(true);
-            await this._setRemoteActive(true);
-        }
+        if (!wasActive)
+            await this._setActivePresentation(true);
 
         try {
             return await this._callRegistered(
@@ -582,13 +621,16 @@ export class ComputerUseService {
                 cancellable,
                 Math.max(1_000, (this._settings?.computerUseActionTimeoutSeconds ?? 30) * 1_000),
             );
+        } catch (error) {
+            if (isCancelledOperation(error, cancellable))
+                throw error;
+
+            throw remoteComputerUseError(error);
         } finally {
             this._activeCancellables.delete(cancellable);
             this._activeCount = Math.max(0, this._activeCount - 1);
-            if (!this.active) {
-                await this._setRemoteActive(false);
-                this._onActiveChanged(false);
-            }
+            if (!this.active)
+                await this._setActivePresentation(false);
         }
     }
 
@@ -652,17 +694,17 @@ export class ComputerUseService {
         };
     }
 
-    async observe(windowId, options = {}) {
+    async _captureWindowState(windowId, options = {}) {
         if (!this._settings?.computerUseCaptureEnabled)
             throw createUserError('Screen capture is disabled in Settings → Workspace.');
 
         const normalizedWindowId = String(windowId ?? '');
-
+        const method = options.passive ? 'CaptureWindowPassive' : 'CaptureWindow';
         const response = unpackJson(await this._run(
-            'CaptureWindow',
+            method,
             new GLib.Variant('(s)', [normalizedWindowId]),
             options,
-        ), 'CaptureWindow');
+        ), method);
         const encoded = String(response.imageBase64 ?? '');
         const bytes = GLib.base64_decode(encoded);
 
@@ -690,6 +732,39 @@ export class ComputerUseService {
             GLib.ChecksumType.SHA256,
             prepared.bytes,
         );
+        const capture = {
+            sourceWidth: capturedDimensions.width,
+            sourceHeight: capturedDimensions.height,
+            sourceBytes: bytes.length,
+            modelWidth: dimensions.width,
+            modelHeight: dimensions.height,
+            modelBytes: prepared.bytes.length,
+        };
+
+        delete response.imageBase64;
+        return {
+            normalizedWindowId,
+            response,
+            path,
+            dimensions,
+            observationId,
+            fingerprint,
+            visualSignature: visualSignatureFor(path),
+            capture,
+        };
+    }
+
+    _observationFromCapture(captured, options = {}) {
+        const {
+            normalizedWindowId,
+            response,
+            path,
+            dimensions,
+            observationId,
+            fingerprint,
+            visualSignature,
+            capture,
+        } = captured;
         const accessibility = this._accessibility?.observe
             ? this._accessibility.observe(response.window ?? {}, observationId)
             : {
@@ -701,21 +776,13 @@ export class ComputerUseService {
         const modelView = modelGridFor(path);
         const frameWidth = Number(response.window?.width) || dimensions.width;
         const frameHeight = Number(response.window?.height) || dimensions.height;
-        const capture = {
-            sourceWidth: capturedDimensions.width,
-            sourceHeight: capturedDimensions.height,
-            sourceBytes: bytes.length,
-            modelWidth: dimensions.width,
-            modelHeight: dimensions.height,
-            modelBytes: prepared.bytes.length,
-        };
         const observation = {
             windowId: normalizedWindowId,
             observationId,
             rootObservationId: observationId,
             parentObservationId: null,
             fingerprint,
-            visualSignature: visualSignatureFor(path),
+            visualSignature,
             imagePath: path,
             modelImagePath: modelView.modelImagePath,
             grid: modelView.grid,
@@ -748,11 +815,59 @@ export class ComputerUseService {
             this._unchangedCoordinateStepCounts.set(normalizedWindowId, 0);
             this._coordinateRetryBlocked.delete(normalizedWindowId);
         }
-        delete response.imageBase64;
         return {
-            ...response,
-            ...this._observationPayload(observation),
+            observation,
+            payload: {
+                ...response,
+                ...this._observationPayload(observation),
+            },
         };
+    }
+
+    async _verifyLiveCoordinateState(windowId, referencedObservation, options = {}) {
+        const normalizedWindowId = String(windowId ?? '');
+        const referenceRoot = this._observations.get(normalizedWindowId) ?? null;
+        const captured = await this._captureWindowState(normalizedWindowId, {
+            ...options,
+            passive: true,
+        });
+        const visualChange = compareVisualSignatures(
+            referenceRoot?.visualSignature,
+            captured.visualSignature,
+        );
+        const screenChanged = visualChange.changed
+            ?? (referenceRoot?.fingerprint !== captured.fingerprint);
+        const focused = captured.response.window?.focused === true;
+        const matched = screenChanged === false && focused;
+
+        if (matched) {
+            removeFile(captured.path);
+            return {
+                matched: true,
+                screenChanged: false,
+                visualChange,
+                focused: true,
+                referenceObservationId: referencedObservation.observationId,
+                referenceRootObservationId: referencedObservation.rootObservationId,
+                observation: null,
+            };
+        }
+
+        const fresh = this._observationFromCapture(captured);
+        return {
+            matched: false,
+            screenChanged,
+            visualChange,
+            focused,
+            referenceObservationId: referencedObservation.observationId,
+            referenceRootObservationId: referencedObservation.rootObservationId,
+            observation: fresh.payload,
+        };
+    }
+
+    async observe(windowId, options = {}) {
+        const captured = await this._captureWindowState(windowId, options);
+        return this._observationFromCapture(captured, options).payload;
     }
 
     async observeRegion(windowId, observationId, region) {
@@ -856,6 +971,8 @@ export class ComputerUseService {
         if (!this._settings?.computerUseInputEnabled)
             throw createUserError('Computer input control is disabled in Settings → Workspace.');
 
+        validateComputerUseAction(action);
+
         if (WORKSPACE_ACTIONS.has(action?.action)
             && !this._settings?.computerUseWorkspaceSwitchingEnabled) {
             throw createUserError('Workspace switching is disabled in Settings → Workspace.');
@@ -921,12 +1038,20 @@ export class ComputerUseService {
                     },
                 };
             } catch (error) {
-                throw createUserError(error.message ?? String(error));
+                if (isCancelledOperation(error, options.cancellable))
+                    throw error;
+                if (isComputerUseError(error))
+                    throw error;
+
+                throw createUserError(error.message ?? String(error), {
+                    cause: error,
+                    kind: 'operation',
+                });
             }
         }
 
         const request = { ...(action ?? {}) };
-        const needsCoordinates = hasCoordinates(request);
+        const needsCoordinates = hasComputerUseCoordinates(request);
         let coordinateTrace = null;
 
         if (needsCoordinates) {
@@ -972,30 +1097,14 @@ export class ComputerUseService {
 
     async step(actions, options = {}) {
         const actionList = Array.isArray(actions) ? actions : [];
-
-        if (actionList.length === 0)
-            throw createUserError('Computer step requires at least one action.');
-
+        validateComputerUseStepActions(actionList);
         const windowId = String(actionList[0]?.windowId ?? '').trim();
-
-        if (!windowId)
-            throw createUserError('Computer step requires a target window.');
-
-        if (actionList.some(action => String(action?.windowId ?? '').trim() !== windowId))
-            throw createUserError('Every action in a computer step must target the same window.');
-
-        if (unsafePointerInputBatch(actionList)) {
-            throw createUserError(
-                'Do not batch an explicit coordinate click with typing or key presses. Use one coordinate-targeted type action, add replace:true when replacing existing field text, or click and inspect before a later keyboard step.',
-            );
-        }
-
-        const hasCoordinateAction = actionList.some(hasCoordinates);
+        const requestedCoordinateAction = actionList.some(hasComputerUseCoordinates);
         const actionObservation = this._resolveObservation(
             windowId,
             actionList[0]?.observationId,
         );
-        if (hasCoordinateAction
+        if (requestedCoordinateAction
             && this._coordinateRetryBlocked.has(windowId)
             && actionObservation?.view?.type !== 'region') {
             throw createUserError(
@@ -1006,24 +1115,128 @@ export class ComputerUseService {
         const previousObservation = this._observations.get(windowId) ?? null;
         const results = [];
         const startedAt = GLib.get_monotonic_time();
+        let preActionMilliseconds = 0;
         let actionMilliseconds = 0;
+        let failure = null;
+        let preActionVerification = null;
+        let preconditionObservation = null;
 
-        for (const action of actionList) {
+        for (const [index, action] of actionList.entries()) {
+            const coordinateAction = hasComputerUseCoordinates(action);
+
+            if (coordinateAction) {
+                const preActionStartedAt = GLib.get_monotonic_time();
+                const referencedObservation = this._resolveObservation(
+                    windowId,
+                    action.observationId,
+                );
+                let liveState;
+
+                try {
+                    liveState = await this._verifyLiveCoordinateState(
+                        windowId,
+                        referencedObservation,
+                        options,
+                    );
+                } finally {
+                    preActionMilliseconds += elapsedMilliseconds(preActionStartedAt);
+                }
+
+                preActionVerification = {
+                    matched: liveState.matched,
+                    screenChanged: liveState.screenChanged,
+                    visualChange: liveState.visualChange,
+                    focused: liveState.focused,
+                    referenceObservationId: liveState.referenceObservationId,
+                    referenceRootObservationId: liveState.referenceRootObservationId,
+                    freshObservationId: liveState.observation?.observationId ?? null,
+                    actionIndex: index,
+                    action: String(action.action ?? 'unknown'),
+                    actionDispatched: false,
+                };
+
+                if (!liveState.matched) {
+                    const message = liveState.focused
+                        ? 'The target UI changed before input could be dispatched. No action was sent.'
+                        : 'The target window lost focus before input could be dispatched. No action was sent.';
+
+                    failure = {
+                        phase: 'precondition',
+                        actionIndex: index,
+                        action: String(action.action ?? 'unknown'),
+                        kind: 'stale_observation',
+                        message,
+                    };
+                    preconditionObservation = liveState.observation;
+                    break;
+                }
+            }
+
             const actionStartedAt = GLib.get_monotonic_time();
-            results.push(await this.act(action, options));
-            actionMilliseconds += elapsedMilliseconds(actionStartedAt);
+
+            try {
+                if (coordinateAction)
+                    preActionVerification.actionDispatched = true;
+                results.push(await this.act(action, options));
+            } catch (error) {
+                if (isCancelledOperation(error, options.cancellable))
+                    throw error;
+                if (!isComputerUseError(error)) {
+                    logError(
+                        error,
+                        `Unexpected computer-step failure at action ${index + 1}`,
+                    );
+                }
+
+                failure = {
+                    phase: 'action',
+                    actionIndex: index,
+                    action: String(action.action ?? 'unknown'),
+                    kind: error.computerUseErrorKind ?? 'operation',
+                    message: error.userMessage ?? error.message ?? String(error),
+                };
+                break;
+            } finally {
+                actionMilliseconds += elapsedMilliseconds(actionStartedAt);
+            }
         }
 
-        const settleMs = Math.min(
-            MAX_STEP_SETTLE_MS,
-            Math.max(0, Math.round(Number(options.settleMs) || 0)),
-        );
+        const settleMs = failure?.phase === 'precondition'
+            ? 0
+            : Math.min(
+                MAX_STEP_SETTLE_MS,
+                Math.max(0, Math.round(Number(options.settleMs) || 0)),
+            );
         await delay(settleMs);
         const observationStartedAt = GLib.get_monotonic_time();
-        let observation = await this.observe(windowId, {
-            ...options,
-            preserveCoordinateBlock: true,
-        });
+        let observation = preconditionObservation;
+        let observationError = null;
+
+        if (!preconditionObservation) {
+            try {
+                observation = await this.observe(windowId, {
+                    ...options,
+                    preserveCoordinateBlock: true,
+                });
+            } catch (error) {
+                if (isCancelledOperation(error, options.cancellable))
+                    throw error;
+                if (!isComputerUseError(error))
+                    logError(error, 'Unexpected computer-step observation failure');
+
+                observationError = error.userMessage ?? error.message ?? String(error);
+                if (!failure) {
+                    failure = {
+                        phase: 'observation',
+                        actionIndex: null,
+                        action: null,
+                        kind: error.computerUseErrorKind ?? 'operation',
+                        message: observationError,
+                    };
+                }
+            }
+        }
+
         const expectations = Array.isArray(options.expectations) ? options.expectations : [];
         const waitTimeoutMs = Math.min(
             MAX_STEP_SETTLE_MS,
@@ -1032,24 +1245,54 @@ export class ComputerUseService {
         const waitStartedAt = GLib.get_monotonic_time();
         let expectationResult = evaluateComputerUseExpectations(observation, expectations);
 
-        while (expectations.length > 0
+        while (!failure
+            && observation
+            && expectations.length > 0
             && !expectationResult.met
             && elapsedMilliseconds(waitStartedAt) < waitTimeoutMs) {
             const remainingMs = waitTimeoutMs - elapsedMilliseconds(waitStartedAt);
             await delay(Math.min(200, Math.max(0, remainingMs)));
-            observation = await this.observe(windowId, {
-                ...options,
-                preserveCoordinateBlock: true,
-            });
+
+            try {
+                observation = await this.observe(windowId, {
+                    ...options,
+                    preserveCoordinateBlock: true,
+                });
+            } catch (error) {
+                if (isCancelledOperation(error, options.cancellable))
+                    throw error;
+                if (!isComputerUseError(error)) {
+                    logError(
+                        error,
+                        'Unexpected computer-step expectation observation failure',
+                    );
+                }
+
+                observationError = error.userMessage ?? error.message ?? String(error);
+                failure = {
+                    phase: 'observation',
+                    actionIndex: null,
+                    action: null,
+                    kind: error.computerUseErrorKind ?? 'operation',
+                    message: observationError,
+                };
+                break;
+            }
             expectationResult = evaluateComputerUseExpectations(observation, expectations);
         }
+
+        if (failure && observationError && failure.phase === 'action')
+            failure.observationError = observationError;
+
         const observationMilliseconds = elapsedMilliseconds(observationStartedAt);
-        const currentObservation = this._observations.get(windowId) ?? null;
+        const currentObservation = observation
+            ? this._observations.get(windowId) ?? null
+            : null;
         const visualChange = compareVisualSignatures(
             previousObservation?.visualSignature,
             currentObservation?.visualSignature,
         );
-        const screenChanged = previousObservation
+        const screenChanged = observation && previousObservation
             ? visualChange.changed
                 ?? (previousObservation.fingerprint !== currentObservation?.fingerprint)
             : null;
@@ -1075,44 +1318,63 @@ export class ComputerUseService {
         } else if (inputResults.length > 0 && inputExpectations.length > 0) {
             inputVerified = inputExpectations.every(result => result.passed === true);
         }
-        const unchangedCount = screenChanged === false && semanticActionsVerified !== true
-            ? (this._unchangedStepCounts.get(windowId) ?? 0) + 1
-            : 0;
+        let unchangedCount = this._unchangedStepCounts.get(windowId) ?? 0;
         let coordinateMissCount = this._unchangedCoordinateStepCounts.get(windowId) ?? 0;
+        const attemptedActionCount = results.length
+            + (failure?.phase === 'action' ? 1 : 0);
+        const attemptedCoordinateAction = actionList
+            .slice(0, attemptedActionCount)
+            .some(hasComputerUseCoordinates);
 
-        if (hasCoordinateAction) {
-            coordinateMissCount = screenChanged === false && semanticActionsVerified !== true
-                ? coordinateMissCount + 1
+        if (!failure && observation) {
+            unchangedCount = screenChanged === false && semanticActionsVerified !== true
+                ? unchangedCount + 1
                 : 0;
-        } else if (screenChanged === true || semanticActionsVerified === true) {
-            coordinateMissCount = 0;
+
+            if (attemptedCoordinateAction) {
+                coordinateMissCount = screenChanged === false && semanticActionsVerified !== true
+                    ? coordinateMissCount + 1
+                    : 0;
+            } else if (screenChanged === true || semanticActionsVerified === true) {
+                coordinateMissCount = 0;
+            }
+
+            this._unchangedStepCounts.set(windowId, unchangedCount);
+            this._unchangedCoordinateStepCounts.set(windowId, coordinateMissCount);
+            if (coordinateMissCount >= STALLED_STEP_THRESHOLD)
+                this._coordinateRetryBlocked.add(windowId);
+            else if (coordinateMissCount === 0)
+                this._coordinateRetryBlocked.delete(windowId);
         }
 
-        this._unchangedStepCounts.set(windowId, unchangedCount);
-        this._unchangedCoordinateStepCounts.set(windowId, coordinateMissCount);
-        if (coordinateMissCount >= STALLED_STEP_THRESHOLD)
-            this._coordinateRetryBlocked.add(windowId);
-        else if (coordinateMissCount === 0)
-            this._coordinateRetryBlocked.delete(windowId);
         return {
+            failed: Boolean(failure),
+            partial: Boolean(failure && results.length > 0),
+            failedActionIndex: failure?.actionIndex ?? null,
+            completedActionCount: results.length,
+            failure,
             performed: results.map(result => result.performed ?? 'unknown'),
             results,
             observation,
             verification: {
                 screenChanged,
                 visualChange,
-                focused: Boolean(observation.window?.focused),
+                focused: observation ? Boolean(observation.window?.focused) : null,
                 unchangedCount,
                 stalled: unchangedCount >= STALLED_STEP_THRESHOLD,
                 coordinateMissCount,
                 coordinateRetryBlocked: this._coordinateRetryBlocked.has(windowId),
                 semanticActionsVerified,
                 inputVerified,
-                expectationsMet: expectations.length > 0 ? expectationResult.met : null,
+                preAction: preActionVerification,
+                expectationsMet: observation && expectations.length > 0
+                    ? expectationResult.met
+                    : null,
                 expectations: expectationResult.results,
             },
             timing: {
                 totalMs: elapsedMilliseconds(startedAt),
+                preActionMs: preActionMilliseconds,
                 actionMs: actionMilliseconds,
                 settleMs,
                 observationMs: observationMilliseconds,
@@ -1126,15 +1388,13 @@ export class ComputerUseService {
 
         const wasActive = this.active;
         this._activeTurnCancellable = null;
-        if (wasActive && !this.active) {
-            this._setRemoteActive(false);
-            this._onActiveChanged(false);
-        }
+        if (wasActive && !this.active)
+            this._setActivePresentation(false);
         return true;
     }
 
     stop() {
-        const wasActive = this.active;
+        const wasActive = this.active || this._presentedActive;
 
         for (const cancellable of this._activeCancellables) {
             if (!cancellable.is_cancelled())
@@ -1142,6 +1402,9 @@ export class ComputerUseService {
         }
         if (this._activeTurnCancellable && !this._activeTurnCancellable.is_cancelled())
             this._activeTurnCancellable.cancel();
+        this._activeTurnCancellable = null;
+        if (wasActive)
+            this._setActivePresentation(false);
         return wasActive;
     }
 
@@ -1175,6 +1438,7 @@ export class ComputerUseService {
         this._registered = false;
         this._proxy = null;
         this._activeTurnCancellable = null;
+        this._presentedActive = false;
         this._observations.clear();
         this._observationViews.clear();
         this._unchangedStepCounts.clear();

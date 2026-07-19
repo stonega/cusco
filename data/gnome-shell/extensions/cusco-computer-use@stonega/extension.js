@@ -10,6 +10,7 @@ import * as Config from 'resource:///org/gnome/shell/misc/config.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 
+import {EmergencyStopController} from './emergencyStop.js';
 import {clutterKeySuffix} from './keyNames.js';
 import {describeComputerUseOperation, ellipsizeIndicatorStatus} from './indicatorStatus.js';
 import {activateWindowIfNeeded} from './windowFocus.js';
@@ -37,6 +38,10 @@ const INTERFACE_XML = `
       <arg type="s" name="result" direction="out"/>
     </method>
     <method name="CaptureWindow">
+      <arg type="s" name="window_id" direction="in"/>
+      <arg type="s" name="result" direction="out"/>
+    </method>
+    <method name="CaptureWindowPassive">
       <arg type="s" name="window_id" direction="in"/>
       <arg type="s" name="result" direction="out"/>
     </method>
@@ -179,13 +184,15 @@ function namedKeysym(name) {
 }
 
 class ComputerUseBridge {
-    constructor(indicator, statusLabel) {
+    constructor(indicator, statusLabel, setEmergencyStopActive) {
         this._indicator = indicator;
         this._statusLabel = statusLabel;
+        this._setEmergencyStopActive = setEmergencyStopActive;
         this._tracker = Shell.WindowTracker.get_default();
         this._clientSender = '';
         this._clientPid = 0;
         this._generation = 0;
+        this._active = false;
         const seat = Clutter.get_default_backend().get_default_seat();
         this._pointer = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
         this._keyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
@@ -263,7 +270,8 @@ class ComputerUseBridge {
 
     _cancel() {
         this._generation += 1;
-        this._indicator.visible = false;
+        this._active = false;
+        this._setEmergencyStopActive(false);
         this._setStatus(describeComputerUseOperation('idle'));
     }
 
@@ -334,9 +342,10 @@ class ComputerUseBridge {
     SetActiveAsync([active], invocation) {
         try {
             this._requireClient(invocation);
-            if (active && !this._indicator.visible)
+            if (active && !this._active)
                 this._setStatus(describeComputerUseOperation('active'));
-            this._indicator.visible = Boolean(active);
+            this._active = Boolean(active);
+            this._setEmergencyStopActive(this._active);
             if (!active)
                 this._generation += 1;
             invocation.return_value(null);
@@ -369,7 +378,7 @@ class ComputerUseBridge {
         }
     }
 
-    async CaptureWindowAsync([id], invocation) {
+    async _captureWindow(id, invocation, {activate = true} = {}) {
         try {
             this._requireClient(invocation);
             const generation = this._generation;
@@ -377,8 +386,10 @@ class ComputerUseBridge {
             this._setStatus(describeComputerUseOperation('capture', {
                 windowTitle: window.get_title(),
             }));
-            this._activate(window);
-            await delay(180);
+            if (activate) {
+                this._activate(window);
+                await delay(180);
+            }
             if (generation !== this._generation)
                 throw new Error('Computer use was stopped.');
             const rect = window.get_frame_rect();
@@ -397,6 +408,14 @@ class ComputerUseBridge {
         } catch (error) {
             returnError(invocation, error);
         }
+    }
+
+    async CaptureWindowAsync([id], invocation) {
+        await this._captureWindow(id, invocation, {activate: true});
+    }
+
+    async CaptureWindowPassiveAsync([id], invocation) {
+        await this._captureWindow(id, invocation, {activate: false});
     }
 
     _point(window, request, xName = 'x', yName = 'y') {
@@ -668,7 +687,20 @@ class ComputerUseBridge {
 }
 
 export default class CuscoComputerUseExtension extends Extension {
+    _scheduleEmergencyStop() {
+        if (this._escapeStopSourceId)
+            return;
+
+        this._escapeStopSourceId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._escapeStopSourceId = 0;
+            if (this._emergencyStop?.active)
+                this._bridge?.stopAndFocusCusco();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
     enable() {
+        this._escapeStopSourceId = 0;
         this._indicator = new PanelMenu.Button(0, 'Cusco computer use', false);
         this._indicator.add_style_class_name('cusco-computer-use-button');
         const content = new St.BoxLayout({
@@ -690,9 +722,21 @@ export default class CuscoComputerUseExtension extends Extension {
         content.add_child(this._statusLabel);
         this._indicator.add_child(content);
         this._indicator.visible = false;
-        Main.panel.addToStatusArea(this.uuid, this._indicator);
+        Main.panel.addToStatusArea(this.uuid, this._indicator, 0, 'center');
 
-        this._bridge = new ComputerUseBridge(this._indicator, this._statusLabel);
+        this._emergencyStop = new EmergencyStopController(this._indicator, {
+            display: global.display,
+            keyBindingFlags: Meta.KeyBindingFlags.NON_MASKABLE
+                | Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
+            keyBindingNone: Meta.KeyBindingAction.NONE,
+            onStop: () => this._scheduleEmergencyStop(),
+            onError: error => logError(error, 'Cusco computer-use emergency stop'),
+        });
+        this._bridge = new ComputerUseBridge(
+            this._indicator,
+            this._statusLabel,
+            active => this._emergencyStop?.setActive(active),
+        );
         this._bridge._exported = Gio.DBusExportedObject.wrapJSObject(INTERFACE_XML, this._bridge);
         this._bridge._exported.export(Gio.DBus.session, OBJECT_PATH);
         this._indicator.connect('button-press-event', () => {
@@ -715,12 +759,17 @@ export default class CuscoComputerUseExtension extends Extension {
     }
 
     disable() {
+        if (this._escapeStopSourceId)
+            GLib.Source.remove(this._escapeStopSourceId);
+        this._escapeStopSourceId = 0;
         if (this._nameOwnerSignal)
             Gio.DBus.session.signal_unsubscribe(this._nameOwnerSignal);
         this._nameOwnerSignal = 0;
         this._bridge?._exported?.unexport();
+        this._emergencyStop?.destroy();
         this._indicator?.destroy();
         this._bridge = null;
+        this._emergencyStop = null;
         this._indicator = null;
         this._statusLabel = null;
     }

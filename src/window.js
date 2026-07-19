@@ -14,7 +14,7 @@ import { createArtifactWorkspace } from './artifacts/views/workspace.js';
 import {
     buildAgentModeSystemPrompt,
     createAgentToolFailurePrompt,
-    createAgentToolResultPrompt,
+    createAgentToolRuntimeMessages,
     DEFAULT_AGENT_MAX_ITERATIONS,
     isPartialAgentToolCall,
     parseAgentToolCall,
@@ -52,6 +52,7 @@ import {
     listPathExecutables,
 } from './composer/references.js';
 import { createCronCreateTool, CronJobManager } from './cron/manager.js';
+import { isComputerUseError } from './computerUse/protocol.js';
 import { ComputerUseService } from './computerUse/service.js';
 import { createComputerUseTools } from './computerUse/tools.js';
 import { MemoryManager } from './memory/memory.js';
@@ -379,6 +380,14 @@ function isCancellableCancelled(cancellable) {
 
 function wasOperationCancelled(error, cancellable = null) {
     return isCancellableCancelled(cancellable) || isGioError(error, Gio.IOErrorEnum.CANCELLED);
+}
+
+function toolResultStatus(result) {
+    if (result?.cancelled)
+        return 'cancelled';
+    if (result?.failed)
+        return 'failed';
+    return 'completed';
 }
 
 function createLabeledControlRow(label, control) {
@@ -1000,6 +1009,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         keyController.set_propagation_phase(Gtk.PropagationPhase.CAPTURE);
         keyController.connect('key-pressed', (_controller, keyval) => {
+            if (keyval === Gdk.KEY_Escape && this._computerUse.active) {
+                this._stopComputerUseAndReturn();
+                return true;
+            }
+
             if (keyval === Gdk.KEY_Escape && this._activeQuestionSession) {
                 this._finishAgentQuestions(null);
                 return true;
@@ -1701,6 +1715,24 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._syncComposerPlaceholder();
     }
 
+    _syncAgentQuestionProgress() {
+        const session = this._activeQuestionSession;
+
+        if (!session)
+            return;
+
+        const progress = session.questions.length > 1
+            ? `${session.index + 1} of ${session.questions.length}`
+            : '';
+        const escapeAction = this._computerUse.active
+            ? 'Esc to stop computer use'
+            : 'Esc to skip';
+
+        this._agentQuestionProgress.set_label(
+            [progress, escapeAction].filter(Boolean).join(' · '),
+        );
+    }
+
     _showActiveAgentQuestion() {
         const session = this._activeQuestionSession;
         const question = session?.questions?.[session.index];
@@ -1710,9 +1742,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         this._agentQuestionHeader.set_label(question.header || 'Question');
         this._agentQuestionPrompt.set_label(question.question);
-        this._agentQuestionProgress.set_label(session.questions.length > 1
-            ? `${session.index + 1} of ${session.questions.length} · Esc to skip`
-            : 'Esc to skip');
+        this._syncAgentQuestionProgress();
         this._clearBox(this._agentQuestionOptions);
 
         for (const option of question.options) {
@@ -2642,6 +2672,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _syncComputerUseStatus(active) {
         this._syncComposerHint(Boolean(this._activeChatCancellable), Boolean(active));
+        this._syncAgentQuestionProgress();
     }
 
     _stopComputerUseAndReturn() {
@@ -3204,7 +3235,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     ? (command) => this._promptSudoPassword(command, cancellable)
                     : null,
             });
-            const status = result.cancelled ? 'cancelled' : 'completed';
+            const status = toolResultStatus(result);
             this._completeRunningToolMessage(conversationId, runningTool, result, status);
             return status;
         } catch (error) {
@@ -3226,7 +3257,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 error.userMessage ?? `Tool failed: ${error.message}`,
                 'failed',
             );
-            logError(error, 'Failed to run tool request');
+            if (!isComputerUseError(error))
+                logError(error, 'Failed to run tool request');
             return 'failed';
         }
     }
@@ -4041,10 +4073,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
                         runtimeToolCallText,
                         conversation,
                         runtimeMessages,
+                        runtimeNativeToolCall,
                     );
 
-                    if (!request)
+                    if (!request) {
+                        ranAnyTool = true;
                         continue;
+                    }
 
                     clearAssistantStatus();
                     ranAnyTool = await this._runAgentToolRequest(
@@ -4142,7 +4177,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
         }
     }
 
-    _createAgentToolRequest(toolCall, responseText, conversation, runtimeMessages) {
+    _createAgentToolRequest(
+        toolCall,
+        responseText,
+        conversation,
+        runtimeMessages,
+        nativeToolCall = null,
+    ) {
         try {
             return this._tools.createRequest(toolCall.name, toolCall.input);
         } catch (error) {
@@ -4150,10 +4191,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
             const message = createMessage('system', reason);
             this._conversations.appendMessage(conversation.id, message);
             this._addMessageIfActiveConversation(conversation.id, message);
-            runtimeMessages.push(
-                { role: 'assistant', content: responseText },
-                { role: 'user', content: createAgentToolFailurePrompt(toolCall, reason) },
-            );
+            runtimeMessages.push(...createAgentToolRuntimeMessages(
+                toolCall,
+                responseText,
+                reason,
+                { failed: true, nativeToolCall },
+            ));
             return null;
         }
     }
@@ -4167,7 +4210,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
         nativeToolCall = null,
     ) {
         if (isCancellableCancelled(cancellable)) {
-            this._appendAgentToolCancellation(request, responseText, conversation, runtimeMessages);
+            this._appendAgentToolCancellation(
+                request,
+                responseText,
+                conversation,
+                runtimeMessages,
+                nativeToolCall,
+            );
             return false;
         }
 
@@ -4177,19 +4226,41 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         if (permissionDecision.status === 'deny') {
             const reason = `${request.label} is blocked by policy.`;
-            this._appendAgentToolFailure(request, responseText, conversation, runtimeMessages, reason);
-            return false;
+            this._appendAgentToolFailure(
+                request,
+                responseText,
+                conversation,
+                runtimeMessages,
+                reason,
+                'failed',
+                nativeToolCall,
+            );
+            return Boolean(nativeToolCall);
         }
 
         if (permissionDecision.requiresUserApproval && !await this._confirmToolPermission(request, cancellable)) {
             if (isCancellableCancelled(cancellable)) {
-                this._appendAgentToolCancellation(request, responseText, conversation, runtimeMessages);
+                this._appendAgentToolCancellation(
+                    request,
+                    responseText,
+                    conversation,
+                    runtimeMessages,
+                    nativeToolCall,
+                );
                 return false;
             }
 
             const reason = `${request.label} was not run because permission was denied.`;
-            this._appendAgentToolFailure(request, responseText, conversation, runtimeMessages, reason);
-            return false;
+            this._appendAgentToolFailure(
+                request,
+                responseText,
+                conversation,
+                runtimeMessages,
+                reason,
+                'failed',
+                nativeToolCall,
+            );
+            return Boolean(nativeToolCall);
         }
 
         const runningTool = this._appendRunningToolMessage(conversation.id, request, {
@@ -4211,7 +4282,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 conversation.id,
                 runningTool,
                 result,
-                result.cancelled ? 'cancelled' : 'completed',
+                toolResultStatus(result),
                 { agentMode: true },
             );
 
@@ -4235,31 +4306,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 }]
                 : [];
 
-            if (nativeToolCall) {
-                runtimeMessages.push(
-                    {
-                        role: 'assistant',
-                        content: responseText,
-                        toolCalls: [nativeToolCall],
-                    },
-                    {
-                        role: 'tool',
-                        content: transcriptText,
-                        toolCallId: nativeToolCall.id,
-                        toolName: nativeToolCall.name,
-                        attachments,
-                    },
-                );
-            } else {
-                runtimeMessages.push(
-                    { role: 'assistant', content: responseText },
-                    {
-                        role: 'user',
-                        content: createAgentToolResultPrompt(request, transcriptText),
-                        attachments,
-                    },
-                );
-            }
+            runtimeMessages.push(...createAgentToolRuntimeMessages(
+                request,
+                responseText,
+                transcriptText,
+                { attachments, nativeToolCall },
+            ));
             return true;
         } catch (error) {
             if (wasOperationCancelled(error, cancellable)) {
@@ -4272,10 +4324,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     'cancelled',
                     { agentMode: true },
                 );
-                runtimeMessages.push(
-                    { role: 'assistant', content: responseText },
-                    { role: 'user', content: createAgentToolFailurePrompt(request, reason) },
-                );
+                runtimeMessages.push(...createAgentToolRuntimeMessages(
+                    request,
+                    responseText,
+                    reason,
+                    { failed: true, nativeToolCall },
+                ));
                 return false;
             }
 
@@ -4288,12 +4342,17 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 'failed',
                 { agentMode: true },
             );
-            runtimeMessages.push(
-                { role: 'assistant', content: responseText },
-                { role: 'user', content: createAgentToolFailurePrompt(request, reason) },
-            );
-            logError(error, 'Failed to run Agent tool request');
-            return false;
+            runtimeMessages.push(...createAgentToolRuntimeMessages(
+                request,
+                responseText,
+                reason,
+                { failed: true, nativeToolCall },
+            ));
+
+            if (!isComputerUseError(error))
+                logError(error, 'Failed to run Agent tool request');
+
+            return Boolean(nativeToolCall);
         }
     }
 
@@ -4332,12 +4391,34 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._scrollToBottom();
     }
 
-    _appendAgentToolCancellation(request, responseText, conversation, runtimeMessages) {
+    _appendAgentToolCancellation(
+        request,
+        responseText,
+        conversation,
+        runtimeMessages,
+        nativeToolCall = null,
+    ) {
         const reason = `${request.label} was stopped before it finished.`;
-        this._appendAgentToolFailure(request, responseText, conversation, runtimeMessages, reason, 'cancelled');
+        this._appendAgentToolFailure(
+            request,
+            responseText,
+            conversation,
+            runtimeMessages,
+            reason,
+            'cancelled',
+            nativeToolCall,
+        );
     }
 
-    _appendAgentToolFailure(request, responseText, conversation, runtimeMessages, reason, status = 'failed') {
+    _appendAgentToolFailure(
+        request,
+        responseText,
+        conversation,
+        runtimeMessages,
+        reason,
+        status = 'failed',
+        nativeToolCall = null,
+    ) {
         const message = createMessage('system', reason, {
             toolCall: {
                 name: request.name,
@@ -4353,10 +4434,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._conversations.appendMessage(conversation.id, message);
         this._addMessageIfActiveConversation(conversation.id, message);
         this._updateUsageDisplay(conversation);
-        runtimeMessages.push(
-            { role: 'assistant', content: responseText },
-            { role: 'user', content: createAgentToolFailurePrompt(request, reason) },
-        );
+        runtimeMessages.push(...createAgentToolRuntimeMessages(
+            request,
+            responseText,
+            reason,
+            { failed: true, nativeToolCall },
+        ));
     }
 
     _beginActiveTurn(conversationId = null, cancellable = new Gio.Cancellable()) {

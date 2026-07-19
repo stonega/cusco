@@ -1,7 +1,16 @@
+import {
+    COMPUTER_USE_ACTION_NAMES,
+    COMPUTER_USE_WINDOW_ACTION_NAMES,
+    createComputerUseError,
+    hasComputerUseCoordinates,
+    hasUnsafeComputerUsePointerInputBatch,
+    MAX_COMPUTER_USE_STEP_ACTIONS,
+    validateComputerUseAction,
+    validateComputerUseStepActions,
+} from './protocol.js';
+
 function userError(message) {
-    const error = new Error(message);
-    error.userMessage = message;
-    return error;
+    return createComputerUseError(message, { kind: 'input' });
 }
 
 function parseObject(input, label, { allowEmpty = false } = {}) {
@@ -32,28 +41,7 @@ const OBJECT_SCHEMA = {
     properties: {},
 };
 
-const ACTION_NAMES = [
-    'create_workspace',
-    'focus',
-    'maximize',
-    'move_to_workspace',
-    'click_element',
-    'set_text_element',
-    'click',
-    'double_click',
-    'move',
-    'type',
-    'keypress',
-    'scroll',
-    'drag',
-    'switch_workspace',
-];
-const DESKTOP_ACTION_NAMES = new Set(['create_workspace', 'switch_workspace']);
-const WINDOW_ACTION_NAMES = ACTION_NAMES.filter(action => !DESKTOP_ACTION_NAMES.has(action));
-const MAX_STEP_ACTIONS = 8;
 const DEFAULT_STEP_SETTLE_MS = 250;
-const CLICK_ACTION_NAMES = new Set(['click', 'double_click']);
-const FOLLOWUP_INPUT_ACTION_NAMES = new Set(['type', 'keypress']);
 
 function isPrimaryCoordinateClick(action) {
     return action?.action === 'click'
@@ -114,19 +102,7 @@ function atomicTypeFromPointerInput(actions) {
     };
 }
 
-function hasUnsafePointerInputBatch(actions) {
-    const coordinateTypes = actions.filter(action => action?.action === 'type'
-        && (action.x !== undefined || action.y !== undefined));
-
-    if (coordinateTypes.length > 0 && actions.length !== 1)
-        return true;
-
-    const clickIndex = actions.findIndex(action => CLICK_ACTION_NAMES.has(action?.action));
-    return clickIndex >= 0
-        && actions.slice(clickIndex + 1).some(action => FOLLOWUP_INPUT_ACTION_NAMES.has(action?.action));
-}
-
-function actionProperties(actionNames = ACTION_NAMES) {
+function actionProperties(actionNames = COMPUTER_USE_ACTION_NAMES) {
     return {
         action: {
             type: 'string',
@@ -255,7 +231,7 @@ export function createComputerUseTools(service) {
         {
             name: 'computer_step',
             label: 'Act and observe desktop window',
-            description: 'Perform one or more bounded actions on one observed window, wait briefly, and return the updated screenshot plus semantic, coordinate, change, and stall feedback. Prefer accessibility refs when available. Visual coordinates are normalized 0..1000 in the attached full or region grid. A single type action may include x and y to focus a visual text field and type atomically; add replace:true to select all existing field text first. Common click-then-type and click-then-Ctrl+A-then-type calls are normalized to those atomic forms. Other explicit coordinate click and keyboard batches remain unsafe. For small targets or a blocked retry, use computer_observe_region. Coordinate actions that navigate or enter input should include an expect entry when accessibility is available.',
+            description: 'Perform one or more bounded actions on one observed window, wait briefly, and return the updated screenshot plus semantic, coordinate, change, and stall feedback. Before coordinate input, Cusco passively checks that the referenced UI is still visible and focused; stale UI is returned without dispatching the action. Prefer accessibility refs when available. Visual coordinates are normalized 0..1000 in the attached full or region grid. A single type action may include x and y to focus a visual text field and type atomically; add replace:true to select all existing field text first. Common click-then-type and click-then-Ctrl+A-then-type calls are normalized to those atomic forms. Other explicit coordinate click and keyboard batches remain unsafe. For small targets or a blocked retry, use computer_observe_region. Coordinate actions that navigate or enter input should include an expect entry when accessibility is available.',
             inputDescription: 'JSON: {"windowId":"ID","observationId":"latest full or region observation ID","actions":[{"action":"click","x":480,"y":280}],"settleMs":250}. For an inaccessible visual text field, use exactly one atomic action: {"action":"type","x":480,"y":280,"text":"value","replace":true}; omit replace for an empty field. Semantic actions include click_element {ref} and set_text_element {ref,text}; other actions include type, keypress, maximize, move_to_workspace, scroll, and drag. Arbitrary explicit click and keyboard batches are rejected. All visual coordinates are normalized 0..1000. Maximum 8 actions.',
             inputSchema: {
                 type: 'object',
@@ -267,13 +243,13 @@ export function createComputerUseTools(service) {
                     actions: {
                         type: 'array',
                         minItems: 1,
-                        maxItems: MAX_STEP_ACTIONS,
+                        maxItems: MAX_COMPUTER_USE_STEP_ACTIONS,
                         items: {
                             type: 'object',
                             additionalProperties: false,
                             required: ['action'],
                             properties: {
-                                ...actionProperties(WINDOW_ACTION_NAMES),
+                                ...actionProperties(COMPUTER_USE_WINDOW_ACTION_NAMES),
                                 x: { type: 'number', minimum: 0, maximum: 1000 },
                                 y: { type: 'number', minimum: 0, maximum: 1000 },
                                 endX: { type: 'number', minimum: 0, maximum: 1000 },
@@ -317,14 +293,14 @@ export function createComputerUseTools(service) {
 
                 if (!Array.isArray(args.actions)
                     || args.actions.length === 0
-                    || args.actions.length > MAX_STEP_ACTIONS) {
-                    throw userError(`computer_step requires 1 to ${MAX_STEP_ACTIONS} actions.`);
+                    || args.actions.length > MAX_COMPUTER_USE_STEP_ACTIONS) {
+                    throw userError(`computer_step requires 1 to ${MAX_COMPUTER_USE_STEP_ACTIONS} actions.`);
                 }
 
                 const normalizedInput = atomicTypeFromPointerInput(args.actions);
                 const requestedActions = normalizedInput.actions;
 
-                if (hasUnsafePointerInputBatch(requestedActions)) {
+                if (hasUnsafeComputerUsePointerInputBatch(requestedActions)) {
                     throw userError(
                         'computer_step cannot safely batch these coordinate click and keyboard actions. Use one coordinate-targeted type action, add replace:true when replacing existing field text, or click and inspect before a later keyboard step.',
                     );
@@ -341,7 +317,6 @@ export function createComputerUseTools(service) {
                         'A coordinate-targeted type action requires both x and y as finite numbers.',
                     );
                 }
-
                 const invalidReplace = requestedActions.some(action => (
                     action?.replace !== undefined
                     && (typeof action.replace !== 'boolean'
@@ -360,8 +335,14 @@ export function createComputerUseTools(service) {
                     ...action,
                     windowId,
                     observationId: args.observationId,
-                    coordinateSpace: 'normalized_1000',
+                    coordinateSpace: hasComputerUseCoordinates(action)
+                        ? 'normalized_1000'
+                        : action.coordinateSpace,
                 }));
+                validateComputerUseStepActions(actions, {
+                    expectedWindowId: windowId,
+                    unsafeBatchMessage: 'computer_step cannot safely batch these coordinate click and keyboard actions. Use one coordinate-targeted type action, add replace:true when replacing existing field text, or click and inspect before a later keyboard step.',
+                });
                 const expectations = Array.isArray(args.expect) ? args.expect : [];
                 const step = await service.step(actions, {
                     ...options,
@@ -380,13 +361,25 @@ export function createComputerUseTools(service) {
                 stepResult.verification = {
                     ...stepResult.verification,
                     coordinateActionVerified: hasCoordinateTarget
-                        ? expectations.length > 0
-                            && stepResult.verification?.expectationsMet === true
+                        && !stepResult.failed
+                        && expectations.length > 0
+                        ? stepResult.verification?.expectationsMet === true
                         : null,
+                    visualConfirmationRequired: hasCoordinateTarget
+                        && !stepResult.failed
+                        && expectations.length === 0,
                 };
                 let instruction = 'The post-action screenshot is attached. Check it and the verification fields before continuing or claiming success.';
 
-                if (stepResult.verification.stalled) {
+                if (stepResult.failure?.kind === 'stale_observation') {
+                    instruction = 'The visible UI changed or lost focus before coordinate input could be dispatched. No coordinate action was sent. Replan from the attached fresh screenshot and use its new observationId.';
+                } else if (stepResult.failed) {
+                    const completed = Number(stepResult.completedActionCount) || 0;
+                    const failureMessage = stepResult.failure?.message ?? 'The step failed.';
+                    instruction = completed > 0
+                        ? `${completed} earlier action${completed === 1 ? '' : 's'} completed before this step failed: ${failureMessage} Do not retry the entire batch. Inspect the post-action screenshot and continue from the current state.`
+                        : `The step failed before any action was confirmed: ${failureMessage} Correct the failed action before retrying. Inspect the post-action screenshot when attached because the attempted action may still have changed the application.`;
+                } else if (stepResult.verification.stalled) {
                     instruction = stepResult.verification.coordinateRetryBlocked
                         ? 'The screen did not change after repeated coordinate steps, so full-window coordinate retries are blocked. Use computer_observe_region, accessibility, keyboard navigation, or ask the user for help.'
                         : 'The screen did not change after repeated steps. Do not retry the same target or coordinates; use a different strategy.';
@@ -394,7 +387,7 @@ export function createComputerUseTools(service) {
                     && stepResult.verification.expectationsMet !== true) {
                     instruction = 'The post-action screenshot is attached, but the expected target state was not found. Do not treat the action as successful; inspect the screen and change strategy.';
                 } else if (hasCoordinateTarget && expectations.length === 0) {
-                    instruction = 'The post-action screenshot is attached, but this coordinate-targeted action had no semantic expectation and remains visually unverified. Inspect the intended target and the complete entered value before continuing; prefer a named ref or keyboard navigation when available.';
+                    instruction = 'The post-action screenshot is attached and visualConfirmationRequired is true because no semantic expectation was available. This does not mean the action failed. Inspect the new UI state; if the intended result is visibly present, continue from it.';
                 }
                 const transcript = {
                     ...stepResult,
@@ -433,6 +426,7 @@ export function createComputerUseTools(service) {
                 if (!String(args.action ?? '').trim())
                     throw userError('computer_act requires action.');
 
+                validateComputerUseAction(args, { label: 'computer_act' });
                 const result = await service.act(args, options);
                 return { result, output: formatted(result) };
             },

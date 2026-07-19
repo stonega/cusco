@@ -129,10 +129,22 @@ when the window supports maximizing. If workspace creation is unavailable, the
 agent should report that constraint instead of silently launching on an
 occupied workspace.
 
+Before using Google Chrome or Chromium, the agent checks the visible profile
+picker or profile menu when the request did not name a profile. If more than
+one profile is available, Cusco pauses the task and asks which visible profile
+to use. The agent waits for that choice instead of guessing or silently
+switching profiles.
+
 `computer_step` uses normalized coordinates from 0 to 1000. Cusco automatically
 maps them to the real window size, including HiDPI scaling. Each observation
 has an ID, and an action that explicitly references an older observation is
 rejected rather than clicking against a stale layout.
+
+Cusco also checks the live pixels and window focus immediately before sending
+each coordinate action. If a dropdown or popover closed, the page changed, or
+another window took focus after the screenshot was returned, no click is sent.
+The agent receives a fresh screenshot and observation ID and replans from the
+new state.
 
 Grid lines and labels are targeting aids added by Cusco; they are not part of
 the application. Region observations use their own local `0`–`1000` space and
@@ -148,8 +160,25 @@ coordinate-targeted `type` action. For a field that already contains text,
 the replacement in one Shell request. Cusco also normalizes the equivalent
 `click` → `type` and `click` → Ctrl+A → `type` action patterns into these atomic
 forms. The bridge briefly lets field focus settle before typing so the first
-character is not lost. The returned screenshot remains visually unverified
-until the intended field and complete value are inspected.
+character is not lost. When the intended field is visibly nonempty and the page
+shows no error, the agent trusts the exact value it just supplied. It does not
+compare or repair individual characters in long wallet addresses, hashes, IDs,
+or URLs from a screenshot; those fields often scroll horizontally and hide a
+valid prefix. It retries the complete value only after an explicit rejection,
+an empty or wrong field, or a machine-readable mismatch.
+
+If a coordinate action has no accessibility expectation, Cusco reports that
+visual confirmation is required. That is an unknown verification state, not a
+failed action: the agent inspects the returned screenshot and continues when
+the intended state is visibly present.
+
+Cusco checks every action in a multi-action step before sending the first one.
+An invalid later action therefore cannot partially run the batch. An
+application can still close, move, or reject input while a valid step is in
+progress. If that happens after an earlier action completed, Cusco stops the
+step, reports exactly how many actions completed and which one failed, and
+returns a fresh screenshot when possible. The agent continues from that state
+instead of repeating the entire batch.
 
 When an application exposes desktop accessibility information, observations
 also include named elements such as buttons and text fields. The agent can
@@ -182,12 +211,14 @@ so Cusco always keeps the application-independent visual fallback available.
 ## Stop immediately
 
 After the first computer action in an agent turn, a cyan (`#42e6f5`) stop
-control appears in the GNOME top panel. It combines the computer-use icon with
-a short status such as **Viewing Firefox** or **Typing in Terminal**. Long
-window titles end in an ellipsis, and Cusco never shows the text being typed.
-Cusco does not add a second banner; the composer instead shows **Esc to quit**
-in the same cyan. The indicators remain visible until that turn completes or
-is cancelled. Click the Shell control or press Escape in Cusco to:
+control temporarily replaces the normal center item in the GNOME top panel.
+The clock or other displaced center item returns as soon as computer use
+stops. The control combines the computer-use icon with a short status such as
+**Viewing Firefox** or **Typing in Terminal**. Long window titles end in an
+ellipsis, and Cusco never shows the text being typed. Cusco does not add a
+second banner; the composer instead shows **Esc to quit** in the same cyan.
+The indicators remain visible until that turn completes or is cancelled.
+Click the Shell control or press Escape from Cusco or the controlled app to:
 
 - cancel the current computer-use operation;
 - stop the current provider turn;
@@ -197,11 +228,14 @@ is cancelled. Click the Shell control or press Escape in Cusco to:
 Stopping cannot undo a click, submitted form, sent message, or other action
 that another application already received.
 
+While the cyan control is present, GNOME Shell reserves Escape for this stop
+action, so the key does not continue into Chrome or another controlled app.
+
 ## Settings explained
 
 | Setting | Effect |
 |---|---|
-| Enable computer use | Registers the four `computer_*` tools for Agent mode. |
+| Enable computer use | Registers the five `computer_*` tools for Agent mode. |
 | Allow window capture | Allows a selected window to be focused and captured. |
 | Allow pointer and keyboard input | Allows focus, clicks, typing, shortcuts, scrolling, and dragging. |
 | Allow workspace switching | Allows workspace creation, activation, and window moves; input control must also be enabled. |

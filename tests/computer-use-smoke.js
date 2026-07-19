@@ -2,6 +2,7 @@ import Cairo from 'cairo';
 import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 
+import { EmergencyStopController } from '../data/gnome-shell/extensions/cusco-computer-use@stonega/emergencyStop.js';
 import { clutterKeySuffix } from '../data/gnome-shell/extensions/cusco-computer-use@stonega/keyNames.js';
 import {
     describeComputerUseOperation,
@@ -9,6 +10,7 @@ import {
     MAX_INDICATOR_STATUS_CHARACTERS,
 } from '../data/gnome-shell/extensions/cusco-computer-use@stonega/indicatorStatus.js';
 import { activateWindowIfNeeded } from '../data/gnome-shell/extensions/cusco-computer-use@stonega/windowFocus.js';
+import { isComputerUseError } from '../src/computerUse/protocol.js';
 import { ComputerUseService } from '../src/computerUse/service.js';
 import { createComputerUseTools } from '../src/computerUse/tools.js';
 
@@ -16,6 +18,10 @@ const [, indicatorStylesheetBytes] = GLib.file_get_contents(
     'data/gnome-shell/extensions/cusco-computer-use@stonega/stylesheet.css',
 );
 const indicatorStylesheet = new TextDecoder().decode(indicatorStylesheetBytes);
+const [, extensionSourceBytes] = GLib.file_get_contents(
+    'data/gnome-shell/extensions/cusco-computer-use@stonega/extension.js',
+);
+const extensionSource = new TextDecoder().decode(extensionSourceBytes);
 const iconStyle = /\.cusco-computer-use-icon\s*\{([^}]*)\}/.exec(indicatorStylesheet)?.[1] ?? '';
 if (!iconStyle.includes('-st-icon-style: symbolic')
     || !iconStyle.includes('color: #42e6f5')
@@ -24,6 +30,118 @@ if (!iconStyle.includes('-st-icon-style: symbolic')
     )) {
     throw new Error('Computer-use indicator icon did not preserve its cyan symbolic color');
 }
+
+if (!extensionSource.includes("addToStatusArea(this.uuid, this._indicator, 0, 'center')")
+    || !extensionSource.includes('new EmergencyStopController')
+    || !extensionSource.includes('CaptureWindowPassive')
+    || !extensionSource.includes('const PROTOCOL_VERSION = 4')) {
+    throw new Error('Computer-use emergency stop was not installed in the panel center');
+}
+
+class FakePanelActor {
+    constructor(visible = true) {
+        this.visible = visible;
+        this.parent = null;
+    }
+
+    get_visible() {
+        return this.visible;
+    }
+
+    get_parent() {
+        return this.parent;
+    }
+
+    show() {
+        this.visible = true;
+    }
+
+    hide() {
+        this.visible = false;
+    }
+}
+
+const dateMenuActor = new FakePanelActor(true);
+const preHiddenCenterActor = new FakePanelActor(false);
+const indicatorContainer = new FakePanelActor(true);
+const emergencyIndicator = new FakePanelActor(true);
+emergencyIndicator.container = indicatorContainer;
+const centerBox = {
+    get_children() {
+        return [dateMenuActor, indicatorContainer, preHiddenCenterActor];
+    },
+};
+indicatorContainer.parent = centerBox;
+const grabbedAccelerators = [];
+const ungrabbedAccelerators = [];
+const disconnectedSignals = [];
+const emergencyStopErrors = [];
+let acceleratorHandler = null;
+const fakeDisplay = {
+    connect(signal, handler) {
+        if (signal !== 'accelerator-activated')
+            throw new Error(`Unexpected display signal: ${signal}`);
+        acceleratorHandler = handler;
+        return 41;
+    },
+    disconnect(signalId) {
+        disconnectedSignals.push(signalId);
+    },
+    grab_accelerator(accelerator, flags) {
+        grabbedAccelerators.push([accelerator, flags]);
+        return 73;
+    },
+    ungrab_accelerator(actionId) {
+        ungrabbedAccelerators.push(actionId);
+        return true;
+    },
+};
+let emergencyStopCount = 0;
+let emergencyStop = null;
+emergencyStop = new EmergencyStopController(emergencyIndicator, {
+    display: fakeDisplay,
+    keyBindingFlags: 9,
+    keyBindingNone: 0,
+    onStop: () => {
+        emergencyStopCount += 1;
+        emergencyStop.setActive(false);
+    },
+    onError: error => emergencyStopErrors.push(error),
+});
+
+if (emergencyIndicator.visible || indicatorContainer.visible || !dateMenuActor.visible)
+    throw new Error('Inactive emergency stop changed the normal center panel content');
+if (!emergencyStop.setActive(true)
+    || !emergencyStop.active
+    || !emergencyIndicator.visible
+    || !indicatorContainer.visible
+    || dateMenuActor.visible
+    || preHiddenCenterActor.visible
+    || grabbedAccelerators.length !== 1
+    || grabbedAccelerators[0][0] !== 'Escape'
+    || grabbedAccelerators[0][1] !== 9) {
+    throw new Error('Active emergency stop did not replace the center panel and reserve Escape');
+}
+if (emergencyStop.setActive(true))
+    throw new Error('Emergency stop repeated an active presentation transition');
+
+acceleratorHandler(fakeDisplay, 72);
+if (emergencyStopCount !== 0)
+    throw new Error('An unrelated accelerator stopped computer use');
+acceleratorHandler(fakeDisplay, 73);
+if (emergencyStopCount !== 1
+    || emergencyStop.active
+    || emergencyIndicator.visible
+    || indicatorContainer.visible
+    || !dateMenuActor.visible
+    || preHiddenCenterActor.visible
+    || ungrabbedAccelerators.join(',') !== '73') {
+    throw new Error('Escape did not stop computer use and restore the center panel');
+}
+
+emergencyStop.destroy();
+if (disconnectedSignals.join(',') !== '41' || emergencyStopErrors.length !== 0)
+    throw new Error('Emergency-stop resources were not released cleanly');
 
 if (clutterKeySuffix('Return') !== 'Return'
     || clutterKeySuffix('ENTER') !== 'Return'
@@ -116,6 +234,9 @@ const service = {
                 stalled: false,
                 inputVerified: null,
                 coordinateRetryBlocked: false,
+                expectationsMet: options.expectations?.length > 0
+                    ? options.expectations.every(expectation => expectation.name === 'Visible')
+                    : null,
             },
             observation: {
                 window: { id: actions[0].windowId, title: 'Updated test window', focused: true },
@@ -213,8 +334,9 @@ const step = await byName.get('computer_step').run(JSON.stringify({
 }), { marker: 'step' });
 if (step.imagePath !== '/tmp/updated-test-window.png'
     || !step.output.includes('post-action screenshot')
-    || !step.output.includes('remains visually unverified')
-    || step.verification.coordinateActionVerified !== false
+    || !step.output.includes('does not mean the action failed')
+    || step.verification.coordinateActionVerified !== null
+    || step.verification.visualConfirmationRequired !== true
     || step.performed.join(',') !== 'click') {
     throw new Error('Computer step did not return its post-action observation');
 }
@@ -238,8 +360,9 @@ if (atomicTypeCall[1].length !== 1
     || atomicTypeCall[1][0].x !== 455
     || atomicTypeCall[1][0].y !== 275
     || atomicTypeCall[1][0].text !== 'wallet-address'
-    || atomicTypeStep.verification.coordinateActionVerified !== false
-    || !atomicTypeStep.output.includes('visually unverified')) {
+    || atomicTypeStep.verification.coordinateActionVerified !== null
+    || atomicTypeStep.verification.visualConfirmationRequired !== true
+    || !atomicTypeStep.output.includes('does not mean the action failed')) {
     throw new Error('Computer step did not preserve atomic coordinate-targeted typing');
 }
 
@@ -279,9 +402,32 @@ if (normalizedReplaceCall[1].length !== 1
     || normalizedReplaceCall[1][0].replace !== true
     || normalizedReplaceCall[1][0].text !== replacementText
     || normalizedReplaceStep.actionNormalization?.mode !== 'replace'
-    || normalizedReplaceStep.verification.coordinateActionVerified !== false
+    || normalizedReplaceStep.verification.coordinateActionVerified !== null
+    || normalizedReplaceStep.verification.visualConfirmationRequired !== true
     || !normalizedReplaceStep.output.includes('"requestedActions"')) {
     throw new Error('Computer step did not normalize visual field replacement atomically');
+}
+
+const verifiedExpectationStep = await byName.get('computer_step').run(JSON.stringify({
+    windowId: '42',
+    observationId: 'next-observation',
+    actions: [{ action: 'click', x: 500, y: 250 }],
+    expect: [{ role: 'button', name: 'Visible', state: 'present' }],
+    settleMs: 0,
+}));
+const failedExpectationStep = await byName.get('computer_step').run(JSON.stringify({
+    windowId: '42',
+    observationId: 'next-observation',
+    actions: [{ action: 'click', x: 500, y: 250 }],
+    expect: [{ role: 'button', name: 'Missing', state: 'present' }],
+    settleMs: 0,
+}));
+if (verifiedExpectationStep.verification.coordinateActionVerified !== true
+    || verifiedExpectationStep.verification.visualConfirmationRequired !== false
+    || failedExpectationStep.verification.coordinateActionVerified !== false
+    || failedExpectationStep.verification.visualConfirmationRequired !== false
+    || !failedExpectationStep.output.includes('expected target state was not found')) {
+    throw new Error('Computer step did not preserve tri-state coordinate verification');
 }
 
 let unsafeBatchRejected = false;
@@ -339,24 +485,33 @@ try {
 if (!rejectedInvalidInput)
     throw new Error('Invalid computer-use input was not rejected');
 
-if (calls.length !== 11)
+if (calls.length !== 13)
     throw new Error(`Unexpected computer-use call count: ${calls.length}`);
 
-const fixturePath = GLib.build_filenamev([
-    GLib.get_tmp_dir(),
-    `cusco-computer-use-fixture-${GLib.uuid_string_random()}.png`,
-]);
-const fixtureSurface = new Cairo.ImageSurface(Cairo.Format.RGB24, 200, 100);
-const fixtureContext = new Cairo.Context(fixtureSurface);
-fixtureContext.setSourceRGB(0.08, 0.09, 0.1);
-fixtureContext.paint();
-fixtureSurface.writeToPNG(fixturePath);
-fixtureContext.$dispose();
-fixtureSurface.finish();
-const [, png] = GLib.file_get_contents(fixturePath);
-GLib.unlink(fixturePath);
+function solidPng(red, green, blue) {
+    const path = GLib.build_filenamev([
+        GLib.get_tmp_dir(),
+        `cusco-computer-use-fixture-${GLib.uuid_string_random()}.png`,
+    ]);
+    const surface = new Cairo.ImageSurface(Cairo.Format.RGB24, 200, 100);
+    const context = new Cairo.Context(surface);
+    context.setSourceRGB(red, green, blue);
+    context.paint();
+    surface.writeToPNG(path);
+    context.$dispose();
+    surface.finish();
+    const [, bytes] = GLib.file_get_contents(path);
+    GLib.unlink(path);
+    return bytes;
+}
+
+const png = solidPng(0.08, 0.09, 0.1);
+let changedPng = null;
 const proxyCalls = [];
 let staleRegistration = true;
+let performActionFailure = null;
+let passivePng = png;
+let passiveFocused = true;
 const fakeProxy = {
     get_name_owner() {
         return ':fake-shell';
@@ -380,22 +535,31 @@ const fakeProxy = {
         const performedRequest = result.method === 'PerformAction'
             ? JSON.parse(proxyCalls.filter(call => call.method === 'PerformAction').at(-1).parameters[0])
             : null;
+        const actionFailure = performedRequest
+            ? performActionFailure?.(performedRequest)
+            : null;
+
+        if (actionFailure)
+            throw new Error(actionFailure);
+
         const performedCoordinates = performedRequest && Number.isFinite(performedRequest.x)
             ? {
                 window: { x: performedRequest.x, y: performedRequest.y },
                 desktop: { x: performedRequest.x + 10, y: performedRequest.y + 20 },
             }
             : null;
+        const capturePayload = (bytes, focused = true) => ({
+            window: { id: '42', width: 100, height: 60, focused },
+            width: 100,
+            height: 50,
+            mimeType: 'image/png',
+            imageBase64: GLib.base64_encode(bytes),
+        });
         const payloads = {
             Register: { protocolVersion: 4, registered: true },
             ListDesktop: { workspaces: [], windows: [] },
-            CaptureWindow: {
-                window: { id: '42', width: 100, height: 60 },
-                width: 100,
-                height: 50,
-                mimeType: 'image/png',
-                imageBase64: GLib.base64_encode(png),
-            },
+            CaptureWindow: capturePayload(png),
+            CaptureWindowPassive: capturePayload(passivePng, passiveFocused),
             PerformAction: {
                 performed: performedRequest?.action ?? 'click',
                 coordinates: performedCoordinates,
@@ -586,12 +750,19 @@ const atomicInputStep = await computerUse.step([{
 }], { settleMs: 0 });
 performed = proxyCalls.filter(call => call.method === 'PerformAction').at(-1);
 const atomicInputRequest = JSON.parse(performed.parameters[0]);
+const atomicMethodOrder = proxyCalls.map(call => call.method);
+const atomicPassiveIndex = atomicMethodOrder.lastIndexOf('CaptureWindowPassive');
+const atomicPerformIndex = atomicMethodOrder.lastIndexOf('PerformAction');
 if (atomicInputRequest.action !== 'type'
     || atomicInputRequest.x !== 50
     || atomicInputRequest.y !== 30
     || atomicInputRequest.text !== 'wallet-address'
     || atomicInputStep.results.length !== 1
-    || atomicInputStep.verification.inputVerified !== null) {
+    || atomicInputStep.verification.inputVerified !== null
+    || atomicInputStep.verification.preAction?.matched !== true
+    || atomicInputStep.verification.preAction?.actionDispatched !== true
+    || atomicPassiveIndex < 0
+    || atomicPassiveIndex >= atomicPerformIndex) {
     throw new Error(`Atomic coordinate input was not dispatched safely: ${JSON.stringify(atomicInputStep)}`);
 }
 
@@ -647,7 +818,65 @@ try {
 if (!invalidServiceReplaceRejected)
     throw new Error('Computer-use service allowed replacement without a coordinate target');
 
-const recaptured = await computerUse.observe('42');
+let recaptured = await computerUse.observe('42');
+const stalePreconditionActionCount = proxyCalls
+    .filter(call => call.method === 'PerformAction').length;
+changedPng = solidPng(0.65, 0.12, 0.18);
+passivePng = changedPng;
+const staleGuardTools = new Map(
+    createComputerUseTools(computerUse).map(tool => [tool.name, tool]),
+);
+const stalePreconditionStep = await staleGuardTools.get('computer_step').run(JSON.stringify({
+    windowId: '42',
+    observationId: recaptured.observationId,
+    actions: [{ action: 'click', x: 500, y: 500 }],
+    settleMs: 0,
+}));
+if (!stalePreconditionStep.failed
+    || stalePreconditionStep.partial
+    || stalePreconditionStep.failedActionIndex !== 0
+    || stalePreconditionStep.completedActionCount !== 0
+    || stalePreconditionStep.failure?.phase !== 'precondition'
+    || stalePreconditionStep.failure?.kind !== 'stale_observation'
+    || stalePreconditionStep.verification.preAction?.matched !== false
+    || stalePreconditionStep.verification.preAction?.screenChanged !== true
+    || stalePreconditionStep.verification.preAction?.actionDispatched !== false
+    || stalePreconditionStep.verification.coordinateActionVerified !== null
+    || stalePreconditionStep.verification.visualConfirmationRequired !== false
+    || !stalePreconditionStep.output.includes('No coordinate action was sent')
+    || stalePreconditionStep.observationId === recaptured.observationId
+    || !GLib.file_test(stalePreconditionStep.imagePath, GLib.FileTest.EXISTS)
+    || proxyCalls.filter(call => call.method === 'PerformAction').length
+        !== stalePreconditionActionCount) {
+    throw new Error(
+        `Changed UI was not rejected before dispatch: ${JSON.stringify(stalePreconditionStep)}`,
+    );
+}
+
+passivePng = png;
+recaptured = await computerUse.observe('42');
+const lostFocusActionCount = proxyCalls.filter(call => call.method === 'PerformAction').length;
+passiveFocused = false;
+const lostFocusStep = await computerUse.step([{
+    action: 'click',
+    windowId: '42',
+    observationId: recaptured.observationId,
+    coordinateSpace: 'normalized_1000',
+    x: 500,
+    y: 500,
+}], { settleMs: 0 });
+if (!lostFocusStep.failed
+    || lostFocusStep.failure?.kind !== 'stale_observation'
+    || lostFocusStep.verification.preAction?.matched !== false
+    || lostFocusStep.verification.preAction?.screenChanged !== false
+    || lostFocusStep.verification.preAction?.focused !== false
+    || lostFocusStep.verification.preAction?.actionDispatched !== false
+    || proxyCalls.filter(call => call.method === 'PerformAction').length
+        !== lostFocusActionCount) {
+    throw new Error(`Lost focus did not block coordinate dispatch: ${JSON.stringify(lostFocusStep)}`);
+}
+passiveFocused = true;
+recaptured = await computerUse.observe('42');
 let staleRegionRejected = false;
 try {
     await computerUse.act({
@@ -729,6 +958,93 @@ try {
 }
 if (!unsafeServiceBatchRejected)
     throw new Error('Computer-use service allowed an unverified click and input batch');
+
+const preflightActionCount = proxyCalls.filter(call => call.method === 'PerformAction').length;
+let invalidKeyRejectedBeforeDispatch = false;
+try {
+    await computerUse.step([
+        {
+            action: 'keypress',
+            windowId: '42',
+            observationId: recaptured.observationId,
+            keys: ['TAB'],
+        },
+        {
+            action: 'keypress',
+            windowId: '42',
+            observationId: recaptured.observationId,
+            keys: ['NOT_A_REAL_KEY'],
+        },
+    ], { settleMs: 0 });
+} catch (error) {
+    invalidKeyRejectedBeforeDispatch = isComputerUseError(error)
+        && error.computerUseErrorKind === 'input'
+        && error.userMessage?.includes('does not support key');
+}
+if (!invalidKeyRejectedBeforeDispatch
+    || proxyCalls.filter(call => call.method === 'PerformAction').length !== preflightActionCount) {
+    throw new Error('Computer-use step did not preflight every action before dispatch');
+}
+
+let normalizedRemoteError = false;
+performActionFailure = request => request.keys?.includes('F13')
+    ? 'GDBus.Error:io.github.stonega.Cusco.ComputerUse.Error: Synthetic Shell rejection.'
+    : null;
+try {
+    await computerUse.act({
+        action: 'keypress',
+        windowId: '42',
+        observationId: recaptured.observationId,
+        keys: ['F13'],
+    });
+} catch (error) {
+    normalizedRemoteError = isComputerUseError(error)
+        && error.computerUseErrorKind === 'remote'
+        && error.userMessage === 'Synthetic Shell rejection.'
+        && !error.userMessage.includes('GDBus.Error');
+} finally {
+    performActionFailure = null;
+}
+if (!normalizedRemoteError)
+    throw new Error('Raw GNOME Shell errors were not normalized for computer-use callers');
+
+const realTools = new Map(
+    createComputerUseTools(computerUse).map(tool => [tool.name, tool]),
+);
+const partialActionStart = proxyCalls.filter(call => call.method === 'PerformAction').length;
+let partialToolResult;
+performActionFailure = request => request.keys?.includes('ENTER')
+    ? 'GDBus.Error:io.github.stonega.Cusco.ComputerUse.Error: Synthetic second action failure.'
+    : null;
+try {
+    partialToolResult = await realTools.get('computer_step').run(JSON.stringify({
+        windowId: '42',
+        observationId: recaptured.observationId,
+        actions: [
+            { action: 'keypress', keys: ['TAB'] },
+            { action: 'keypress', keys: ['ENTER'] },
+        ],
+        settleMs: 0,
+    }));
+} finally {
+    performActionFailure = null;
+}
+const partialActionCount = proxyCalls.filter(call => call.method === 'PerformAction').length
+    - partialActionStart;
+if (!partialToolResult.failed
+    || !partialToolResult.partial
+    || partialToolResult.failedActionIndex !== 1
+    || partialToolResult.completedActionCount !== 1
+    || partialToolResult.performed.join(',') !== 'keypress'
+    || partialToolResult.failure?.message !== 'Synthetic second action failure.'
+    || partialActionCount !== 2
+    || !GLib.file_test(partialToolResult.imagePath, GLib.FileTest.EXISTS)
+    || !partialToolResult.output.includes('Do not retry the entire batch')
+    || partialToolResult.output.includes('GDBus.Error')) {
+    throw new Error(
+        `Computer-use partial failure was not recoverable: ${JSON.stringify(partialToolResult)}`,
+    );
+}
 
 function assertBalancedStateTransitions(states, label) {
     if (states.length % 2 !== 0)
@@ -824,6 +1140,24 @@ if (!computerUse.finishTurn(turnCancellable) || computerUse.active)
 if (activeStates.length !== balancedActiveStateCount + 2 || activeStates.at(-1) !== false)
     throw new Error(`Computer-use turn state did not balance: ${activeStates.join(',')}`);
 assertBalancedStateTransitions(activeStates, 'Computer-use turn state');
+
+const stoppedTurnStart = activeStates.length;
+const stoppedTurnCancellable = new Gio.Cancellable();
+await computerUse.act(
+    { action: 'keypress', windowId: '42', keys: ['Escape'] },
+    { cancellable: stoppedTurnCancellable },
+);
+if (!computerUse.active || activeStates.length !== stoppedTurnStart + 1)
+    throw new Error('Stopped-turn fixture did not become active');
+if (!computerUse.stop()
+    || computerUse.active
+    || !stoppedTurnCancellable.is_cancelled()
+    || activeStates.length !== stoppedTurnStart + 2
+    || activeStates.at(-1) !== false) {
+    throw new Error('Computer-use stop did not clear the active presentation immediately');
+}
+assertBalancedStateTransitions(activeStates, 'Computer-use stopped turn state');
+
 const remoteActiveStates = proxyCalls
     .filter(call => call.method === 'SetActive')
     .map(call => String(call.parameters[0]));

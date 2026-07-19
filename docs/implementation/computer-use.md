@@ -9,7 +9,7 @@ put together. For installation and everyday use, start with the
 - Support GNOME Shell on Wayland directly.
 - Avoid a cross-platform backend-selection layer.
 - Keep capture, input, and workspace switching separately user-controlled.
-- Give the user a visible Shell emergency stop and a compact Escape hint in Cusco.
+- Give the user a centered Shell emergency stop and a desktop-wide Escape path.
 - Limit privileged Shell methods to the running Cusco process.
 - Keep screenshots private and short-lived.
 
@@ -72,6 +72,7 @@ an `UnknownMethod` or “Object does not exist” error even while
 | `SetActive(active)` | Shows or hides the Shell emergency-stop control. |
 | `ListDesktop()` | Returns screens, workspaces, and window metadata as JSON. |
 | `CaptureWindow(id)` | Focuses a window and returns a PNG as base64 JSON data. |
+| `CaptureWindowPassive(id)` | Captures a window without activating it for a just-in-time stale-state check. |
 | `PerformAction(json)` | Performs one validated input or workspace action. |
 | `StopRequested` | Tells Cusco that the Shell stop control was clicked. |
 
@@ -171,6 +172,19 @@ actions for one window, using normalized coordinates from `0` to `1000`, then
 waits briefly and captures the resulting window in the same tool call. The
 result reports whether the screenshot changed meaningfully, whether the target
 window is focused, and whether repeated unchanged steps indicate a stall.
+Before dispatch, the app validates every action, key name, coordinate, target
+window, and observation ID in the batch. Invalid later actions therefore
+cannot leave an otherwise valid prefix partially executed.
+
+Immediately before each coordinate-bearing action, the service calls
+`CaptureWindowPassive`. That capture does not activate the target or wait for
+focus to settle. Cusco compares it with the clean root image behind the
+referenced full or region observation and also requires the target window to
+still be focused. If a menu closed, a popover changed, the page moved, or focus
+left the window, the step returns `stale_observation`, a fresh screenshot and
+observation ID, and `preAction.actionDispatched: false`. `PerformAction` is not
+called, so an old point cannot land on the control that replaced the intended
+target.
 
 An arbitrary explicit coordinate click cannot be batched with later typing or
 key presses. One coordinate-bearing `type` action is allowed when it is the
@@ -184,6 +198,15 @@ text field when AT-SPI is unavailable. After two meaningfully unchanged
 coordinate steps, full-window coordinate targeting is blocked. A region
 observation, semantic action, keyboard strategy, fresh explicit observation,
 or user help provides a deliberate recovery path.
+
+The passive stale-state check narrows but cannot eliminate runtime races after
+the check, such as a window closing or the Shell rejecting an action after
+earlier actions completed. In that case the step
+stops immediately, records the failed action index and confirmed completed
+count, and attempts a fresh post-action observation. The tool response tells
+the Agent to continue from that screenshot instead of replaying the whole
+batch. A screenshot failure is also represented in the structured failure;
+raw D-Bus error prefixes are removed from user and model-facing messages.
 
 Change detection compares downscaled RGB signatures with a small changed-pixel
 threshold. Pointer movement, a blinking caret, and compression noise therefore
@@ -200,7 +223,18 @@ expire on the next observation.
 For search results, the Agent prompt prefers keyboard selection over estimated
 row coordinates. Coordinate clicks that choose a named item or navigate to a
 new view should include an expectation for the intended destination; without
-one, the tool reports the coordinate action as unverified.
+one, the tool reports `coordinateActionVerified: null` and
+`visualConfirmationRequired: true`. This means semantic verification was not
+available; it is not an action failure. A real failure is represented by the
+step's `failed` field and structured `failure` object.
+
+For deterministic typing or pasting, the Agent treats its known payload as
+intact when the intended field becomes visibly nonempty and the application
+shows no error. It does not use screenshot text recognition to compare or
+repair individual characters in opaque values such as wallet addresses,
+hashes, IDs, and URLs, because horizontally scrolled inputs can hide a valid
+prefix. The complete value is retried only after positive failure evidence or
+a machine-readable value mismatch.
 
 Before attaching a step or observation image to the provider, Cusco removes
 older computer-use image attachments from the live Agent runtime. Textual tool
@@ -261,16 +295,22 @@ timeout applies to each app-to-Shell operation and is clamped to 5–120 seconds
 `ComputerUseService` tracks every active D-Bus call with a `Gio.Cancellable`.
 The first computer-use operation in an agent turn shows the Shell stop control
 with its cyan icon and a short description of the current operation, such as
-**Viewing Firefox** or **Typing in Terminal**. Window titles are collapsed to
-one line and the complete status is limited to 36 characters with an ending
-ellipsis. Typed content is never included. The control and the composer's cyan
-**Esc to quit** hint remain visible between observe/act calls while the agent
-decides its next step, then hide when the turn completes or is cancelled.
+**Viewing Firefox** or **Typing in Terminal**. It occupies the panel center and
+temporarily hides the existing center actors while preserving each actor's
+previous visibility. Those actors are restored when the control hides. Window
+titles are collapsed to one line and the complete status is limited to 36
+characters with an ending ellipsis. Typed content is never included. The
+control and the composer's cyan **Esc to quit** hint remain visible between
+observe/act calls while the agent decides its next step, then hide when the
+turn completes or is cancelled.
 
-Pressing Escape in Cusco cancels the current provider turn and its active D-Bus
-work. Clicking the Shell control also invalidates long-running Shell work,
-emits `StopRequested`, activates Cusco's window (including its workspace), and
-triggers the same app-side stop path.
+While active, the extension temporarily grabs the bare Escape accelerator from
+Mutter, so Escape works even while Chrome or another client window has focus.
+It releases the accelerator immediately on stop. Escape and a click on the
+Shell control both invalidate long-running Shell work, emit `StopRequested`,
+activate Cusco's window (including its workspace), and trigger the same
+app-side stop path. Cusco also prioritizes this stop path over question and
+composer Escape handling when its own window has focus.
 
 Cancellation is cooperative. Typing and dragging check a generation counter
 during their loops, and capture checks it after its focus delay. An input event
@@ -309,7 +349,11 @@ installation/enablement hint in the settings status row.
 - Capability disabled: capture, input, or workspace switching is rejected
   independently.
 - Missing observation: coordinate actions are rejected.
+- Invalid step action: the entire batch is rejected before input is dispatched.
 - Missing window/workspace: the Shell method returns a user-visible error.
+- Runtime failure after an earlier step action: the completed prefix, failed
+  index, normalized reason, and best-effort post-action screenshot are returned
+  so the Agent can recover without replaying completed input.
 - Shell extension disappears: active work is cancelled and registration is
   cleared.
 - Operation timeout or provider cancellation: the active `Gio.Cancellable`

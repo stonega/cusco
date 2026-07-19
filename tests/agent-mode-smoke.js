@@ -2,6 +2,7 @@ import {
     buildAgentModeSystemPrompt,
     createAgentToolFailurePrompt,
     createAgentToolResultPrompt,
+    createAgentToolRuntimeMessages,
     DEFAULT_AGENT_MAX_ITERATIONS,
     formatAgentToolCall,
     isPartialAgentToolCall,
@@ -65,12 +66,21 @@ if (!nativeToolPrompt.includes('native function-calling interface')
     || !nativeToolPrompt.includes('prefer keypress Down followed by Return')
     || !nativeToolPrompt.includes('include an expect entry')
     || !nativeToolPrompt.includes('coordinate click without a matching expectation as unverified')
+    || !nativeToolPrompt.includes('stale_observation')
+    || !nativeToolPrompt.includes('no coordinate action was dispatched')
+    || !nativeToolPrompt.includes('Menus, dropdowns, popovers')
     || !nativeToolPrompt.includes('call computer_observe_region')
     || !nativeToolPrompt.includes('one computer_step type action containing x, y, and text')
     || !nativeToolPrompt.includes('Add replace:true when the field already contains text')
     || !nativeToolPrompt.includes('click and inspect before later keyboard input')
-    || !nativeToolPrompt.includes('when inputVerified is null')
     || !nativeToolPrompt.includes('complete value')
+    || !nativeToolPrompt.includes('multiple Chrome or Chromium profiles')
+    || !nativeToolPrompt.includes('call ask_user with their visible names')
+    || !nativeToolPrompt.includes('known payload was deterministically typed or pasted')
+    || !nativeToolPrompt.includes('Long opaque values')
+    || !nativeToolPrompt.includes('Never repair individual characters')
+    || !nativeToolPrompt.includes('visualConfirmationRequired true')
+    || !nativeToolPrompt.includes('semantic verification was unavailable, not that the action failed')
     || !nativeToolPrompt.includes('text lands in browser chrome')
     || !nativeToolPrompt.includes('synthetic coordinate grid')
     || !nativeToolPrompt.includes('whether the task succeeded or failed')
@@ -184,5 +194,44 @@ if (!createAgentToolResultPrompt(calcRequest, 'Calculator result').includes('Too
 
 if (!createAgentToolFailurePrompt(calcRequest, 'nope').includes('could not be run'))
     throw new Error('Agent tool failure prompt was not formatted');
+
+const legacyResultMessages = createAgentToolRuntimeMessages(
+    calcRequest,
+    '',
+    '20',
+    { attachments: [{ kind: 'file', path: '/tmp/result.txt' }] },
+);
+
+if (legacyResultMessages.length !== 2
+    || legacyResultMessages[0].role !== 'assistant'
+    || legacyResultMessages[1].role !== 'user'
+    || !legacyResultMessages[1].content.includes('Tool result for calc')
+    || legacyResultMessages[1].attachments[0].path !== '/tmp/result.txt') {
+    throw new Error('Legacy Agent tool results were not preserved');
+}
+
+const nativeFailureCall = {
+    id: 'call-failed-calc',
+    name: 'calc',
+    input: 'not-an-expression',
+};
+const nativeFailureMessages = createAgentToolRuntimeMessages(
+    calcRequest,
+    '',
+    'Calculator input was invalid.',
+    { failed: true, nativeToolCall: nativeFailureCall },
+);
+
+if (nativeFailureMessages.length !== 2
+    || nativeFailureMessages[0].role !== 'assistant'
+    || nativeFailureMessages[0].toolCalls[0] !== nativeFailureCall
+    || nativeFailureMessages[1].role !== 'tool'
+    || nativeFailureMessages[1].toolCallId !== nativeFailureCall.id
+    || nativeFailureMessages[1].toolName !== nativeFailureCall.name
+    || !nativeFailureMessages[1].content.includes('could not be run')
+    || !nativeFailureMessages[1].content.includes('correct the request and retry')
+    || !nativeFailureMessages[1].content.includes('Calculator input was invalid.')) {
+    throw new Error('Native Agent tool failures were not returned as tool results');
+}
 
 print('Cusco Agent Mode smoke passed');

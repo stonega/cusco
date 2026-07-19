@@ -50,16 +50,21 @@ export function buildAgentModeSystemPrompt(tools, {
     const computerUseInstruction = hasComputerStep
         ? [
             'For computer use, prefer computer_step after the initial observation. Attached computer screenshots may contain a synthetic coordinate grid that is not part of the application. Coordinates are normalized from 0 to 1000 and computer_step returns the post-action screenshot.',
+            'Before coordinate input, computer_step passively verifies that the referenced UI is still visible and focused. If it reports a stale_observation, no coordinate action was dispatched: replan from the attached fresh screenshot and its new observationId.',
+            hasAskUser
+                ? 'Before using Google Chrome or Chromium, inspect its visible profile picker or profile menu when the user has not already named a profile. If multiple Chrome or Chromium profiles are available, call ask_user with their visible names and wait for the choice. Never guess, silently select, or switch a Chrome profile.'
+                : '',
             hasComputerAct
                 ? 'Whenever you open or launch an app, first call computer_act with create_workspace and remember the returned workspaceIndex. Launch the app while that new workspace is active; global type and keypress actions may omit windowId. Then call computer_list, move the new window to that workspace with move_to_workspace if necessary, and maximize it when canMaximize is true. If a new workspace cannot be created, do not silently launch the app in an occupied workspace.'
                 : '',
             hasComputerRegion
                 ? 'For a small visual target, an uncertain point, or a blocked coordinate retry, call computer_observe_region and then use the returned region observation ID. Region coordinates are local; do not manually add its offset.'
                 : '',
-            'Prefer deterministic keyboard actions and semantic set_text_element over pixel clicks. When accessibility is unavailable, fill a visual text field with one computer_step type action containing x, y, and text so focus and typing are dispatched atomically. Add replace:true when the field already contains text; Cusco will focus it, select all, and type within one Shell request. Do not use other explicit click and keyboard batches; click and inspect before later keyboard input. Never assume typing or clicking succeeded: inspect verification and the returned screenshot; when inputVerified is null, visually confirm the intended field contains the complete value before continuing.',
+            'Menus, dropdowns, popovers, and disclosure controls are stateful: click the trigger once, inspect the returned screenshot, then select the visible option from that new state. Do not reopen the trigger or switch to developer tools while the intended option is visible.',
+            'Prefer deterministic keyboard actions and semantic set_text_element over pixel clicks. When accessibility is unavailable, fill a visual text field with one computer_step type action containing x, y, and text so focus and typing are dispatched atomically. Add replace:true when the field already contains text; Cusco will focus it, select all, and type within one Shell request. Do not use other explicit click and keyboard batches; click and inspect before later keyboard input. Inspect verification and the returned screenshot after input. When a known payload was deterministically typed or pasted into the intended field, the field is visibly nonempty, and the application shows no error, continue without visually comparing every character. Long opaque values such as wallet addresses, IDs, hashes, and URLs may horizontally scroll and hide their prefix. Never repair individual characters based only on visual comparison; retry the complete value only if the field is empty, the wrong control changed, the application rejects it, or machine-readable readback mismatches.',
             'When a focused search field shows a result list and the intended item is first, prefer keypress Down followed by Return instead of estimating a row coordinate.',
             'When a coordinate click selects a named item or navigates to another view, include an expect entry for the intended post-action label or state. Treat a coordinate click without a matching expectation as unverified.',
-            'If a step reports stalled, coordinateActionVerified is false, or text lands in browser chrome instead of the intended field, do not retry the same target or coordinates. Change strategy, using accessibility, atomic coordinate typing, or Tab navigation. Do not claim completion until the requested final state is visibly verified.',
+            'coordinateActionVerified null with visualConfirmationRequired true means semantic verification was unavailable, not that the action failed. Continue when the returned screenshot visibly shows the intended state. If a step reports stalled, an explicit expectation fails, preAction.matched is false, text lands in browser chrome instead of the intended field, or the screenshot shows a miss, do not retry the same target or coordinates. Change strategy, using the fresh observation, accessibility, atomic coordinate typing, or Tab navigation. Do not claim completion until the requested final state is visibly verified.',
             hasComputerAct
                 ? 'Before giving the user your final response, whether the task succeeded or failed, always make your last computer-use action focus the Cusco app. Use computer_list to find the Cusco window first if needed, then call computer_act with focus for that window.'
                 : '',
@@ -169,8 +174,54 @@ export function createAgentToolFailurePrompt(request, reason) {
         `Tool ${request?.name ?? 'unknown'} could not be run.`,
         `Reason: ${reason}`,
         '',
-        'Continue with the available information or ask the user for a narrower request.',
+        'If the reason identifies correctable tool input, correct the request and retry. Do not retry an unchanged request or a permission denial. Otherwise continue with the available information or ask the user for a narrower request.',
     ].join('\n');
+}
+
+export function createAgentToolRuntimeMessages(
+    request,
+    responseText,
+    transcriptText,
+    {
+        attachments = [],
+        failed = false,
+        nativeToolCall = null,
+    } = {},
+) {
+    const assistantMessage = {
+        role: 'assistant',
+        content: String(responseText ?? ''),
+    };
+    const resultText = String(transcriptText ?? '');
+
+    if (nativeToolCall) {
+        return [
+            {
+                ...assistantMessage,
+                toolCalls: [nativeToolCall],
+            },
+            {
+                role: 'tool',
+                content: failed
+                    ? createAgentToolFailurePrompt(request, resultText)
+                    : resultText,
+                toolCallId: nativeToolCall.id,
+                toolName: nativeToolCall.name ?? request?.name,
+                attachments,
+            },
+        ];
+    }
+
+    return [
+        assistantMessage,
+        {
+            role: 'user',
+            content: failed
+                ? createAgentToolFailurePrompt(request, resultText)
+                : createAgentToolResultPrompt(request, resultText),
+            attachments,
+        },
+    ];
 }
 
 export function isPartialAgentToolCall(text) {

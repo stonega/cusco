@@ -4,5 +4,5 @@
   "description": "GNOME Wayland bridge and emergency stop indicator for Cusco.",
   "shell-version": ["45", "46", "47", "48", "49", "50"],
   "url": "https://github.com/stonega/cusco",
-  "version": 5
+  "version": 6
 }

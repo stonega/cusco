@@ -39,6 +39,7 @@ fi
 
 if [ ! -f "$source_dir/metadata.json" ] \
   || [ ! -f "$source_dir/extension.js" ] \
+  || [ ! -f "$source_dir/emergencyStop.js" ] \
   || [ ! -f "$source_dir/keyNames.js" ] \
   || [ ! -f "$source_dir/indicatorStatus.js" ] \
   || [ ! -f "$source_dir/windowFocus.js" ] \
@@ -53,6 +54,7 @@ mkdir -p "$output_dir"
   gnome-extensions pack \
     --force \
     --out-dir="$output_dir" \
+    --extra-source=emergencyStop.js \
     --extra-source=keyNames.js \
     --extra-source=indicatorStatus.js \
     --extra-source=windowFocus.js \
