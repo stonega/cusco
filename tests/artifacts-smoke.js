@@ -1,5 +1,6 @@
 import GLib from 'gi://GLib?version=2.0';
 
+import { ArtifactManager } from '../src/artifacts/manager.js';
 import {
     artifactKindForCodeBlock,
     createImageArtifactFromPath,
@@ -7,6 +8,7 @@ import {
     imageArtifactForToolCall,
     normalizeArtifacts,
 } from '../src/chat/artifacts.js';
+import { ArtifactFileStore } from '../src/storage/artifactStore.js';
 
 function assertEqual(actual, expected, label) {
     if (actual !== expected)
@@ -81,5 +83,27 @@ const generatedImage = imageArtifactForToolCall({
     mimeType: 'image/png',
 });
 assertEqual(generatedImage.title, 'Generated image', 'Generated image title');
+
+const managedArtifacts = new ArtifactManager({
+    store: new ArtifactFileStore({
+        root: GLib.build_filenamev([tempRoot, 'managed']),
+    }),
+});
+const managedReferences = extractArtifactsFromMarkdown(markdown, {
+    artifactManager: managedArtifacts,
+    originConversationId: 'conversation-1',
+    generatedBy: 'assistant',
+});
+assertEqual(managedReferences.length, 2, 'Managed artifact extraction count');
+assertEqual(managedReferences[1].kind, 'html', 'Managed HTML reference kind');
+assertEqual(managedReferences[1].sourceBlockIndex, 2, 'Managed HTML source block index');
+const resolvedHtml = managedArtifacts.resolveReference(managedReferences[1]);
+assertEqual(resolvedHtml.artifact.originConversationId, 'conversation-1', 'Managed artifact conversation');
+assertEqual(resolvedHtml.artifact.capabilities[0], 'scripts', 'Managed HTML scripts capability');
+assertEqual(
+    managedArtifacts.readText(resolvedHtml.artifact.id, resolvedHtml.revision.id),
+    '<!doctype html><html><body><h1>Cusco</h1></body></html>',
+    'Managed HTML source',
+);
 
 print('Cusco artifacts smoke passed');

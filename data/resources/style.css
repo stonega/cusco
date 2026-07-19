@@ -473,6 +473,25 @@
     margin: 8px;
 }
 
+.cusco-artifact-workspace {
+    background-color: @window_bg_color;
+    border-left: 1px solid alpha(@window_fg_color, 0.12);
+}
+
+.cusco-artifact-workspace > .toolbar {
+    min-height: 34px;
+    border-bottom: 1px solid alpha(@window_fg_color, 0.08);
+}
+
+.cusco-artifact-source-view,
+.cusco-artifact-source-view text {
+    background-color: shade(@window_bg_color, 0.98);
+}
+
+.cusco-high-contrast .cusco-artifact-workspace {
+    border-left: 1px solid @window_fg_color;
+}
+
 .cusco-message-image-attachments {
     margin-bottom: 2px;
 }

@@ -32,6 +32,11 @@ assert(
 
 assert(findComposerTrigger('mail@example.com') === null, 'Email addresses must not open file search');
 assert(findComposerTrigger('word#git') === null, 'Triggers must begin a new token');
+const artifactTrigger = findComposerTrigger('Compare @artifact:Sales', 23);
+assert(
+    artifactTrigger?.trigger === '@' && artifactTrigger.query === 'artifact:Sales',
+    'Artifact reference trigger was not detected',
+);
 
 const filtered = filterComposerSuggestions([
     { title: 'deploy', subtitle: 'Deploy the app' },

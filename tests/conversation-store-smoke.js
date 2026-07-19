@@ -30,6 +30,15 @@ const assistantMessage = createMessage('assistant', 'Stored answer', {
         sourceBlockIndex: 0,
         sourceLanguage: 'svg',
         generatedBy: 'assistant',
+    }, {
+        artifactId: 'managed-artifact-1',
+        revisionId: 'managed-revision-1',
+        kind: 'html',
+        title: 'Managed site',
+        mimeType: 'text/html',
+        format: 'html',
+        preferredPresentation: 'panel',
+        sourceBlockIndex: -1,
     }],
     reasoning: {
         content: 'Stored reasoning summary',
@@ -115,6 +124,11 @@ if (reloadedChat.messages[1].reasoning?.content !== 'Stored reasoning summary')
 
 if (reloadedChat.messages[1].artifacts[0]?.kind !== 'svg')
     throw new Error('Persisted message artifact metadata was not loaded');
+
+if (reloadedChat.messages[1].artifacts[1]?.artifactId !== 'managed-artifact-1'
+    || reloadedChat.messages[1].artifacts[1]?.revisionId !== 'managed-revision-1') {
+    throw new Error('Managed artifact reference was not persisted');
+}
 
 if (reloadedChat.messages[2].toolCall?.artifacts?.[0]?.kind !== 'html')
     throw new Error('Persisted tool call artifact metadata was not loaded');

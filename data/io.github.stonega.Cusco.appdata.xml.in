@@ -8,7 +8,7 @@
   <description>
     <p>
       Cusco is a native GNOME AI chat application focused on provider orchestration,
-      memory control, tool use, and a desktop-first conversation workflow.
+      memory control, tool use, durable artifacts, and a desktop-first conversation workflow.
     </p>
   </description>
   <launchable type="desktop-id">@APP_ID@.desktop</launchable>

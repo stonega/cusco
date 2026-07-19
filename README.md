@@ -10,6 +10,7 @@ Cusco is a native GNOME AI chat application built with GJS, GTK 4, and libadwait
 
 - Native GTK/libadwaita chat shell with a persistent conversation sidebar.
 - Markdown transcript rendering with highlighted code blocks and copy actions.
+- Durable, revisioned artifacts with inline previews, a native side workspace, typed data/chart views, and sandboxed HTML applications.
 - Message edit, retry, regenerate, branch, archive, delete, search, and export workflows.
 - Provider management for OpenAI, Anthropic, Gemini, Kimi, DeepSeek, Grok, Z.ai, and custom OpenAI-compatible APIs.
 - Per-chat provider/model selection, model discovery, response timeouts, and optional provider fallback.
@@ -34,13 +35,13 @@ Install the GNOME JavaScript and build tooling for your distro.
 Fedora:
 
 ```sh
-sudo dnf install gjs gtk4 libadwaita gtksourceview5 libsecret libsoup3 meson ninja-build desktop-file-utils appstream glib2-devel
+sudo dnf install gjs gtk4 libadwaita gtksourceview5 webkitgtk6.0 libsecret libsoup3 meson ninja-build desktop-file-utils appstream glib2-devel
 ```
 
 Ubuntu/Debian:
 
 ```sh
-sudo apt install gjs gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtksource-5 gir1.2-secret-1 gir1.2-soup-3.0 meson ninja-build desktop-file-utils libglib2.0-dev
+sudo apt install gjs gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtksource-5 gir1.2-webkit-6.0 gir1.2-secret-1 gir1.2-soup-3.0 meson ninja-build desktop-file-utils libglib2.0-dev
 ```
 
 ## Run From Source
@@ -89,6 +90,8 @@ Some smoke tests skip automatically when the current environment has no display 
 - [Setup](docs/implementation/setup.md)
 - [Chat Switching Performance](docs/implementation/chat-performance.md)
 - [User Getting Started](docs/user/getting-started.md)
+- [Artifacts](docs/user/artifacts.md)
+- [Artifact Architecture and Security](docs/implementation/artifacts.md)
 - [Computer Use](docs/user/computer-use.md)
 - [Computer-Use Architecture](docs/implementation/computer-use.md)
 - [Provider Models](docs/user/provider-models.md)
