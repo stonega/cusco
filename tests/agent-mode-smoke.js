@@ -3,6 +3,7 @@ import {
     createAgentToolFailurePrompt,
     createAgentToolResultPrompt,
     createAgentToolRuntimeMessages,
+    createNativeToolRuntimeBatch,
     DEFAULT_AGENT_MAX_ITERATIONS,
     formatAgentToolCall,
     isPartialAgentToolCall,
@@ -232,6 +233,42 @@ if (nativeFailureMessages.length !== 2
     || !nativeFailureMessages[1].content.includes('correct the request and retry')
     || !nativeFailureMessages[1].content.includes('Calculator input was invalid.')) {
     throw new Error('Native Agent tool failures were not returned as tool results');
+}
+
+const parallelNativeCalls = [
+    {
+        id: 'call-observe',
+        name: 'computer_observe',
+        input: '{}',
+        thoughtSignature: 'gemini-parallel-signature',
+    },
+    {
+        id: 'call-list',
+        name: 'computer_list',
+        input: '{}',
+    },
+];
+const parallelRuntimeBatch = createNativeToolRuntimeBatch(
+    '',
+    parallelNativeCalls,
+    [
+        ...createAgentToolRuntimeMessages(calcRequest, '', 'observed', {
+            nativeToolCall: parallelNativeCalls[0],
+        }),
+        ...createAgentToolRuntimeMessages(calcRequest, '', 'listed', {
+            nativeToolCall: parallelNativeCalls[1],
+        }),
+    ],
+);
+
+if (parallelRuntimeBatch.length !== 3
+    || parallelRuntimeBatch[0].role !== 'assistant'
+    || parallelRuntimeBatch[0].toolCalls.length !== 2
+    || parallelRuntimeBatch[0].toolCalls[0].thoughtSignature !== 'gemini-parallel-signature'
+    || parallelRuntimeBatch[0].toolCalls[1].thoughtSignature !== undefined
+    || parallelRuntimeBatch[1].role !== 'tool'
+    || parallelRuntimeBatch[2].role !== 'tool') {
+    throw new Error('Parallel native tool calls were not preserved as one assistant turn');
 }
 
 print('Cusco Agent Mode smoke passed');

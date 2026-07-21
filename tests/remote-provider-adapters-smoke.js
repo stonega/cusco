@@ -115,6 +115,35 @@ const nativeToolMessages = [
         toolName: 'computer_step',
     },
 ];
+const parallelNativeToolMessages = [
+    createMessage('user', 'Inspect and list the windows'),
+    {
+        ...createMessage('assistant', ''),
+        toolCalls: [
+            {
+                id: 'call-observe',
+                name: 'computer_observe',
+                input: '{}',
+                thoughtSignature: 'gemini-parallel-signature',
+            },
+            {
+                id: 'call-list',
+                name: 'computer_list',
+                input: '{}',
+            },
+        ],
+    },
+    {
+        ...createMessage('tool', 'Observed.'),
+        toolCallId: 'call-observe',
+        toolName: 'computer_observe',
+    },
+    {
+        ...createMessage('tool', 'Listed.'),
+        toolCallId: 'call-list',
+        toolName: 'computer_list',
+    },
+];
 
 const openAiBody = buildOpenAiResponsesBody(messages, 'gpt-test');
 assertEqual(openAiBody.model, 'gpt-test', 'OpenAI model');
@@ -485,6 +514,14 @@ assertEqual(geminiNativeToolHistory.contents[1].parts[0].thoughtSignature, 'gemi
 assertEqual(geminiNativeToolHistory.contents[2].parts[0].functionResponse.name, 'computer_step', 'Gemini native function result history');
 assertEqual(geminiNativeToolHistory.contents[2].parts[0].functionResponse.id, 'call-computer-1', 'Gemini native function response ID history');
 assertEqual(geminiNativeToolHistory.contents[2].parts[1].inline_data.mime_type, 'image/png', 'Gemini native tool screenshot history');
+const geminiParallelToolHistory = buildGeminiGenerateContentBody(parallelNativeToolMessages);
+assertEqual(geminiParallelToolHistory.contents.length, 3, 'Gemini parallel tool history content grouping');
+assertEqual(geminiParallelToolHistory.contents[1].parts.length, 2, 'Gemini parallel function call grouping');
+assertEqual(geminiParallelToolHistory.contents[1].parts[0].thoughtSignature, 'gemini-parallel-signature', 'Gemini parallel first call signature');
+assertEqual(hasOwn(geminiParallelToolHistory.contents[1].parts[1], 'thoughtSignature'), false, 'Gemini parallel later call omits signature');
+assertEqual(geminiParallelToolHistory.contents[2].parts.length, 2, 'Gemini parallel function response grouping');
+assertEqual(geminiParallelToolHistory.contents[2].parts[0].functionResponse.name, 'computer_observe', 'Gemini parallel first response');
+assertEqual(geminiParallelToolHistory.contents[2].parts[1].functionResponse.name, 'computer_list', 'Gemini parallel second response');
 const geminiSvgBody = buildGeminiGenerateContentBody(svgImageMessages);
 assertEqual(geminiSvgBody.contents[0].parts.length, 1, 'Gemini SVG attachment is not sent as an image part');
 assertEqual(geminiSvgBody.contents[0].parts[0].text, 'Read this SVG', 'Gemini SVG prompt text part');

@@ -1332,16 +1332,26 @@ export function geminiPayload(messages) {
         .filter((message) => message.role === 'system')
         .map(messageContent)
         .join('\n\n');
-    const contents = normalizedMessages
+    const conversationMessages = normalizedMessages
         .filter((message) => (
             message.role === 'user'
             || message.role === 'assistant'
             || message.role === 'tool'
-        ))
-        .map((message) => ({
-            role: message.role === 'assistant' ? 'model' : 'user',
-            parts: geminiParts(message),
-        }));
+        ));
+    const contents = [];
+    let previousMessageWasTool = false;
+
+    for (const message of conversationMessages) {
+        const role = message.role === 'assistant' ? 'model' : 'user';
+        const parts = geminiParts(message);
+
+        if (message.role === 'tool' && previousMessageWasTool)
+            contents.at(-1).parts.push(...parts);
+        else
+            contents.push({ role, parts });
+
+        previousMessageWasTool = message.role === 'tool';
+    }
 
     const payload = { contents };
 

@@ -15,6 +15,7 @@ import {
     buildAgentModeSystemPrompt,
     createAgentToolFailurePrompt,
     createAgentToolRuntimeMessages,
+    createNativeToolRuntimeBatch,
     DEFAULT_AGENT_MAX_ITERATIONS,
     isPartialAgentToolCall,
     parseAgentToolCall,
@@ -4060,13 +4061,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             if (responseState.toolCalls.length > 0) {
                 let ranAnyTool = false;
+                const nativeRuntimeStart = runtimeMessages.length;
+                const runtimeNativeToolCalls = responseState.toolCalls.map((nativeToolCall) => ({
+                    ...nativeToolCall,
+                    id: String(nativeToolCall.id ?? '').trim()
+                        || `cusco_${GLib.uuid_string_random().replaceAll('-', '')}`,
+                }));
 
-                for (const nativeToolCall of responseState.toolCalls) {
-                    const runtimeNativeToolCall = {
-                        ...nativeToolCall,
-                        id: String(nativeToolCall.id ?? '').trim()
-                            || `cusco_${GLib.uuid_string_random().replaceAll('-', '')}`,
-                    };
+                for (const runtimeNativeToolCall of runtimeNativeToolCalls) {
                     const runtimeToolCallText = responseText;
                     const request = this._createAgentToolRequest(
                         runtimeNativeToolCall,
@@ -4091,6 +4093,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
                         runtimeNativeToolCall,
                     ) || ranAnyTool;
                 }
+
+                const nativeRuntimeMessages = runtimeMessages.splice(nativeRuntimeStart);
+                runtimeMessages.push(...createNativeToolRuntimeBatch(
+                    responseText,
+                    runtimeNativeToolCalls,
+                    nativeRuntimeMessages,
+                ));
 
                 if (ranAnyTool)
                     continue;

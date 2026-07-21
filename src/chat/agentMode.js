@@ -224,6 +224,24 @@ export function createAgentToolRuntimeMessages(
     ];
 }
 
+export function createNativeToolRuntimeBatch(responseText, nativeToolCalls, runtimeMessages) {
+    const toolCalls = Array.isArray(nativeToolCalls)
+        ? nativeToolCalls.filter((call) => String(call?.name ?? '').trim())
+        : [];
+
+    if (toolCalls.length === 0)
+        return [...(runtimeMessages ?? [])];
+
+    return [
+        {
+            role: 'assistant',
+            content: String(responseText ?? ''),
+            toolCalls,
+        },
+        ...(runtimeMessages ?? []).filter((message) => message?.role !== 'assistant'),
+    ];
+}
+
 export function isPartialAgentToolCall(text) {
     const source = String(text ?? '').toLowerCase();
     return source.includes(TOOL_CALL_OPEN_TAG) && !source.includes(TOOL_CALL_CLOSE_TAG);
