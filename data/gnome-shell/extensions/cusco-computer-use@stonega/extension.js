@@ -16,9 +16,10 @@ import {describeComputerUseOperation, ellipsizeIndicatorStatus} from './indicato
 import {activateWindowIfNeeded} from './windowFocus.js';
 
 const OBJECT_PATH = '/io/github/stonega/Cusco/ComputerUse';
-const PROTOCOL_VERSION = 4;
+const PROTOCOL_VERSION = 6;
 const MAX_TYPE_CHARACTERS = 10_000;
 const TEXT_FIELD_FOCUS_SETTLE_MS = 80;
+const CLIPBOARD_SETTLE_MS = 20;
 
 const INTERFACE_XML = `
 <node>
@@ -470,6 +471,23 @@ class ComputerUseBridge {
         }
     }
 
+    async _pasteText(text, generation) {
+        const value = String(text ?? '');
+
+        if ([...value].length > MAX_TYPE_CHARACTERS)
+            throw new Error(`Pasting is limited to ${MAX_TYPE_CHARACTERS} characters per action.`);
+        if (generation !== this._generation)
+            throw new Error('Computer use was stopped.');
+
+        St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, value);
+        await delay(CLIPBOARD_SETTLE_MS);
+
+        if (generation !== this._generation)
+            throw new Error('Computer use was stopped.');
+
+        await this._keypress(['CTRL', 'V']);
+    }
+
     async _keypress(keys) {
         const keyvals = (keys ?? []).map(namedKeysym);
         if (keyvals.length === 0)
@@ -548,7 +566,7 @@ class ComputerUseBridge {
 
             const hasWindowId = String(request.windowId ?? '').trim().length > 0;
             const isGlobalKeyboardAction = !hasWindowId
-                && (action === 'keypress' || action === 'type');
+                && (action === 'keypress' || action === 'paste_text' || action === 'type');
             const window = isGlobalKeyboardAction ? null : this._window(request.windowId);
             const targetWorkspace = action === 'move_to_workspace'
                 ? this._workspace(request.workspaceIndex)
@@ -593,9 +611,10 @@ class ComputerUseBridge {
                 await this._click(coordinates, request.button, 2);
                 break;
             }
+            case 'paste_text':
             case 'type': {
                 if ((Number.isFinite(request.x) || Number.isFinite(request.y)) && !window)
-                    throw new Error('Global type cannot use window-relative coordinates.');
+                    throw new Error(`Global ${action} cannot use window-relative coordinates.`);
                 const coordinateTargeted = Boolean(window)
                     && Number.isFinite(request.x)
                     && Number.isFinite(request.y);
@@ -603,7 +622,7 @@ class ComputerUseBridge {
                     && (typeof request.replace !== 'boolean'
                         || (request.replace === true && !coordinateTargeted))) {
                     throw new Error(
-                        'replace is only supported on a coordinate-targeted type action.',
+                        'replace is only supported on a coordinate-targeted text input action.',
                     );
                 }
                 if (coordinateTargeted) {
@@ -618,7 +637,10 @@ class ComputerUseBridge {
                     if (generation !== this._generation)
                         throw new Error('Computer use was stopped.');
                 }
-                await this._type(request.text, generation);
+                if (action === 'paste_text')
+                    await this._pasteText(request.text, generation);
+                else
+                    await this._type(request.text, generation);
                 break;
             }
             case 'keypress':
@@ -677,6 +699,7 @@ class ComputerUseBridge {
                 dispatchStatus: 'dispatched',
                 verified,
                 verificationReason,
+                ...(action === 'paste_text' ? {clipboardChanged: true} : {}),
                 window: record,
                 coordinates,
             }));

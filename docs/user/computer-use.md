@@ -153,19 +153,24 @@ actions leave the screen meaningfully unchanged, further full-window
 coordinate targeting is blocked until the agent changes strategy. Small
 cursor or caret changes are ignored by this check.
 
-An arbitrary explicit `click` cannot be batched with later typing or key
+An arbitrary explicit `click` cannot be batched with later text input or key
 presses. When accessibility is unavailable, the agent can instead send one
-coordinate-targeted `type` action. For a field that already contains text,
-`replace: true` makes Cusco click the point, select all existing text, and type
-the replacement in one Shell request. Cusco also normalizes the equivalent
-`click` → `type` and `click` → Ctrl+A → `type` action patterns into these atomic
-forms. The bridge briefly lets field focus settle before typing so the first
-character is not lost. When the intended field is visibly nonempty and the page
-shows no error, the agent trusts the exact value it just supplied. It does not
-compare or repair individual characters in long wallet addresses, hashes, IDs,
-or URLs from a screenshot; those fields often scroll horizontally and hide a
-valid prefix. It retries the complete value only after an explicit rejection,
-an empty or wrong field, or a machine-readable mismatch.
+coordinate-targeted `paste_text` or `type` action. `paste_text` is preferred for
+non-sensitive values: Cusco copies the complete value to the desktop clipboard
+and pastes it with Ctrl+V. The clipboard keeps that value, just like ordinary
+copy and paste. `type` remains available for passwords, tokens, other sensitive
+values that should not enter clipboard history, and fields that reject paste.
+For a field that already contains text, `replace: true` makes Cusco click the
+point and select all existing text before pasting or typing the replacement in
+one Shell request. Cusco also normalizes equivalent `click` and optional Ctrl+A
+input patterns into these atomic forms. The bridge briefly lets field focus
+settle before input so the first character is not lost. When the intended field
+is visibly nonempty and the page shows no error, the agent trusts the exact
+value it just supplied. It does not compare or repair individual characters in
+long wallet addresses, hashes, IDs, or URLs from a screenshot; those fields
+often scroll horizontally and hide a valid prefix. It retries the complete
+value only after an explicit rejection, an empty or wrong field, or a
+machine-readable mismatch.
 
 If a coordinate action has no accessibility expectation, Cusco reports that
 visual confirmation is required. That is an unknown verification state, not a
@@ -202,6 +207,7 @@ so Cusco always keeps the application-independent visual fallback available.
 | `move` | Moves the pointer to a window-relative position. |
 | `click` | Clicks the left, middle, or right pointer button. |
 | `double_click` | Double-clicks at a position. |
+| `paste_text` | Copies a complete non-sensitive value to the clipboard and pastes it into the current focus, or atomically clicks `x`,`y` first. Use `replace: true` to select all existing field text. |
 | `type` | Types into the current focus, or atomically clicks `x`,`y` and types when it is the only `computer_step` action. Use `replace: true` to select all existing field text first. |
 | `keypress` | Sends a key or shortcut such as `CTRL` + `L`. |
 | `scroll` | Scrolls horizontally or vertically at a position. |
@@ -214,9 +220,10 @@ After the first computer action in an agent turn, a cyan (`#42e6f5`) stop
 control temporarily replaces the normal center item in the GNOME top panel.
 The clock or other displaced center item returns as soon as computer use
 stops. The control combines the computer-use icon with a short status such as
-**Viewing Firefox** or **Typing in Terminal**. Long window titles end in an
-ellipsis, and Cusco never shows the text being typed. Cusco does not add a
-second banner; the composer instead shows **Esc to quit** in the same cyan.
+**Viewing Firefox**, **Pasting in Browser**, or **Typing in Terminal**. Long
+window titles end in an ellipsis, and Cusco never shows the text being pasted
+or typed. Cusco does not add a second banner; the composer instead shows
+**Esc to quit** in the same cyan.
 The indicators remain visible until that turn completes or is cancelled.
 Click the Shell control or press Escape from Cusco or the controlled app to:
 

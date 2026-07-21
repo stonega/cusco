@@ -31,5 +31,16 @@ const KEY_SUFFIX_ALIASES = {
 
 export function clutterKeySuffix(name) {
     const normalized = String(name ?? '').trim().toUpperCase().replaceAll('-', '_');
-    return KEY_SUFFIX_ALIASES[normalized] ?? normalized;
+    const alias = KEY_SUFFIX_ALIASES[normalized];
+
+    if (alias)
+        return alias;
+
+    // Letter names describe the physical key in a chord; SHIFT is represented
+    // separately. Clutter.KEY_A is an uppercase keysym and can therefore turn
+    // CTRL+A into CTRL+SHIFT+A, while Clutter.KEY_a preserves the intended chord.
+    if (/^[A-Z]$/.test(normalized))
+        return normalized.toLowerCase();
+
+    return normalized;
 }

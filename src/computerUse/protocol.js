@@ -8,6 +8,7 @@ export const COMPUTER_USE_ACTION_NAMES = Object.freeze([
     'click',
     'double_click',
     'move',
+    'paste_text',
     'type',
     'keypress',
     'scroll',
@@ -27,7 +28,8 @@ export const MAX_COMPUTER_USE_KEYPRESS_KEYS = 16;
 
 const COORDINATE_ACTION_NAMES = new Set(['click', 'double_click', 'move', 'scroll', 'drag']);
 const CLICK_ACTION_NAMES = new Set(['click', 'double_click']);
-const FOLLOWUP_INPUT_ACTION_NAMES = new Set(['type', 'keypress']);
+const TEXT_INPUT_ACTION_NAMES = new Set(['paste_text', 'type']);
+const FOLLOWUP_INPUT_ACTION_NAMES = new Set([...TEXT_INPUT_ACTION_NAMES, 'keypress']);
 const WINDOW_REQUIRED_ACTION_NAMES = new Set([
     'focus',
     'maximize',
@@ -109,17 +111,24 @@ export function isNormalizedComputerUseCoordinateSpace(value) {
     );
 }
 
+export function isComputerUseTextInputAction(action) {
+    const actionName = typeof action === 'string' ? action : action?.action;
+    return TEXT_INPUT_ACTION_NAMES.has(actionName);
+}
+
 export function hasComputerUseCoordinates(action) {
     return COORDINATE_ACTION_NAMES.has(action?.action)
-        || (action?.action === 'type'
+        || (isComputerUseTextInputAction(action)
             && (action.x !== undefined || action.y !== undefined));
 }
 
 export function hasUnsafeComputerUsePointerInputBatch(actions) {
-    const coordinateTypes = (actions ?? []).filter(action => action?.action === 'type'
-        && (action.x !== undefined || action.y !== undefined));
+    const coordinateTextInputs = (actions ?? []).filter(action => (
+        isComputerUseTextInputAction(action)
+        && (action.x !== undefined || action.y !== undefined)
+    ));
 
-    if (coordinateTypes.length > 0 && actions.length !== 1)
+    if (coordinateTextInputs.length > 0 && actions.length !== 1)
         return true;
 
     const clickIndex = actions.findIndex(action => CLICK_ACTION_NAMES.has(action?.action));
@@ -264,18 +273,26 @@ export function validateComputerUseAction(action, {
             inputError(`${label} requires a non-zero deltaX or deltaY.`);
     }
 
-    if (actionName === 'type') {
+    if (isComputerUseTextInputAction(actionName)) {
         validateText(action, label);
         const hasX = action.x !== undefined;
         const hasY = action.y !== undefined;
 
         if (hasX !== hasY)
-            inputError('A coordinate-targeted type action requires both x and y.');
+            inputError(`A coordinate-targeted ${actionName} action requires both x and y.`);
         if (hasX) {
             requireWindowId(action, label);
             validatePoint(action, label);
         } else if (action.coordinateSpace !== undefined) {
             inputError(`${label} cannot specify coordinateSpace without x and y.`);
+        }
+
+        if (action.replace !== undefined
+            && (typeof action.replace !== 'boolean'
+                || (action.replace === true && !hasX))) {
+            inputError(
+                `${label} replace is only supported as a boolean on a coordinate-targeted text input action.`,
+            );
         }
     }
 
@@ -302,7 +319,7 @@ export function validateComputerUseAction(action, {
 
 export function validateComputerUseStepActions(actions, {
     expectedWindowId = '',
-    unsafeBatchMessage = 'Do not batch an explicit coordinate click with typing or key presses. Use one coordinate-targeted type action for an empty visual field, or click and inspect before a later keyboard step.',
+    unsafeBatchMessage = 'Do not batch an explicit coordinate click with text input or key presses. Use one coordinate-targeted paste_text or type action for a visual field, or click and inspect before a later keyboard step.',
 } = {}) {
     if (!Array.isArray(actions)
         || actions.length === 0

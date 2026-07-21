@@ -62,6 +62,9 @@ export function describeComputerUseOperation(operation, details = {}) {
     case 'type':
         description = `Typing in ${target}`;
         break;
+    case 'paste_text':
+        description = `Pasting in ${target}`;
+        break;
     case 'keypress':
         description = `Pressing keys in ${target}`;
         break;

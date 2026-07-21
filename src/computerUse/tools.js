@@ -4,6 +4,7 @@ import {
     createComputerUseError,
     hasComputerUseCoordinates,
     hasUnsafeComputerUsePointerInputBatch,
+    isComputerUseTextInputAction,
     MAX_COMPUTER_USE_STEP_ACTIONS,
     validateComputerUseAction,
     validateComputerUseStepActions,
@@ -50,8 +51,8 @@ function isPrimaryCoordinateClick(action) {
         && Number.isFinite(action.y);
 }
 
-function isUnpositionedType(action) {
-    return action?.action === 'type'
+function isUnpositionedTextInput(action) {
+    return isComputerUseTextInputAction(action)
         && action.x === undefined
         && action.y === undefined;
 }
@@ -64,39 +65,39 @@ function isSelectAllKeypress(action) {
     return keys.includes('A') && keys.some(key => key === 'CTRL' || key === 'CONTROL');
 }
 
-function atomicTypeFromPointerInput(actions) {
+function atomicTextInputFromPointerInput(actions) {
     if (!Array.isArray(actions) || ![2, 3].includes(actions.length))
         return { actions, normalization: null };
 
     const [click, middle, last] = actions;
     const replacing = actions.length === 3;
-    const type = replacing ? last : middle;
+    const textInput = replacing ? last : middle;
 
     if (!isPrimaryCoordinateClick(click)
-        || !isUnpositionedType(type)
+        || !isUnpositionedTextInput(textInput)
         || (replacing && !isSelectAllKeypress(middle))) {
         return { actions, normalization: null };
     }
 
-    const atomicType = {
-        ...type,
+    const atomicTextInput = {
+        ...textInput,
         x: click.x,
         y: click.y,
     };
 
     for (const property of ['windowId', 'observationId', 'coordinateSpace']) {
         if (click[property] !== undefined)
-            atomicType[property] = click[property];
+            atomicTextInput[property] = click[property];
     }
 
     if (replacing)
-        atomicType.replace = true;
+        atomicTextInput.replace = true;
 
     return {
-        actions: [atomicType],
+        actions: [atomicTextInput],
         normalization: {
             requestedActions: actions.map(action => action?.action ?? ''),
-            performedActions: ['type'],
+            performedActions: [textInput.action],
             mode: replacing ? 'replace' : 'insert',
         },
     };
@@ -231,8 +232,8 @@ export function createComputerUseTools(service) {
         {
             name: 'computer_step',
             label: 'Act and observe desktop window',
-            description: 'Perform one or more bounded actions on one observed window, wait briefly, and return the updated screenshot plus semantic, coordinate, change, and stall feedback. Before coordinate input, Cusco passively checks that the referenced UI is still visible and focused; stale UI is returned without dispatching the action. Prefer accessibility refs when available. Visual coordinates are normalized 0..1000 in the attached full or region grid. A single type action may include x and y to focus a visual text field and type atomically; add replace:true to select all existing field text first. Common click-then-type and click-then-Ctrl+A-then-type calls are normalized to those atomic forms. Other explicit coordinate click and keyboard batches remain unsafe. For small targets or a blocked retry, use computer_observe_region. Coordinate actions that navigate or enter input should include an expect entry when accessibility is available.',
-            inputDescription: 'JSON: {"windowId":"ID","observationId":"latest full or region observation ID","actions":[{"action":"click","x":480,"y":280}],"settleMs":250}. For an inaccessible visual text field, use exactly one atomic action: {"action":"type","x":480,"y":280,"text":"value","replace":true}; omit replace for an empty field. Semantic actions include click_element {ref} and set_text_element {ref,text}; other actions include type, keypress, maximize, move_to_workspace, scroll, and drag. Arbitrary explicit click and keyboard batches are rejected. All visual coordinates are normalized 0..1000. Maximum 8 actions.',
+            description: 'Perform one or more bounded actions on one observed window, wait briefly, and return the updated screenshot plus semantic, coordinate, change, and stall feedback. Before coordinate input, Cusco passively checks that the referenced UI is still visible and focused; stale UI is returned without dispatching the action. Prefer accessibility refs when available. Visual coordinates are normalized 0..1000 in the attached full or region grid. Prefer paste_text for non-sensitive text because it copies the complete value to the clipboard and pastes it atomically; use type for sensitive values or fields that reject paste. Either text input action may include x and y to focus a visual field, with replace:true selecting its existing text first. Common click-then-input and click-then-Ctrl+A-then-input calls are normalized to those atomic forms. Other explicit coordinate click and keyboard batches remain unsafe. For small targets or a blocked retry, use computer_observe_region. Coordinate actions that navigate or enter input should include an expect entry when accessibility is available.',
+            inputDescription: 'JSON: {"windowId":"ID","observationId":"latest full or region observation ID","actions":[{"action":"click","x":480,"y":280}],"settleMs":250}. For an inaccessible visual text field, prefer exactly one atomic action: {"action":"paste_text","x":480,"y":280,"text":"value","replace":true}; omit replace for an empty field. Use type with the same fields for sensitive values or when paste is rejected. Semantic actions include click_element {ref} and set_text_element {ref,text}; other actions include keypress, maximize, move_to_workspace, scroll, and drag. Arbitrary explicit click and keyboard batches are rejected. All visual coordinates are normalized 0..1000. Maximum 8 actions.',
             inputSchema: {
                 type: 'object',
                 additionalProperties: false,
@@ -297,37 +298,37 @@ export function createComputerUseTools(service) {
                     throw userError(`computer_step requires 1 to ${MAX_COMPUTER_USE_STEP_ACTIONS} actions.`);
                 }
 
-                const normalizedInput = atomicTypeFromPointerInput(args.actions);
+                const normalizedInput = atomicTextInputFromPointerInput(args.actions);
                 const requestedActions = normalizedInput.actions;
 
                 if (hasUnsafeComputerUsePointerInputBatch(requestedActions)) {
                     throw userError(
-                        'computer_step cannot safely batch these coordinate click and keyboard actions. Use one coordinate-targeted type action, add replace:true when replacing existing field text, or click and inspect before a later keyboard step.',
+                        'computer_step cannot safely batch these coordinate click and keyboard actions. Use one coordinate-targeted paste_text or type action, add replace:true when replacing existing field text, or click and inspect before a later keyboard step.',
                     );
                 }
 
                 const invalidCoordinateType = requestedActions.some(action => (
-                    action?.action === 'type'
+                    isComputerUseTextInputAction(action)
                     && (action.x !== undefined || action.y !== undefined)
                     && (!Number.isFinite(action.x) || !Number.isFinite(action.y))
                 ));
 
                 if (invalidCoordinateType) {
                     throw userError(
-                        'A coordinate-targeted type action requires both x and y as finite numbers.',
+                        'A coordinate-targeted text input action requires both x and y as finite numbers.',
                     );
                 }
                 const invalidReplace = requestedActions.some(action => (
                     action?.replace !== undefined
                     && (typeof action.replace !== 'boolean'
-                        || action.action !== 'type'
+                        || !isComputerUseTextInputAction(action)
                         || (action.replace === true
                             && (!Number.isFinite(action.x) || !Number.isFinite(action.y))))
                 ));
 
                 if (invalidReplace) {
                     throw userError(
-                        'replace is only supported as a boolean on a coordinate-targeted type action with both x and y.',
+                        'replace is only supported as a boolean on a coordinate-targeted text input action with both x and y.',
                     );
                 }
 
@@ -341,7 +342,7 @@ export function createComputerUseTools(service) {
                 }));
                 validateComputerUseStepActions(actions, {
                     expectedWindowId: windowId,
-                    unsafeBatchMessage: 'computer_step cannot safely batch these coordinate click and keyboard actions. Use one coordinate-targeted type action, add replace:true when replacing existing field text, or click and inspect before a later keyboard step.',
+                    unsafeBatchMessage: 'computer_step cannot safely batch these coordinate click and keyboard actions. Use one coordinate-targeted paste_text or type action, add replace:true when replacing existing field text, or click and inspect before a later keyboard step.',
                 });
                 const expectations = Array.isArray(args.expect) ? args.expect : [];
                 const step = await service.step(actions, {
@@ -354,7 +355,7 @@ export function createComputerUseTools(service) {
                 const hasCoordinateTarget = actions.some(action => (
                     action.action === 'click'
                     || action.action === 'double_click'
-                    || (action.action === 'type'
+                    || (isComputerUseTextInputAction(action)
                         && action.x !== undefined
                         && action.y !== undefined)
                 ));
@@ -410,8 +411,8 @@ export function createComputerUseTools(service) {
         {
             name: 'computer_act',
             label: 'Control GNOME desktop',
-            description: 'Perform one bounded desktop action without returning a screenshot. Use create_workspace before launching an app, then maximize or move its window as needed. Global type and keypress actions may omit windowId so an app can be launched on the active empty workspace. Prefer computer_step for subsequent window actions. Coordinate actions should specify screenshot_pixels or normalized_1000 explicitly.',
-            inputDescription: 'JSON with action. Supported: create_workspace; switch_workspace {workspaceIndex}; move_to_workspace {windowId,workspaceIndex}; maximize {windowId}; focus {windowId}; click/double_click/move {windowId,x,y,coordinateSpace,button?}; type {text,windowId?,x?,y?,coordinateSpace?,replace?}; keypress {keys:["CTRL","L"],windowId?}; scroll {windowId,x,y,coordinateSpace,deltaX?,deltaY?}; drag {windowId,x,y,endX,endY,coordinateSpace}. replace:true requires a coordinate-targeted type action.',
+            description: 'Perform one bounded desktop action without returning a screenshot. Use create_workspace before launching an app, then maximize or move its window as needed. Global paste_text, type, and keypress actions may omit windowId so an app can be launched on the active empty workspace. Prefer paste_text for non-sensitive text and type for sensitive values or fields that reject paste. Prefer computer_step for subsequent window actions. Coordinate actions should specify screenshot_pixels or normalized_1000 explicitly.',
+            inputDescription: 'JSON with action. Supported: create_workspace; switch_workspace {workspaceIndex}; move_to_workspace {windowId,workspaceIndex}; maximize {windowId}; focus {windowId}; click/double_click/move {windowId,x,y,coordinateSpace,button?}; paste_text/type {text,windowId?,x?,y?,coordinateSpace?,replace?}; keypress {keys:["CTRL","L"],windowId?}; scroll {windowId,x,y,coordinateSpace,deltaX?,deltaY?}; drag {windowId,x,y,endX,endY,coordinateSpace}. replace:true requires a coordinate-targeted text input action.',
             inputSchema: {
                 type: 'object',
                 additionalProperties: true,

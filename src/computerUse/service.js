@@ -16,6 +16,7 @@ import {
     createComputerUseError,
     hasComputerUseCoordinates,
     isComputerUseError,
+    isComputerUseTextInputAction,
     isNormalizedComputerUseCoordinateSpace,
     validateComputerUseAction,
     validateComputerUseStepActions,
@@ -24,7 +25,7 @@ import {
 export const COMPUTER_USE_BUS_NAME = 'org.gnome.Shell';
 export const COMPUTER_USE_OBJECT_PATH = '/io/github/stonega/Cusco/ComputerUse';
 export const COMPUTER_USE_INTERFACE = 'io.github.stonega.Cusco.ComputerUse';
-export const COMPUTER_USE_PROTOCOL_VERSION = 4;
+export const COMPUTER_USE_PROTOCOL_VERSION = 6;
 export const COMPUTER_USE_AGENT_PROTOCOL_VERSION = 4;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -980,21 +981,21 @@ export class ComputerUseService {
 
         const actionWindowId = String(action?.windowId ?? '');
 
-        if (action?.action === 'type'
+        if (isComputerUseTextInputAction(action)
             && (action.x !== undefined || action.y !== undefined)
             && (!Number.isFinite(action.x) || !Number.isFinite(action.y))) {
             throw createUserError(
-                'A coordinate-targeted type action requires both x and y as finite numbers.',
+                'A coordinate-targeted text input action requires both x and y as finite numbers.',
             );
         }
 
         if (action?.replace !== undefined
             && (typeof action.replace !== 'boolean'
-                || action.action !== 'type'
+                || !isComputerUseTextInputAction(action)
                 || (action.replace === true
                     && (!Number.isFinite(action.x) || !Number.isFinite(action.y))))) {
             throw createUserError(
-                'replace is only supported as a boolean on a coordinate-targeted type action with both x and y.',
+                'replace is only supported as a boolean on a coordinate-targeted text input action with both x and y.',
             );
         }
 
@@ -1303,7 +1304,9 @@ export class ComputerUseService {
             ? semanticActions.every(result => result.verified === true)
             : null;
         const inputResults = results.filter(result => (
-            result.performed === 'type' || result.performed === 'set_text_element'
+            result.performed === 'paste_text'
+            || result.performed === 'type'
+            || result.performed === 'set_text_element'
         ));
         const semanticInputResults = inputResults.filter(result => (
             result.performed === 'set_text_element'

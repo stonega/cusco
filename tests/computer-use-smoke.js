@@ -11,7 +11,10 @@ import {
 } from '../data/gnome-shell/extensions/cusco-computer-use@stonega/indicatorStatus.js';
 import { activateWindowIfNeeded } from '../data/gnome-shell/extensions/cusco-computer-use@stonega/windowFocus.js';
 import { isComputerUseError } from '../src/computerUse/protocol.js';
-import { ComputerUseService } from '../src/computerUse/service.js';
+import {
+    COMPUTER_USE_PROTOCOL_VERSION,
+    ComputerUseService,
+} from '../src/computerUse/service.js';
 import { createComputerUseTools } from '../src/computerUse/tools.js';
 
 const [, indicatorStylesheetBytes] = GLib.file_get_contents(
@@ -33,9 +36,23 @@ if (!iconStyle.includes('-st-icon-style: symbolic')
 
 if (!extensionSource.includes("addToStatusArea(this.uuid, this._indicator, 0, 'center')")
     || !extensionSource.includes('new EmergencyStopController')
-    || !extensionSource.includes('CaptureWindowPassive')
-    || !extensionSource.includes('const PROTOCOL_VERSION = 4')) {
+    || !extensionSource.includes('CaptureWindowPassive')) {
     throw new Error('Computer-use emergency stop was not installed in the panel center');
+}
+
+const extensionProtocolVersion = Number(
+    /const PROTOCOL_VERSION = (\d+);/.exec(extensionSource)?.[1],
+);
+if (extensionProtocolVersion !== COMPUTER_USE_PROTOCOL_VERSION) {
+    throw new Error(
+        `Computer-use protocol mismatch: app ${COMPUTER_USE_PROTOCOL_VERSION}, extension ${extensionProtocolVersion}`,
+    );
+}
+if (!extensionSource.includes('async _pasteText(text, generation)')
+    || !extensionSource.includes('St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, value)')
+    || !extensionSource.includes("await this._keypress(['CTRL', 'V'])")
+    || !extensionSource.includes("action === 'paste_text' ? {clipboardChanged: true}")) {
+    throw new Error('The Shell extension did not implement native clipboard paste dispatch');
 }
 
 class FakePanelActor {
@@ -147,9 +164,15 @@ if (clutterKeySuffix('Return') !== 'Return'
     || clutterKeySuffix('ENTER') !== 'Return'
     || clutterKeySuffix('Escape') !== 'Escape'
     || clutterKeySuffix('TAB') !== 'Tab'
+    || clutterKeySuffix('SHIFT') !== 'Shift_L'
     || clutterKeySuffix('backspace') !== 'BackSpace'
     || clutterKeySuffix('page-down') !== 'Page_Down')
     throw new Error('Computer-use key aliases were not normalized');
+
+for (const letter of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
+    if (clutterKeySuffix(letter) !== letter.toLowerCase())
+        throw new Error(`Computer-use chord key ${letter} implicitly added Shift`);
+}
 
 const focusCalls = [];
 const alreadyFocusedWindow = {
@@ -182,6 +205,7 @@ const longWindowStatus = describeComputerUseOperation('capture', {
 if (longWindowStatus.length > MAX_INDICATOR_STATUS_CHARACTERS
     || !longWindowStatus.endsWith('…')
     || describeComputerUseOperation('type', { windowTitle: 'Terminal' }) !== 'Typing in Terminal'
+    || describeComputerUseOperation('paste_text', { windowTitle: 'Browser' }) !== 'Pasting in Browser'
     || describeComputerUseOperation('switch_workspace', { workspaceIndex: 1 }) !== 'Switching to workspace 2'
     || ellipsizeIndicatorStatus('  Checking   desktop  ') !== 'Checking desktop') {
     throw new Error('Computer-use indicator descriptions were not normalized or ellipsized');
@@ -268,12 +292,14 @@ const stepActionProperties = byName.get('computer_step')
     .inputSchema.properties.actions.items.properties;
 if (!['create_workspace', 'move_to_workspace', 'maximize'].every(actionName => (
     desktopActionNames.includes(actionName)
-)) || !['move_to_workspace', 'maximize'].every(actionName => stepActionNames.includes(actionName))
+)) || !['move_to_workspace', 'maximize', 'paste_text'].every(actionName => stepActionNames.includes(actionName))
+    || !desktopActionNames.includes('paste_text')
     || stepActionNames.includes('create_workspace')
     || stepActionProperties.replace.type !== 'boolean') {
     throw new Error('Computer-use workspace and maximize actions were not exposed correctly');
 }
 if (!byName.get('computer_step').description.includes('replace:true')
+    || !byName.get('computer_step').description.includes('Prefer paste_text for non-sensitive text')
     || !byName.get('computer_step').description.includes('normalized')
     || !byName.get('computer_step').description.includes('computer_observe_region')) {
     throw new Error('Computer step did not describe safe visual targeting');
@@ -364,6 +390,26 @@ if (atomicTypeCall[1].length !== 1
     || atomicTypeStep.verification.visualConfirmationRequired !== true
     || !atomicTypeStep.output.includes('does not mean the action failed')) {
     throw new Error('Computer step did not preserve atomic coordinate-targeted typing');
+}
+
+const atomicPasteStep = await byName.get('computer_step').run(JSON.stringify({
+    windowId: '42',
+    observationId: 'next-observation',
+    actions: [
+        { action: 'paste_text', x: 455, y: 275, text: '完整 pasted value', replace: true },
+    ],
+    settleMs: 0,
+}));
+const atomicPasteCall = calls.filter(call => call[0] === 'step').at(-1);
+if (atomicPasteCall[1].length !== 1
+    || atomicPasteCall[1][0].action !== 'paste_text'
+    || atomicPasteCall[1][0].x !== 455
+    || atomicPasteCall[1][0].y !== 275
+    || atomicPasteCall[1][0].text !== '完整 pasted value'
+    || atomicPasteCall[1][0].replace !== true
+    || atomicPasteStep.verification.coordinateActionVerified !== null
+    || atomicPasteStep.verification.visualConfirmationRequired !== true) {
+    throw new Error('Computer step did not preserve atomic coordinate-targeted clipboard paste');
 }
 
 const normalizedInsertStep = await byName.get('computer_step').run(JSON.stringify({
@@ -461,6 +507,21 @@ try {
 if (!incompleteAtomicTargetRejected)
     throw new Error('Computer step allowed an incomplete atomic type target');
 
+let missingPasteTextRejected = false;
+try {
+    await byName.get('computer_step').run(JSON.stringify({
+        windowId: '42',
+        observationId: 'first-observation',
+        actions: [
+            { action: 'paste_text', x: 500, y: 250 },
+        ],
+    }));
+} catch (error) {
+    missingPasteTextRejected = error.userMessage?.includes('requires text');
+}
+if (!missingPasteTextRejected)
+    throw new Error('Computer step allowed paste_text without text');
+
 let invalidReplaceRejected = false;
 try {
     await byName.get('computer_step').run(JSON.stringify({
@@ -485,7 +546,7 @@ try {
 if (!rejectedInvalidInput)
     throw new Error('Invalid computer-use input was not rejected');
 
-if (calls.length !== 13)
+if (calls.length !== 14)
     throw new Error(`Unexpected computer-use call count: ${calls.length}`);
 
 function solidPng(red, green, blue) {
@@ -508,6 +569,7 @@ function solidPng(red, green, blue) {
 const png = solidPng(0.08, 0.09, 0.1);
 let changedPng = null;
 const proxyCalls = [];
+let registerProtocolVersion = COMPUTER_USE_PROTOCOL_VERSION;
 let staleRegistration = true;
 let performActionFailure = null;
 let passivePng = png;
@@ -556,7 +618,7 @@ const fakeProxy = {
             imageBase64: GLib.base64_encode(bytes),
         });
         const payloads = {
-            Register: { protocolVersion: 4, registered: true },
+            Register: { protocolVersion: registerProtocolVersion, registered: true },
             ListDesktop: { workspaces: [], windows: [] },
             CaptureWindow: capturePayload(png),
             CaptureWindowPassive: capturePayload(passivePng, passiveFocused),
@@ -602,6 +664,23 @@ const computerUseSettings = {
     computerUseWorkspaceSwitchingEnabled: true,
     computerUseActionTimeoutSeconds: 30,
 };
+
+registerProtocolVersion = COMPUTER_USE_PROTOCOL_VERSION - 1;
+const staleIntegration = new ComputerUseService({
+    proxy: fakeProxy,
+    accessibility: fakeAccessibility,
+    environmentStatus: () => ({ supported: true, reason: '' }),
+    settings: computerUseSettings,
+});
+const staleIntegrationStatus = await staleIntegration.status();
+staleIntegration.shutdown();
+registerProtocolVersion = COMPUTER_USE_PROTOCOL_VERSION;
+proxyCalls.length = 0;
+if (staleIntegrationStatus.available
+    || !staleIntegrationStatus.reason.includes('protocol mismatch')) {
+    throw new Error('An outdated loaded computer-use extension was not rejected');
+}
+
 const computerUse = new ComputerUseService({
     proxy: fakeProxy,
     accessibility: fakeAccessibility,
@@ -785,6 +864,29 @@ if (atomicReplaceRequest.action !== 'type'
     || atomicReplaceRequest.replace !== true
     || atomicReplaceStep.results.length !== 1) {
     throw new Error(`Atomic coordinate replacement was not dispatched safely: ${JSON.stringify(atomicReplaceStep)}`);
+}
+
+const pasteInputObservation = await computerUse.observe('42');
+const atomicPasteInputStep = await computerUse.step([{
+    action: 'paste_text',
+    windowId: '42',
+    observationId: pasteInputObservation.observationId,
+    coordinateSpace: 'normalized_1000',
+    x: 500,
+    y: 500,
+    text: '完整 pasted value',
+    replace: true,
+}], { settleMs: 0 });
+performed = proxyCalls.filter(call => call.method === 'PerformAction').at(-1);
+const atomicPasteRequest = JSON.parse(performed.parameters[0]);
+if (atomicPasteRequest.action !== 'paste_text'
+    || atomicPasteRequest.x !== 50
+    || atomicPasteRequest.y !== 30
+    || atomicPasteRequest.text !== '完整 pasted value'
+    || atomicPasteRequest.replace !== true
+    || atomicPasteInputStep.results.length !== 1
+    || atomicPasteInputStep.verification.inputVerified !== null) {
+    throw new Error(`Atomic clipboard paste was not dispatched safely: ${JSON.stringify(atomicPasteInputStep)}`);
 }
 
 let incompleteServiceTargetRejected = false;
