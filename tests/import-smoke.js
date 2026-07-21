@@ -88,14 +88,7 @@ if (typeof CuscoApplication !== 'function')
     throw new Error('CuscoApplication did not import as a class');
 
 const fakeWindow = {
-    // GJS exposes this property on the instance, shadowing GTK's method name.
     is_active: true,
-    get_property(name) {
-        if (name !== 'is-active')
-            throw new Error(`Unexpected window property: ${name}`);
-
-        return this.is_active;
-    },
 };
 
 if (shouldSendLongResponseNotification(fakeWindow))

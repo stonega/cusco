@@ -425,7 +425,7 @@ function getProviderErrorMessage(error) {
 }
 
 export function shouldSendLongResponseNotification(window) {
-    return !Boolean(window.get_property('is-active'));
+    return !Boolean(window.is_active);
 }
 
 export function composerHintPresentation(sendWithEnter, isBusy, computerUseActive) {
