@@ -116,8 +116,10 @@ Behind the scenes the agent follows this tool workflow:
 3. `computer_observe_region` enlarges a selected part of the latest screenshot
    when a target is small or an earlier visual click did not change the screen.
 4. `computer_step` performs one or more safe actions and returns the updated
-   screenshot in the same tool call. It also reports unchanged screens so the
-   agent can stop retrying a missed target.
+   screenshot in the same tool call. When a click opens a small popup or other
+   localized surface, the returned model image is automatically enlarged so
+   its options are easier to target. It also reports unchanged screens and
+   repeated open/close cycles so the agent can stop retrying a missed target.
 5. `computer_act` creates and switches workspaces, launches through global
    keyboard input, and performs individual actions that do not need an
    immediate screenshot.
@@ -152,6 +154,15 @@ Cusco maps the point back to the full window automatically. After two visual
 actions leave the screen meaningfully unchanged, further full-window
 coordinate targeting is blocked until the agent changes strategy. Small
 cursor or caret changes are ignored by this check.
+
+After a click, Cusco also measures where meaningful pixels changed. If the
+change is compact and anchored near the click, it keeps the full clean
+screenshot as the verification root but sends one enlarged crop to the model.
+The returned observation ID belongs to that crop, so the next click uses its
+local `0`–`1000` coordinates. Cusco does not send both full and enlarged model
+images. If the UI alternates through the same two visual states, such as a
+popup repeatedly opening and closing, full-window retries are blocked and the
+agent must use the current crop or a different strategy.
 
 An arbitrary explicit `click` cannot be batched with later text input or key
 presses. When accessibility is unavailable, the agent can instead send one

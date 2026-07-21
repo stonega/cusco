@@ -360,6 +360,13 @@ function lineToPangoMarkup(line) {
         return `<span weight="bold" size="${headingSize(level)}"${lineHeightAttribute}>${inlineMarkdownToPangoMarkup(headingText(heading[2]))}</span>`;
     }
 
+    const task = line.match(/^(\s*)[-*+]\s+\[([ xX])\](?:\s+(.*))?$/);
+
+    if (task) {
+        const marker = task[2].toLowerCase() === 'x' ? '☑' : '☐';
+        return `${escapeMarkup(task[1])}${marker} ${inlineMarkdownToPangoMarkup(task[3] ?? '')}`;
+    }
+
     const bullet = line.match(/^\s*[-*]\s+(.+)$/);
 
     if (bullet)

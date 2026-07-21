@@ -802,6 +802,50 @@ assertEqual(reconnectStatuses[0], 'Reconnecting 1/5\u2026', 'First network recon
 assertEqual(reconnectStatuses[4], 'Reconnecting 5/5\u2026', 'Final network reconnect status');
 assertEqual(reconnectedText, 'Recovered', 'Network reconnect response');
 
+class InterruptedResponseProvider extends ContinuingProvider {
+    constructor() {
+        super([]);
+        this.interrupted = false;
+    }
+
+    async _complete(messagesForRequest, _modelId, _options = {}) {
+        this.calls.push(messagesForRequest);
+
+        if (!this.interrupted) {
+            this.interrupted = true;
+            const error = new GLib.Error(
+                Gio.tls_error_quark(),
+                Gio.TlsError.HANDSHAKE,
+                'Peer failed to perform TLS handshake: The TLS connection was non-properly terminated.',
+            );
+            error.providerResponseStarted = true;
+            throw error;
+        }
+
+        return { text: 'Recovered after interruption', finishReason: 'stop' };
+    }
+}
+
+const interruptedResponseProvider = new InterruptedResponseProvider();
+const interruptedResponseStatuses = [];
+let interruptedResponseText = '';
+
+for await (const chunk of interruptedResponseProvider.streamChat([createMessage('user', 'Retry this interrupted request')])) {
+    if (chunk?.type === 'status')
+        interruptedResponseStatuses.push(chunk.text);
+    else if (typeof chunk === 'string')
+        interruptedResponseText += chunk;
+}
+
+assertEqual(interruptedResponseProvider.calls.length, 2, 'Interrupted response replay count');
+assertEqual(interruptedResponseStatuses.length, 1, 'Interrupted response retry status count');
+assertEqual(
+    interruptedResponseStatuses[0],
+    'Connection interrupted. Retrying 1/5\u2026',
+    'Interrupted response retry status',
+);
+assertEqual(interruptedResponseText, 'Recovered after interruption', 'Interrupted response recovery text');
+
 const toolCallingProvider = new ContinuingProvider([
     {
         toolCalls: [{

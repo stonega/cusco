@@ -73,7 +73,12 @@ const meaningfulChange = compareVisualSignatures(
 );
 if (cursorOnlyChange.changed !== false
     || meaningfulChange.changed !== true
-    || meaningfulChange.changedPixels <= meaningfulChange.thresholdPixels) {
+    || meaningfulChange.changedPixels <= meaningfulChange.thresholdPixels
+    || !meaningfulChange.changedBounds
+    || meaningfulChange.changedBounds.x > 75
+    || meaningfulChange.changedBounds.y > 125
+    || meaningfulChange.changedBounds.x + meaningfulChange.changedBounds.width < 225
+    || meaningfulChange.changedBounds.y + meaningfulChange.changedBounds.height < 275) {
     throw new Error(`Visual change filtering was incorrect: ${JSON.stringify({ cursorOnlyChange, meaningfulChange })}`);
 }
 

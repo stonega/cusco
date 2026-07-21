@@ -78,7 +78,9 @@ an `UnknownMethod` or “Object does not exist” error even while
 
 Payloads are JSON strings inside typed D-Bus parameters. App and extension
 both require protocol version `6`; a version mismatch is shown in settings
-instead of allowing actions against an incompatible bridge.
+instead of allowing actions against an incompatible bridge. The version covers
+the method set and input semantics, so either kind of compatibility change must
+bump both sides even when the JSON shape itself is unchanged.
 
 ## Registration and trust boundary
 
@@ -165,6 +167,16 @@ AT-SPI elements with reliable bounds are filtered to the crop and remapped to
 the local coordinate space. The workflow contains no application-specific
 browser, toolkit, or DOM integration.
 
+The same region pipeline is also used automatically after a coordinate click.
+Visual-signature comparison returns the normalized bounds of meaningful pixel
+changes. When those bounds are compact, near the click, and extend far enough
+to represent more than a focus outline, `computer_step` expands the bounds
+with context padding and returns a `localized_change_region`. The full clean
+observation remains registered as the root for stale-state checks and exact
+mapping, but only the enlarged region is attached to the next model turn. The
+result exposes `autoZoom.applied`, the root change bounds, trigger point, and
+effective region.
+
 ### 4. Step
 
 `computer_step` is the preferred window-control tool. It accepts up to eight
@@ -201,6 +213,14 @@ fallback for a text field when AT-SPI is unavailable. After two meaningfully
 unchanged coordinate steps, full-window coordinate targeting is blocked. A
 region observation, semantic action, keyboard strategy, fresh explicit
 observation, or user help provides a deliberate recovery path.
+
+Per-window visual-state history also detects a repeating two-state cycle once
+the last four post-click states form `A → B → A → B`. This catches popup
+open/close loops that ordinary stall detection misses because every transition
+changes pixels. The result reports `visualStateCycleDetected`, cycle length
+`2`, and block reason `visual_state_cycle`. Full-window coordinate retries are
+blocked, while the automatically returned region remains usable so the agent
+can select from the current enlarged popup state.
 
 The passive stale-state check narrows but cannot eliminate runtime races after
 the check, such as a window closing or the Shell rejecting an action after

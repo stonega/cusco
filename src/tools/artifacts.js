@@ -88,6 +88,79 @@ function decodeArtifactInput(spec) {
     return decoded;
 }
 
+function artifactInputError(message) {
+    const error = new Error(message);
+    error.userMessage = message;
+    return error;
+}
+
+function artifactEntrypointContent(spec) {
+    if (Object.hasOwn(spec, 'content'))
+        return spec.content;
+
+    if (!spec.files || typeof spec.files !== 'object' || Array.isArray(spec.files))
+        return undefined;
+
+    const paths = Object.keys(spec.files).sort();
+    const entrypoint = String(spec.entrypoint ?? '').trim() || paths[0];
+    const file = spec.files[entrypoint];
+
+    if (file && typeof file === 'object' && !Array.isArray(file) && Object.hasOwn(file, 'content'))
+        return file.content;
+
+    return file;
+}
+
+function validateChartArtifactInput(spec) {
+    if (String(spec.kind ?? '').trim().toLowerCase() !== 'chart')
+        return;
+
+    const format = String(spec.format ?? '').trim().toLowerCase();
+
+    if (format && !['cusco-chart', 'json'].includes(format)) {
+        throw artifactInputError(
+            'Chart artifacts must use Cusco chart JSON, not HTML. Use kind "html" for HTML content.',
+        );
+    }
+
+    const content = artifactEntrypointContent(spec);
+
+    if (typeof content !== 'string') {
+        throw artifactInputError(
+            'Chart artifact content must be a JSON string with labels and series, or a data array.',
+        );
+    }
+
+    let chart;
+
+    try {
+        chart = JSON.parse(content);
+    } catch (_error) {
+        throw artifactInputError(
+            'Chart artifact content is not valid JSON. Do not use HTML, JavaScript, or Markdown code fences.',
+        );
+    }
+
+    if (!chart || typeof chart !== 'object' || Array.isArray(chart)) {
+        throw artifactInputError('Chart artifact content must be a JSON object.');
+    }
+
+    if (chart.type !== undefined && !['bar', 'line'].includes(chart.type))
+        throw artifactInputError('Chart artifact type must be "bar" or "line".');
+
+    const hasSimpleData = Array.isArray(chart.data) && chart.data.length > 0;
+    const hasSeriesData = Array.isArray(chart.labels)
+        && chart.labels.length > 0
+        && Array.isArray(chart.series)
+        && chart.series.some((series) => Array.isArray(series?.values) && series.values.length > 0);
+
+    if (!hasSimpleData && !hasSeriesData) {
+        throw artifactInputError(
+            'Chart JSON needs a non-empty data array, or non-empty labels and series values.',
+        );
+    }
+}
+
 function artifactSummary(artifact, revision) {
     return {
         artifactId: artifact.id,
@@ -132,7 +205,7 @@ export function createArtifactTools(artifactManager, options = {}) {
             name: 'artifact_create',
             label: 'Create artifact',
             description: 'Create a durable document, code, data, chart, diagram, image, HTML, PDF, or file artifact.',
-            inputDescription: 'JSON with title, kind, format, content or files, entrypoint, presentation, and optional base64 encoding.',
+            inputDescription: 'JSON with title, kind, format, content or files, entrypoint, presentation, and optional base64 encoding. Native charts require JSON such as {"type":"bar","labels":["Jan"],"series":[{"name":"Revenue","values":[10]}]}; use kind "html" for HTML/JavaScript.',
             inputSchema: {
                 type: 'object',
                 required: ['title', 'kind'],
@@ -141,10 +214,17 @@ export function createArtifactTools(artifactManager, options = {}) {
                     kind: {
                         type: 'string',
                         enum: ['document', 'code', 'data', 'chart', 'diagram', 'image', 'svg', 'html', 'pdf', 'file'],
+                        description: 'Artifact renderer type. Use chart only for native Cusco chart JSON; use html for HTML or JavaScript.',
                     },
-                    format: { type: 'string' },
+                    format: {
+                        type: 'string',
+                        description: 'Content format. Chart artifacts use cusco-chart or json, never html.',
+                    },
                     mimeType: { type: 'string' },
-                    content: { type: 'string' },
+                    content: {
+                        type: 'string',
+                        description: 'Artifact source. For kind chart, provide raw JSON without Markdown fences.',
+                    },
                     encoding: { type: 'string', enum: ['text', 'base64'] },
                     filename: { type: 'string' },
                     files: {
@@ -176,6 +256,7 @@ export function createArtifactTools(artifactManager, options = {}) {
             concurrencySafe: false,
             run(input) {
                 const spec = decodeArtifactInput(parseJsonInput(input, 'Create artifact'));
+                validateChartArtifactInput(spec);
                 const created = artifactManager.createArtifact({
                     ...spec,
                     capabilities: safeCapabilities(spec.capabilities),

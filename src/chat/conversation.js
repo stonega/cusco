@@ -198,6 +198,15 @@ export class ConversationManager {
         return message;
     }
 
+    updateMessageMetadata(conversationId, messageId, metadata, options = {}) {
+        const { conversation, message } = this._getMessageRecord(conversationId, messageId);
+
+        message.metadata = normalizeMetadata(metadata);
+        conversation.updatedAt = now();
+        this._persistMutation(options);
+        return message;
+    }
+
     truncateAfterMessage(conversationId, messageId, { includeMessage = false } = {}) {
         const { conversation, index } = this._getMessageRecord(conversationId, messageId);
         const deleteFrom = includeMessage ? index : index + 1;

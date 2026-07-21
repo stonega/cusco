@@ -65,6 +65,7 @@ export function compareVisualSignatures(before, after) {
             changedPixels: null,
             changeRatio: null,
             thresholdPixels: null,
+            changedBounds: null,
         };
     }
 
@@ -80,10 +81,15 @@ export function compareVisualSignatures(before, after) {
             changedPixels: totalPixels,
             changeRatio: 1,
             thresholdPixels,
+            changedBounds: null,
         };
     }
 
     let changedPixels = 0;
+    let minimumX = after.width;
+    let minimumY = after.height;
+    let maximumX = -1;
+    let maximumY = -1;
 
     for (let offset = 0; offset < after.pixels.length; offset += 3) {
         const redDelta = Math.abs(after.pixels[offset] - before.pixels[offset]);
@@ -92,15 +98,33 @@ export function compareVisualSignatures(before, after) {
 
         if (Math.max(redDelta, greenDelta, blueDelta) >= VISUAL_PIXEL_DELTA_THRESHOLD
             && redDelta + greenDelta + blueDelta >= VISUAL_PIXEL_TOTAL_DELTA_THRESHOLD) {
+            const pixelIndex = offset / 3;
+            const x = pixelIndex % after.width;
+            const y = Math.floor(pixelIndex / after.width);
+
             changedPixels += 1;
+            minimumX = Math.min(minimumX, x);
+            minimumY = Math.min(minimumY, y);
+            maximumX = Math.max(maximumX, x);
+            maximumY = Math.max(maximumY, y);
         }
     }
+
+    const changedBounds = changedPixels > 0
+        ? {
+            x: (minimumX / after.width) * NORMALIZED_COORDINATE_SIZE,
+            y: (minimumY / after.height) * NORMALIZED_COORDINATE_SIZE,
+            width: ((maximumX - minimumX + 1) / after.width) * NORMALIZED_COORDINATE_SIZE,
+            height: ((maximumY - minimumY + 1) / after.height) * NORMALIZED_COORDINATE_SIZE,
+        }
+        : null;
 
     return {
         changed: changedPixels >= thresholdPixels,
         changedPixels,
         changeRatio: changedPixels / totalPixels,
         thresholdPixels,
+        changedBounds,
     };
 }
 

@@ -102,6 +102,39 @@ try {
 
 assert(rejectedInvalidBase64, 'Create tool accepted invalid base64 content');
 
+let rejectedHtmlChart = false;
+
+try {
+    createTool.run(JSON.stringify({
+        title: 'Incorrect chart',
+        kind: 'chart',
+        format: 'html',
+        content: '<!doctype html><html><body><canvas></canvas></body></html>',
+    }));
+} catch (error) {
+    rejectedHtmlChart = error.userMessage?.includes('must use Cusco chart JSON');
+}
+
+assert(rejectedHtmlChart, 'Create tool accepted HTML content as a native chart');
+
+const chartResult = createTool.run(JSON.stringify({
+    title: 'Native chart',
+    kind: 'chart',
+    content: JSON.stringify({
+        type: 'line',
+        labels: ['Jan', 'Feb'],
+        series: [{ name: 'Revenue', values: [10, 12] }],
+    }),
+}));
+const chartReference = chartResult.artifacts[0];
+const chart = manager.resolveReference(chartReference);
+
+assert(chart?.artifact.kind === 'chart', 'Create tool rejected a valid native chart');
+assert(
+    JSON.parse(manager.readText(chartReference.artifactId, chartReference.revisionId)).series[0].values[1] === 12,
+    'Create tool changed valid native chart JSON',
+);
+
 const listResult = toolByName(tools, 'artifact_list').run('{}');
 assert(listResult.output.includes('Tool site'), 'List tool did not return the conversation artifact');
 

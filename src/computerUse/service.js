@@ -33,6 +33,13 @@ const MAX_SCREENSHOT_BYTES = 25 * 1024 * 1024;
 const MAX_MODEL_SCREENSHOT_DIMENSION = 1600;
 const MAX_STEP_SETTLE_MS = 2_000;
 const STALLED_STEP_THRESHOLD = 2;
+const VISUAL_STATE_HISTORY_LIMIT = 8;
+const AUTO_ZOOM_PADDING = 40;
+const AUTO_ZOOM_MINIMUM_SIZE = 160;
+const AUTO_ZOOM_MAXIMUM_DIMENSION = 700;
+const AUTO_ZOOM_MAXIMUM_AREA = 200_000;
+const AUTO_ZOOM_CLICK_PROXIMITY = 120;
+const AUTO_ZOOM_MINIMUM_EXTENSION = 55;
 const WORKSPACE_ACTIONS = new Set([
     'create_workspace',
     'move_to_workspace',
@@ -320,6 +327,158 @@ function elapsedMilliseconds(startedAt) {
     return Math.max(0, Math.round((GLib.get_monotonic_time() - startedAt) / 1000));
 }
 
+function observationVisualState(observation) {
+    if (!observation)
+        return null;
+
+    return {
+        fingerprint: observation.fingerprint ?? '',
+        visualSignature: observation.visualSignature ?? null,
+    };
+}
+
+function visualStatesMatch(first, second) {
+    if (!first || !second)
+        return false;
+
+    const comparison = compareVisualSignatures(
+        first.visualSignature,
+        second.visualSignature,
+    );
+
+    if (comparison.changed !== null)
+        return comparison.changed === false;
+
+    return Boolean(first.fingerprint)
+        && first.fingerprint === second.fingerprint;
+}
+
+function hasAlternatingVisualStateCycle(history) {
+    if (!Array.isArray(history) || history.length < 4)
+        return false;
+
+    const [first, second, third, fourth] = history.slice(-4);
+    return !visualStatesMatch(first, second)
+        && visualStatesMatch(first, third)
+        && visualStatesMatch(second, fourth);
+}
+
+function normalizedRootPoint(coordinates) {
+    if (coordinates?.coordinateSpace !== 'normalized_1000')
+        return null;
+
+    const requestedX = Number(coordinates.requested?.x);
+    const requestedY = Number(coordinates.requested?.y);
+    const view = coordinates.view?.normalized;
+
+    if (!Number.isFinite(requestedX)
+        || !Number.isFinite(requestedY)
+        || !view
+        || ![view.x, view.y, view.width, view.height].every(Number.isFinite)) {
+        return null;
+    }
+
+    return {
+        x: view.x + ((requestedX / NORMALIZED_COORDINATE_SIZE) * view.width),
+        y: view.y + ((requestedY / NORMALIZED_COORDINATE_SIZE) * view.height),
+    };
+}
+
+function expandedAxis(start, end, minimumSize) {
+    let nextStart = Math.max(0, start);
+    let nextEnd = Math.min(NORMALIZED_COORDINATE_SIZE, end);
+    const currentSize = nextEnd - nextStart;
+
+    if (currentSize < minimumSize) {
+        const center = (nextStart + nextEnd) / 2;
+        nextStart = center - (minimumSize / 2);
+        nextEnd = center + (minimumSize / 2);
+
+        if (nextStart < 0) {
+            nextEnd -= nextStart;
+            nextStart = 0;
+        }
+        if (nextEnd > NORMALIZED_COORDINATE_SIZE) {
+            nextStart -= nextEnd - NORMALIZED_COORDINATE_SIZE;
+            nextEnd = NORMALIZED_COORDINATE_SIZE;
+        }
+    }
+
+    return {
+        start: Math.max(0, nextStart),
+        end: Math.min(NORMALIZED_COORDINATE_SIZE, nextEnd),
+    };
+}
+
+function automaticZoomRegion(visualChange, actionResult) {
+    const bounds = visualChange?.changedBounds;
+    const point = normalizedRootPoint(actionResult?.coordinates);
+
+    if (visualChange?.changed !== true || !bounds || !point)
+        return null;
+
+    const left = Number(bounds.x);
+    const top = Number(bounds.y);
+    const right = left + Number(bounds.width);
+    const bottom = top + Number(bounds.height);
+
+    if (![left, top, right, bottom].every(Number.isFinite)
+        || right <= left || bottom <= top) {
+        return null;
+    }
+
+    const nearChange = point.x >= left - AUTO_ZOOM_CLICK_PROXIMITY
+        && point.x <= right + AUTO_ZOOM_CLICK_PROXIMITY
+        && point.y >= top - AUTO_ZOOM_CLICK_PROXIMITY
+        && point.y <= bottom + AUTO_ZOOM_CLICK_PROXIMITY;
+    const extensionFromClick = Math.max(
+        Math.abs(point.x - left),
+        Math.abs(point.x - right),
+        Math.abs(point.y - top),
+        Math.abs(point.y - bottom),
+    );
+
+    if (!nearChange || extensionFromClick < AUTO_ZOOM_MINIMUM_EXTENSION)
+        return null;
+
+    const horizontal = expandedAxis(
+        Math.min(left, point.x) - AUTO_ZOOM_PADDING,
+        Math.max(right, point.x) + AUTO_ZOOM_PADDING,
+        AUTO_ZOOM_MINIMUM_SIZE,
+    );
+    const vertical = expandedAxis(
+        Math.min(top, point.y) - AUTO_ZOOM_PADDING,
+        Math.max(bottom, point.y) + AUTO_ZOOM_PADDING,
+        AUTO_ZOOM_MINIMUM_SIZE,
+    );
+    const region = {
+        x: Math.floor(horizontal.start),
+        y: Math.floor(vertical.start),
+        width: Math.ceil(horizontal.end) - Math.floor(horizontal.start),
+        height: Math.ceil(vertical.end) - Math.floor(vertical.start),
+    };
+
+    if (region.width > AUTO_ZOOM_MAXIMUM_DIMENSION
+        || region.height > AUTO_ZOOM_MAXIMUM_DIMENSION
+        || region.width * region.height > AUTO_ZOOM_MAXIMUM_AREA) {
+        return null;
+    }
+
+    return {
+        region: normalizeRegion(region),
+        changedBounds: bounds,
+        triggerPoint: point,
+    };
+}
+
+function coordinateRetryBlockMessage(reason) {
+    if (reason === 'visual_state_cycle') {
+        return 'Coordinate targeting is blocked after the UI repeated an alternating visual-state cycle. Use an enlarged region from the current observation, accessibility, keyboard navigation, a fresh observation, or ask the user for help.';
+    }
+
+    return 'Coordinate targeting is blocked after repeated unchanged steps. Request a screenshot region, use accessibility or keyboard navigation, or ask the user for help.';
+}
+
 function matchingAccessibilityElement(elements, expectation) {
     const expectedName = String(expectation?.name ?? '').trim().toLowerCase();
     const expectedRole = String(expectation?.role ?? '').trim().toLowerCase();
@@ -426,6 +585,8 @@ export class ComputerUseService {
         this._unchangedStepCounts = new Map();
         this._unchangedCoordinateStepCounts = new Map();
         this._coordinateRetryBlocked = new Set();
+        this._coordinateRetryBlockReasons = new Map();
+        this._visualStateHistories = new Map();
         this._sessionDirectory = options.cacheDirectory ?? GLib.build_filenamev([
             GLib.get_user_cache_dir(),
             'io.github.stonega.Cusco',
@@ -815,6 +976,11 @@ export class ComputerUseService {
             this._unchangedStepCounts.set(normalizedWindowId, 0);
             this._unchangedCoordinateStepCounts.set(normalizedWindowId, 0);
             this._coordinateRetryBlocked.delete(normalizedWindowId);
+            this._coordinateRetryBlockReasons.delete(normalizedWindowId);
+            this._visualStateHistories.set(
+                normalizedWindowId,
+                [observationVisualState(observation)],
+            );
         }
         return {
             observation,
@@ -871,7 +1037,7 @@ export class ComputerUseService {
         return this._observationFromCapture(captured, options).payload;
     }
 
-    async observeRegion(windowId, observationId, region) {
+    async observeRegion(windowId, observationId, region, options = {}) {
         this._requireEnabled();
         if (!this._settings?.computerUseCaptureEnabled)
             throw createUserError('Screen capture is disabled in Settings → Workspace.');
@@ -947,7 +1113,7 @@ export class ComputerUseService {
             mimeType: root.mimeType,
             accessibility: accessibilityForRegion(root.accessibility, effectiveRegion),
             capture: {
-                source: 'observation_region',
+                source: options.source ?? 'observation_region',
                 rootWidth: root.imageWidth,
                 rootHeight: root.imageHeight,
                 sourcePixels: image.sourcePixels,
@@ -959,12 +1125,20 @@ export class ComputerUseService {
                 normalized: effectiveRegion,
                 requested: requestedRegion,
                 requestedInRoot: rootRegion,
+                ...(options.autoZoom ? { autoZoom: options.autoZoom } : {}),
             },
         };
 
         this._observationViews.set(viewId, view);
-        this._unchangedCoordinateStepCounts.set(normalizedWindowId, 0);
-        this._coordinateRetryBlocked.delete(normalizedWindowId);
+        if (options.unlockCoordinateRetry !== false) {
+            this._unchangedCoordinateStepCounts.set(normalizedWindowId, 0);
+            this._coordinateRetryBlocked.delete(normalizedWindowId);
+            this._coordinateRetryBlockReasons.delete(normalizedWindowId);
+            this._visualStateHistories.set(
+                normalizedWindowId,
+                [observationVisualState(root)],
+            );
+        }
         return this._observationPayload(view);
     }
 
@@ -1064,7 +1238,9 @@ export class ComputerUseService {
             if (this._coordinateRetryBlocked.has(actionWindowId)
                 && observation.view?.type !== 'region') {
                 throw createUserError(
-                    'Coordinate targeting is blocked after repeated unchanged steps. Request a screenshot region, use accessibility or keyboard navigation, or ask the user for help.',
+                    coordinateRetryBlockMessage(
+                        this._coordinateRetryBlockReasons.get(actionWindowId),
+                    ),
                 );
             }
 
@@ -1109,7 +1285,9 @@ export class ComputerUseService {
             && this._coordinateRetryBlocked.has(windowId)
             && actionObservation?.view?.type !== 'region') {
             throw createUserError(
-                'Coordinate targeting is blocked after repeated unchanged steps. Request a screenshot region, use accessibility or keyboard navigation, or ask the user for help.',
+                coordinateRetryBlockMessage(
+                    this._coordinateRetryBlockReasons.get(windowId),
+                ),
             );
         }
 
@@ -1285,7 +1463,6 @@ export class ComputerUseService {
         if (failure && observationError && failure.phase === 'action')
             failure.observationError = observationError;
 
-        const observationMilliseconds = elapsedMilliseconds(observationStartedAt);
         const currentObservation = observation
             ? this._observations.get(windowId) ?? null
             : null;
@@ -1328,6 +1505,15 @@ export class ComputerUseService {
         const attemptedCoordinateAction = actionList
             .slice(0, attemptedActionCount)
             .some(hasComputerUseCoordinates);
+        let lastPointerResult = null;
+
+        for (let index = 0; index < results.length; index++) {
+            if (actionList[index]?.action === 'click'
+                || actionList[index]?.action === 'double_click') {
+                lastPointerResult = results[index];
+            }
+        }
+        let visualStateCycleDetected = false;
 
         if (!failure && observation) {
             unchangedCount = screenChanged === false && semanticActionsVerified !== true
@@ -1342,13 +1528,85 @@ export class ComputerUseService {
                 coordinateMissCount = 0;
             }
 
+            if (lastPointerResult && currentObservation) {
+                const history = [
+                    ...(this._visualStateHistories.get(windowId) ?? []),
+                ];
+
+                if (history.length === 0 && previousObservation) {
+                    history.push(observationVisualState(previousObservation));
+                }
+                history.push(observationVisualState(currentObservation));
+                while (history.length > VISUAL_STATE_HISTORY_LIMIT)
+                    history.shift();
+
+                visualStateCycleDetected = hasAlternatingVisualStateCycle(history);
+                this._visualStateHistories.set(windowId, history);
+            } else if (currentObservation && screenChanged === true) {
+                this._visualStateHistories.set(
+                    windowId,
+                    [observationVisualState(currentObservation)],
+                );
+            }
+
             this._unchangedStepCounts.set(windowId, unchangedCount);
             this._unchangedCoordinateStepCounts.set(windowId, coordinateMissCount);
-            if (coordinateMissCount >= STALLED_STEP_THRESHOLD)
+            if (visualStateCycleDetected) {
                 this._coordinateRetryBlocked.add(windowId);
-            else if (coordinateMissCount === 0)
+                this._coordinateRetryBlockReasons.set(windowId, 'visual_state_cycle');
+            } else if (coordinateMissCount >= STALLED_STEP_THRESHOLD) {
+                this._coordinateRetryBlocked.add(windowId);
+                this._coordinateRetryBlockReasons.set(windowId, 'unchanged_steps');
+            } else if (coordinateMissCount === 0) {
                 this._coordinateRetryBlocked.delete(windowId);
+                this._coordinateRetryBlockReasons.delete(windowId);
+            }
         }
+
+        let autoZoom = null;
+
+        if (!failure
+            && observation
+            && currentObservation
+            && lastPointerResult
+            && expectations.length === 0) {
+            const zoom = automaticZoomRegion(visualChange, lastPointerResult);
+
+            if (zoom) {
+                try {
+                    const rootObservationId = currentObservation.observationId;
+                    const zoomMetadata = {
+                        reason: 'localized_post_click_change',
+                        changedBounds: zoom.changedBounds,
+                        triggerPoint: zoom.triggerPoint,
+                    };
+                    observation = await this.observeRegion(
+                        windowId,
+                        rootObservationId,
+                        zoom.region,
+                        {
+                            source: 'localized_change_region',
+                            unlockCoordinateRetry: false,
+                            autoZoom: zoomMetadata,
+                        },
+                    );
+                    autoZoom = {
+                        applied: true,
+                        ...zoomMetadata,
+                        observationId: observation.observationId,
+                        rootObservationId,
+                        region: observation.view?.normalized ?? zoom.region,
+                    };
+                } catch (error) {
+                    logRecoverableComputerUseError(
+                        error,
+                        'Failed to enlarge a localized post-click change',
+                    );
+                }
+            }
+        }
+
+        const observationMilliseconds = elapsedMilliseconds(observationStartedAt);
 
         return {
             failed: Boolean(failure),
@@ -1359,6 +1617,7 @@ export class ComputerUseService {
             performed: results.map(result => result.performed ?? 'unknown'),
             results,
             observation,
+            autoZoom,
             verification: {
                 screenChanged,
                 visualChange,
@@ -1367,6 +1626,9 @@ export class ComputerUseService {
                 stalled: unchangedCount >= STALLED_STEP_THRESHOLD,
                 coordinateMissCount,
                 coordinateRetryBlocked: this._coordinateRetryBlocked.has(windowId),
+                coordinateRetryBlockReason: this._coordinateRetryBlockReasons.get(windowId) ?? null,
+                visualStateCycleDetected,
+                visualStateCycleLength: visualStateCycleDetected ? 2 : null,
                 semanticActionsVerified,
                 inputVerified,
                 preAction: preActionVerification,
@@ -1447,6 +1709,8 @@ export class ComputerUseService {
         this._unchangedStepCounts.clear();
         this._unchangedCoordinateStepCounts.clear();
         this._coordinateRetryBlocked.clear();
+        this._coordinateRetryBlockReasons.clear();
+        this._visualStateHistories.clear();
         this._accessibility?.shutdown?.();
 
         try {

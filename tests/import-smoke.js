@@ -60,9 +60,13 @@ import { exportConversation } from '../src/workspace/exports.js';
 import { extractPromptVariables, renderPromptTemplate } from '../src/workspace/promptVariables.js';
 import { WorkspaceManager } from '../src/workspace/workspace.js';
 import {
+    buildShimmerMarkup,
     composerHintPresentation,
     formatConversationUpdatedAt,
+    formatRunningTime,
+    messageRunDurationLabel,
     normalizeConversationMessageStartIndex,
+    shouldAutoSendQueuedMessages,
     shouldSendLongResponseNotification,
 } from '../src/window.js';
 
@@ -108,6 +112,41 @@ if (!computerUseHint.markup?.includes('foreground="#42e6f5"')
 const normalBusyHint = composerHintPresentation(true, true, false);
 if (normalBusyHint.label !== 'Enter queues · Esc to stop' || normalBusyHint.markup)
     throw new Error('Normal busy composer hint changed unexpectedly');
+
+if (!shouldAutoSendQueuedMessages()
+    || !shouldAutoSendQueuedMessages({
+        cancelled: true,
+        stoppedBeforeAssistantText: true,
+    })
+    || shouldAutoSendQueuedMessages({
+        cancelled: true,
+        stoppedBeforeAssistantText: false,
+    })) {
+    throw new Error('Queued-message continuation changed unexpectedly');
+}
+
+const [, queuedIconBytes] = GLib.file_get_contents('data/resources/queued-symbolic.svg');
+const queuedIcon = new TextDecoder().decode(queuedIconBytes);
+if (!queuedIcon.includes('fill="currentColor"') || queuedIcon.includes('fill="#000000"'))
+    throw new Error('Queued-message icon is not theme-aware');
+
+if (formatRunningTime(0) !== '0s'
+    || formatRunningTime(65) !== '1m 05s'
+    || formatRunningTime(3725) !== '1h 02m 05s') {
+    throw new Error('Agent running time formatting changed unexpectedly');
+}
+
+if (messageRunDurationLabel({ metadata: { agentRunDurationMs: 65000 } }) !== '1m 05s'
+    || messageRunDurationLabel({ metadata: {} }) !== '') {
+    throw new Error('Completed Agent run duration presentation changed unexpectedly');
+}
+
+const shimmerMarkup = buildShimmerMarkup('Working <now>', 4);
+if (!shimmerMarkup.includes('alpha="100%"')
+    || !shimmerMarkup.includes('&lt;')
+    || shimmerMarkup.includes('<now>')) {
+    throw new Error('Activity shimmer markup was not safe or did not contain a highlight');
+}
 
 const timestampNow = '2026-07-17T12:00:00+08:00';
 

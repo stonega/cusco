@@ -101,9 +101,20 @@ const RETRYABLE_NETWORK_IO_ERRORS = [
     Gio.IOErrorEnum.PROXY_FAILED,
 ];
 
+const RETRYABLE_INTERRUPTED_RESPONSE_IO_ERRORS = [
+    Gio.IOErrorEnum.CONNECTION_CLOSED,
+    Gio.IOErrorEnum.NOT_CONNECTED,
+    Gio.IOErrorEnum.BROKEN_PIPE,
+];
+
 export function isNetworkError(error) {
     return isTransientTlsError(error)
         || RETRYABLE_NETWORK_IO_ERRORS.some((code) => isGioError(error, code));
+}
+
+function isRetryableInterruptedResponse(error) {
+    return isTransientTlsError(error)
+        || RETRYABLE_INTERRUPTED_RESPONSE_IO_ERRORS.some((code) => isGioError(error, code));
 }
 
 function isCancelled(cancellable) {
@@ -2082,18 +2093,26 @@ class RemoteProvider extends ChatProvider {
                     ));
                     break;
                 } catch (error) {
+                    // send_and_read_async does not expose response bytes until the
+                    // complete JSON body is available. A dropped TLS connection can
+                    // therefore be replayed safely even after headers were received.
+                    const canReplayInterruptedResponse = !error?.providerResponseStarted
+                        || isRetryableInterruptedResponse(error);
                     const shouldReconnect = reconnectAttempt < MAX_NETWORK_RECONNECTS
                         && !isCancelled(options.cancellable)
-                        && !error?.providerResponseStarted
+                        && canReplayInterruptedResponse
                         && isNetworkError(error);
 
                     if (!shouldReconnect)
                         throw error;
 
                     reconnectAttempt++;
+                    const statusPrefix = error?.providerResponseStarted
+                        ? 'Connection interrupted. Retrying'
+                        : 'Reconnecting';
                     yield {
                         type: 'status',
-                        text: `Reconnecting ${reconnectAttempt}/${MAX_NETWORK_RECONNECTS}\u2026`,
+                        text: `${statusPrefix} ${reconnectAttempt}/${MAX_NETWORK_RECONNECTS}\u2026`,
                         status: 'reconnecting',
                         attempt: reconnectAttempt,
                         maxAttempts: MAX_NETWORK_RECONNECTS,

@@ -71,6 +71,18 @@ if (!markdownToPangoMarkup('### Title').includes('line_height="1.12"'))
 if (markdownToPangoMarkup('#### Title').includes('line_height='))
     throw new Error('H4 markdown heading unexpectedly received compact line height');
 
+const taskListMarkup = markdownToPangoMarkup([
+    '- [ ] Pending task',
+    '- [x] Completed task',
+    '* [X] Completed uppercase task',
+].join('\n'));
+
+if (!taskListMarkup.includes('☐ Pending task')
+    || !taskListMarkup.includes('☑ Completed task')
+    || !taskListMarkup.includes('☑ Completed uppercase task')) {
+    throw new Error(`Markdown task list markers were not rendered: ${taskListMarkup}`);
+}
+
 const closedHeadingMarkup = markdownToPangoMarkup('# 👋 #');
 
 if (!closedHeadingMarkup.includes('👋') || closedHeadingMarkup.includes('#'))

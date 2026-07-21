@@ -301,7 +301,8 @@ if (!['create_workspace', 'move_to_workspace', 'maximize'].every(actionName => (
 if (!byName.get('computer_step').description.includes('replace:true')
     || !byName.get('computer_step').description.includes('Prefer paste_text for non-sensitive text')
     || !byName.get('computer_step').description.includes('normalized')
-    || !byName.get('computer_step').description.includes('computer_observe_region')) {
+    || !byName.get('computer_step').description.includes('computer_observe_region')
+    || !byName.get('computer_step').description.includes('automatically enlarged region')) {
     throw new Error('Computer step did not describe safe visual targeting');
 }
 
@@ -566,12 +567,49 @@ function solidPng(red, green, blue) {
     return bytes;
 }
 
+function popupPng(open) {
+    const path = GLib.build_filenamev([
+        GLib.get_tmp_dir(),
+        `cusco-computer-use-popup-${GLib.uuid_string_random()}.png`,
+    ]);
+    const surface = new Cairo.ImageSurface(Cairo.Format.RGB24, 400, 200);
+    const context = new Cairo.Context(surface);
+    context.setSourceRGB(0.03, 0.035, 0.04);
+    context.paint();
+    context.setSourceRGB(0.09, 0.1, 0.12);
+    context.rectangle(120, 35, 160, 100);
+    context.fill();
+    context.setSourceRGB(0.22, 0.24, 0.28);
+    context.rectangle(220, 65, 40, 24);
+    context.fill();
+
+    if (open) {
+        context.setSourceRGB(0.06, 0.07, 0.085);
+        context.rectangle(210, 89, 60, 80);
+        context.fill();
+        context.setSourceRGB(0.78, 0.8, 0.84);
+        for (const [x, y] of [[216, 98], [246, 98], [216, 132], [246, 132]]) {
+            context.rectangle(x, y, 18, 20);
+            context.fill();
+        }
+    }
+
+    surface.writeToPNG(path);
+    context.$dispose();
+    surface.finish();
+    const [, bytes] = GLib.file_get_contents(path);
+    GLib.unlink(path);
+    return bytes;
+}
+
 const png = solidPng(0.08, 0.09, 0.1);
 let changedPng = null;
 const proxyCalls = [];
 let registerProtocolVersion = COMPUTER_USE_PROTOCOL_VERSION;
 let staleRegistration = true;
 let performActionFailure = null;
+let performActionEffect = null;
+let capturePng = png;
 let passivePng = png;
 let passiveFocused = true;
 const fakeProxy = {
@@ -604,6 +642,9 @@ const fakeProxy = {
         if (actionFailure)
             throw new Error(actionFailure);
 
+        if (performedRequest)
+            performActionEffect?.(performedRequest);
+
         const performedCoordinates = performedRequest && Number.isFinite(performedRequest.x)
             ? {
                 window: { x: performedRequest.x, y: performedRequest.y },
@@ -620,7 +661,7 @@ const fakeProxy = {
         const payloads = {
             Register: { protocolVersion: registerProtocolVersion, registered: true },
             ListDesktop: { workspaces: [], windows: [] },
-            CaptureWindow: capturePayload(png),
+            CaptureWindow: capturePayload(capturePng),
             CaptureWindowPassive: capturePayload(passivePng, passiveFocused),
             PerformAction: {
                 performed: performedRequest?.action ?? 'click',
@@ -1147,6 +1188,103 @@ if (!partialToolResult.failed
         `Computer-use partial failure was not recoverable: ${JSON.stringify(partialToolResult)}`,
     );
 }
+
+const popupClosedPng = popupPng(false);
+const popupOpenPng = popupPng(true);
+let popupOpen = false;
+capturePng = popupClosedPng;
+passivePng = popupClosedPng;
+const popupClosedObservation = await computerUse.observe('42');
+performActionEffect = (request) => {
+    if (request.action !== 'click')
+        return;
+
+    popupOpen = !popupOpen;
+    capturePng = popupOpen ? popupOpenPng : popupClosedPng;
+    passivePng = capturePng;
+};
+
+const popupOpenedStep = await realTools.get('computer_step').run(JSON.stringify({
+    windowId: '42',
+    observationId: popupClosedObservation.observationId,
+    actions: [{ action: 'click', x: 600, y: 400 }],
+    settleMs: 0,
+}));
+if (!popupOpenedStep.autoZoom?.applied
+    || popupOpenedStep.view?.type !== 'region'
+    || popupOpenedStep.capture?.source !== 'localized_change_region'
+    || popupOpenedStep.observationId === popupOpenedStep.rootObservationId
+    || popupOpenedStep.verification.visualStateCycleDetected
+    || !popupOpenedStep.output.includes('automatically enlarged crop')
+    || !popupOpenedStep.output.includes('Coordinates are local')) {
+    throw new Error(
+        `A localized popup change was not enlarged automatically: ${JSON.stringify(popupOpenedStep)}`,
+    );
+}
+
+const popupClosedAgainStep = await realTools.get('computer_step').run(JSON.stringify({
+    windowId: '42',
+    observationId: popupOpenedStep.observationId,
+    actions: [{ action: 'click', x: 500, y: 500 }],
+    settleMs: 0,
+}));
+const popupReopenedStep = await realTools.get('computer_step').run(JSON.stringify({
+    windowId: '42',
+    observationId: popupClosedAgainStep.observationId,
+    actions: [{ action: 'click', x: 500, y: 500 }],
+    settleMs: 0,
+}));
+if (!popupReopenedStep.autoZoom?.applied
+    || !popupReopenedStep.verification.visualStateCycleDetected
+    || popupReopenedStep.verification.visualStateCycleLength !== 2
+    || !popupReopenedStep.verification.coordinateRetryBlocked
+    || popupReopenedStep.verification.coordinateRetryBlockReason !== 'visual_state_cycle'
+    || !popupReopenedStep.output.includes('alternating visual-state cycle')
+    || !popupReopenedStep.output.includes('do not click the popup trigger again')) {
+    throw new Error(
+        `An alternating popup loop was not stopped: ${JSON.stringify(popupReopenedStep)}`,
+    );
+}
+
+let popupCycleFullRetryRejected = false;
+try {
+    await computerUse.step([{
+        action: 'click',
+        windowId: '42',
+        observationId: popupReopenedStep.rootObservationId,
+        coordinateSpace: 'normalized_1000',
+        x: 600,
+        y: 400,
+    }], { settleMs: 0 });
+} catch (error) {
+    popupCycleFullRetryRejected = error.userMessage?.includes(
+        'alternating visual-state cycle',
+    );
+}
+if (!popupCycleFullRetryRejected)
+    throw new Error('An alternating popup loop did not block another full-window click');
+
+const popupCycleRegionActionCount = proxyCalls
+    .filter(call => call.method === 'PerformAction').length;
+const popupCycleRegionStep = await computerUse.step([{
+    action: 'click',
+    windowId: '42',
+    observationId: popupReopenedStep.observationId,
+    coordinateSpace: 'normalized_1000',
+    x: 500,
+    y: 500,
+}], { settleMs: 0 });
+if (popupCycleRegionStep.failed
+    || popupCycleRegionStep.completedActionCount !== 1
+    || proxyCalls.filter(call => call.method === 'PerformAction').length
+        !== popupCycleRegionActionCount + 1) {
+    throw new Error('The current enlarged popup region was blocked with full-window retries');
+}
+
+performActionEffect = null;
+capturePng = png;
+passivePng = png;
+recaptured = await computerUse.observe('42');
 
 function assertBalancedStateTransitions(states, label) {
     if (states.length % 2 !== 0)

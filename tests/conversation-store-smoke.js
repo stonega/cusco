@@ -57,6 +57,9 @@ const assistantMessage = createMessage('assistant', 'Stored answer', {
     },
 });
 conversations.appendMessage(chat.id, assistantMessage);
+conversations.updateMessageMetadata(chat.id, assistantMessage.id, {
+    agentRunDurationMs: 65000,
+});
 conversations.appendMessage(chat.id, createMessage('system', 'Calculator result', {
     toolCall: {
         name: 'calc',
@@ -138,6 +141,9 @@ if (reloadedChat.messages[3].reasoning?.agentMode !== true)
 
 if (reloadedChat.messages[1].usage?.reasoningTokens !== 4)
     throw new Error('Persisted usage metadata was not loaded');
+
+if (reloadedChat.messages[1].metadata?.agentRunDurationMs !== 65000)
+    throw new Error('Persisted Agent run duration metadata was not loaded');
 
 if (reloadedChat.thinkingLevel !== 'high')
     throw new Error(`Persisted thinking level was not loaded: ${reloadedChat.thinkingLevel}`);

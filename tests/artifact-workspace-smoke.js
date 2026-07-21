@@ -45,6 +45,48 @@ if (Gtk.init_check()) {
     if (!chartView)
         throw new Error('Typed chart artifact did not produce an inline view');
 
+    const markdownDocument = manager.createArtifact({
+        title: 'Markdown document',
+        kind: 'document',
+        format: 'markdown',
+        content: [
+            '| Task | Owner |',
+            '| --- | --- |',
+            '| Preview tables | Cusco |',
+            '',
+            '- [ ] Pending task',
+            '- [x] Completed task',
+        ].join('\n'),
+        filename: 'document.md',
+        entrypoint: 'document.md',
+        preferredPresentation: 'inline',
+    }, {
+        originConversationId: 'conversation-1',
+    });
+    const markdownView = registry.createInlineView(markdownDocument.reference);
+    const descendantWidgets = (widget) => {
+        const widgets = [widget];
+
+        for (let child = widget.get_first_child?.(); child; child = child.get_next_sibling())
+            widgets.push(...descendantWidgets(child));
+
+        return widgets;
+    };
+    const markdownWidgets = descendantWidgets(markdownView);
+
+    if (!markdownWidgets.some((widget) => widget.has_css_class?.('cusco-markdown-table')))
+        throw new Error('Markdown artifact preview did not render its table');
+
+    const markdownPreviewText = markdownWidgets
+        .filter((widget) => widget instanceof Gtk.Label)
+        .map((label) => label.get_text())
+        .join('\n');
+
+    if (!markdownPreviewText.includes('☐ Pending task')
+        || !markdownPreviewText.includes('☑ Completed task')) {
+        throw new Error(`Markdown artifact preview did not render task markers: ${markdownPreviewText}`);
+    }
+
     const workspace = createArtifactWorkspace({
         artifactManager: manager,
         artifactRegistry: registry,

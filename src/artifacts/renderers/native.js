@@ -3,7 +3,11 @@ import GLib from 'gi://GLib?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
 import GtkSource from 'gi://GtkSource?version=5';
 
-import { markdownToPangoMarkup } from '../../chat/markdown.js';
+import {
+    inlineMarkdownToPangoMarkup,
+    markdownToPangoMarkup,
+    parseMarkdownBlocks,
+} from '../../chat/markdown.js';
 
 const INLINE_PREVIEW_HEIGHT = 260;
 const SOURCE_LANGUAGE_ALIASES = {
@@ -155,6 +159,134 @@ export class NativeSourceArtifactRenderer {
     }
 }
 
+function markdownTableXalign(alignment) {
+    if (alignment === 'center')
+        return 0.5;
+
+    if (alignment === 'right')
+        return 1;
+
+    return 0;
+}
+
+function createMarkdownDocumentLabel(content) {
+    const label = new Gtk.Label({
+        selectable: true,
+        wrap: true,
+        xalign: 0,
+        yalign: 0,
+        hexpand: true,
+    });
+    label.set_use_markup(true);
+    label.set_markup(markdownToPangoMarkup(content) || ' ');
+    label.add_css_class('cusco-message-markdown');
+    return label;
+}
+
+function createMarkdownDocumentTableCell(content, options = {}) {
+    const columnCount = Math.max(1, options.columnCount ?? 1);
+    const label = new Gtk.Label({
+        selectable: true,
+        wrap: true,
+        xalign: markdownTableXalign(options.alignment),
+        yalign: 0,
+        hexpand: true,
+        max_width_chars: Math.max(12, Math.min(36, Math.floor(82 / columnCount) + 8)),
+    });
+    const markup = inlineMarkdownToPangoMarkup(content) || ' ';
+
+    label.set_use_markup(true);
+    label.set_markup(options.header ? `<b>${markup}</b>` : markup);
+    label.add_css_class('cusco-table-cell');
+
+    if (options.header)
+        label.add_css_class('cusco-table-header-cell');
+
+    return label;
+}
+
+function createMarkdownDocumentTable(block) {
+    const columnCount = block.headers.length;
+    const grid = new Gtk.Grid({
+        column_spacing: 0,
+        row_spacing: 0,
+        hexpand: true,
+        accessible_role: Gtk.AccessibleRole.TABLE,
+    });
+    grid.add_css_class('cusco-markdown-table');
+
+    block.headers.forEach((header, column) => {
+        grid.attach(createMarkdownDocumentTableCell(header, {
+            alignment: block.alignments[column],
+            columnCount,
+            header: true,
+        }), column, 0, 1, 1);
+    });
+
+    block.rows.forEach((row, rowIndex) => {
+        row.forEach((cell, column) => {
+            grid.attach(createMarkdownDocumentTableCell(cell, {
+                alignment: block.alignments[column],
+                columnCount,
+            }), column, rowIndex + 1, 1, 1);
+        });
+    });
+
+    return grid;
+}
+
+function createMarkdownDocumentDivider() {
+    const separator = new Gtk.Separator({
+        orientation: Gtk.Orientation.HORIZONTAL,
+        hexpand: true,
+    });
+    separator.add_css_class('cusco-markdown-divider');
+    return separator;
+}
+
+function createMarkdownDocumentCodeBlock(block) {
+    const label = new Gtk.Label({
+        label: block.content || ' ',
+        selectable: true,
+        wrap: false,
+        xalign: 0,
+        yalign: 0,
+        hexpand: true,
+        margin_top: 8,
+        margin_bottom: 8,
+        margin_start: 8,
+        margin_end: 8,
+    });
+    label.add_css_class('monospace');
+    label.add_css_class('cusco-code-block');
+    return label;
+}
+
+function createMarkdownDocumentContent(source) {
+    const content = new Gtk.Box({
+        orientation: Gtk.Orientation.VERTICAL,
+        spacing: 8,
+        hexpand: true,
+        margin_top: 12,
+        margin_bottom: 12,
+        margin_start: 12,
+        margin_end: 12,
+    });
+
+    for (const block of parseMarkdownBlocks(source)) {
+        if (block.type === 'table')
+            content.append(createMarkdownDocumentTable(block));
+        else if (block.type === 'divider')
+            content.append(createMarkdownDocumentDivider());
+        else if (block.type === 'code')
+            content.append(createMarkdownDocumentCodeBlock(block));
+        else
+            content.append(createMarkdownDocumentLabel(block.content));
+    }
+
+    return content;
+}
+
 export class NativeDocumentArtifactRenderer {
     supports(resolved) {
         return resolved.artifact.kind === 'document'
@@ -175,26 +307,14 @@ export class NativeDocumentArtifactRenderer {
             return errorView('Document artifact is unreadable.');
         }
 
-        const label = new Gtk.Label({
-            use_markup: true,
-            label: markdownToPangoMarkup(source),
-            selectable: true,
-            wrap: true,
-            xalign: 0,
-            yalign: 0,
-            margin_top: 12,
-            margin_bottom: 12,
-            margin_start: 12,
-            margin_end: 12,
-        });
         const scroller = new Gtk.ScrolledWindow({
-            child: label,
+            child: createMarkdownDocumentContent(source),
             hexpand: true,
             vexpand: !options.inline,
             min_content_height: options.inline ? 100 : 320,
             max_content_height: options.inline ? INLINE_PREVIEW_HEIGHT : -1,
             propagate_natural_height: Boolean(options.inline),
-            hscrollbar_policy: Gtk.PolicyType.NEVER,
+            hscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
             vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
         });
         return scroller;
@@ -511,7 +631,8 @@ export class NativeChartArtifactRenderer {
                 resolved.revision.manifest.entrypoint,
             )));
         } catch (error) {
-            logError(error, 'Failed to parse chart artifact');
+            if (!(error instanceof SyntaxError))
+                logError(error, 'Failed to parse chart artifact');
             return errorView('Chart specification is invalid.');
         }
 

@@ -95,6 +95,7 @@ const GIT_BRANCH_ICON_FILE = 'git-branch-symbolic.svg';
 const ATTACHMENT_ICON_FILE = 'attachment-symbolic.svg';
 const PROMPT_ICON_FILE = 'prompt-symbolic.svg';
 const MORE_VERTICAL_ICON_FILE = 'more-vertical-symbolic.svg';
+const QUEUED_ICON_FILE = 'queued-symbolic.svg';
 const EMPTY_STATE_IMAGE_DARK = 'machupicchu_dark.png';
 const EMPTY_STATE_IMAGE_LIGHT = 'machupicchu_light.png';
 const EMPTY_STATE_FRAME_WIDTH_RATIO = 1 / 3;
@@ -109,6 +110,8 @@ const KNOT_ICON_VIEWBOX_HEIGHT = 414;
 const KNOT_ICON_STROKE_WIDTH = 35;
 const KNOT_ICON_SAMPLE_STEPS = 28;
 const KNOT_ICON_ANIMATION_SECONDS = 1;
+const SHIMMER_INTERVAL_MS = 90;
+const SHIMMER_EDGE_PADDING = 3;
 const LONG_RESPONSE_NOTIFICATION_DELAY_MS = 10000;
 const COMPUTER_USE_ACCENT_COLOR = '#42e6f5';
 const SCROLL_TO_BOTTOM_ANIMATION_MS = 180;
@@ -379,6 +382,13 @@ function isCancellableCancelled(cancellable) {
     return Boolean(cancellable?.is_cancelled?.());
 }
 
+export function shouldAutoSendQueuedMessages({
+    cancelled = false,
+    stoppedBeforeAssistantText = false,
+} = {}) {
+    return !cancelled || stoppedBeforeAssistantText;
+}
+
 function wasOperationCancelled(error, cancellable = null) {
     return isCancellableCancelled(cancellable) || isGioError(error, Gio.IOErrorEnum.CANCELLED);
 }
@@ -443,6 +453,61 @@ export function composerHintPresentation(sendWithEnter, isBusy, computerUseActiv
             ? `${sendShortcut} queues · Esc to stop`
             : `${sendShortcut} ↵ to send`,
     };
+}
+
+export function formatRunningTime(elapsedSeconds) {
+    const totalSeconds = Math.max(0, Math.floor(Number(elapsedSeconds) || 0));
+    const seconds = totalSeconds % 60;
+    const totalMinutes = Math.floor(totalSeconds / 60);
+
+    if (totalMinutes === 0)
+        return `${seconds}s`;
+
+    const minutes = totalMinutes % 60;
+    if (totalMinutes < 60)
+        return `${totalMinutes}m ${String(seconds).padStart(2, '0')}s`;
+
+    const hours = Math.floor(totalMinutes / 60);
+    return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`;
+}
+
+export function messageRunDurationLabel(message) {
+    const storedDuration = message?.metadata?.agentRunDurationMs;
+
+    if (storedDuration === null || storedDuration === undefined || storedDuration === '')
+        return '';
+
+    const durationMilliseconds = Number(storedDuration);
+
+    if (!Number.isFinite(durationMilliseconds) || durationMilliseconds < 0)
+        return '';
+
+    return formatRunningTime(durationMilliseconds / 1000);
+}
+
+export function buildShimmerMarkup(text, phase = 0) {
+    const characters = [...String(text ?? '')];
+
+    if (characters.length === 0)
+        return '';
+
+    const cycleLength = characters.length + SHIMMER_EDGE_PADDING * 2;
+    const normalizedPhase = ((Math.floor(Number(phase) || 0) % cycleLength) + cycleLength) % cycleLength;
+    const highlightPosition = normalizedPhase - SHIMMER_EDGE_PADDING;
+
+    return characters.map((character, index) => {
+        const distance = Math.abs(index - highlightPosition);
+        let alpha = 68;
+
+        if (distance < 0.5)
+            alpha = 100;
+        else if (distance < 1.5)
+            alpha = 90;
+        else if (distance < 2.5)
+            alpha = 78;
+
+        return `<span alpha="${alpha}%">${GLib.markup_escape_text(character, -1)}</span>`;
+    }).join('');
 }
 
 export function formatConversationUpdatedAt(updatedAt, currentTime = new Date()) {
@@ -2531,11 +2596,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
         card.add_css_class('cusco-pending-message');
         card.set_tooltip_text(message.content);
 
-        const status = new Gtk.Label({
-            label: 'Queued',
-            valign: Gtk.Align.CENTER,
-        });
-        status.add_css_class('caption');
+        const status = createBundledIcon(QUEUED_ICON_FILE, 'go-next-symbolic');
+        status.set_tooltip_text('Queued message');
+        status.set_valign(Gtk.Align.CENTER);
+        status.update_property(
+            [Gtk.AccessibleProperty.LABEL],
+            ['Queued message'],
+        );
         status.add_css_class('cusco-pending-message-status');
 
         const label = new Gtk.Label({
@@ -3120,8 +3187,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (isCancellableCancelled(cancellable))
                 return true;
 
-            await this._streamAssistantResponse(conversation.id, { cancellable });
-            shouldSendMore = !isCancellableCancelled(cancellable);
+            const responseResult = await this._streamAssistantResponse(conversation.id, { cancellable });
+            shouldSendMore = shouldAutoSendQueuedMessages({
+                cancelled: isCancellableCancelled(cancellable),
+                stoppedBeforeAssistantText: responseResult?.stoppedBeforeAssistantText,
+            });
         } finally {
             this._finishActiveTurn(cancellable);
         }
@@ -3160,6 +3230,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 metadata: { composerReferences: normalizedReferences },
             },
         );
+        let shouldSendQueued = false;
 
         try {
             this._conversations.appendMessage(conversation.id, userMessage);
@@ -3177,12 +3248,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
             }
 
             this._drainPendingUserMessages(conversation.id);
-            await this._streamAssistantResponse(conversation.id, { cancellable });
+            const responseResult = await this._streamAssistantResponse(conversation.id, { cancellable });
+            shouldSendQueued = shouldAutoSendQueuedMessages({
+                cancelled: isCancellableCancelled(cancellable),
+                stoppedBeforeAssistantText: responseResult?.stoppedBeforeAssistantText,
+            });
         } finally {
             this._finishActiveTurn(cancellable);
         }
 
-        if (!isCancellableCancelled(cancellable)) {
+        if (shouldSendQueued) {
             this._sendQueuedUserMessages(conversation.id).catch((error) => {
                 this._handleQueuedUserMessageError(error);
             });
@@ -3672,6 +3747,24 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return [text, attachmentText].filter(Boolean).join('\n\n');
     }
 
+    _finalizeCancelledAssistantResponse(conversation, assistantView) {
+        const hadContent = assistantView?.hasContent?.() ?? false;
+        const hadToolResults = assistantView?.hasToolResults?.() ?? false;
+
+        if (hadContent || hadToolResults)
+            assistantView?.clear_status?.();
+        else
+            assistantView?.remove?.();
+
+        if (hadContent) {
+            assistantView?.persist?.();
+            this._updateUsageDisplay(conversation);
+            this._refreshConversationList();
+        }
+
+        return !hadContent;
+    }
+
     async _streamAssistantResponse(conversationId, options = {}) {
         const conversation = this._conversations.getConversation(conversationId);
 
@@ -3688,6 +3781,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
         let assistantView = null;
         let assistantViewState = null;
         let shouldSendQueued = false;
+        let stoppedBeforeAssistantText = false;
+        const responseStartedAt = GLib.get_monotonic_time();
         this._startLongResponseNotification();
 
         try {
@@ -3702,8 +3797,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             await this._maybeAutoCompactConversation(conversation, activeSkills, cancellable);
 
-            assistantView = this._createStreamingAssistantView(conversation);
-            assistantViewState = { view: assistantView };
+            assistantView = this._createStreamingAssistantView(conversation, {
+                workingStartedAt: responseStartedAt,
+            });
+            assistantViewState = {
+                view: assistantView,
+                workingStartedAt: responseStartedAt,
+            };
             assistantView.set_loading();
 
             const providerMessages = this._buildProviderMessages(conversation, activeSkills, {
@@ -3747,59 +3847,45 @@ class CuscoWindow extends Adw.ApplicationWindow {
             }
 
             if (isCancellableCancelled(cancellable)) {
-                const hadContent = assistantView.hasContent();
-                const hadToolResults = assistantView.hasToolResults();
-
-                if (hadContent || hadToolResults)
-                    assistantView.clear_status();
-                else
-                    assistantView.remove();
-
-                this._appendStoppedMessage(
-                    conversation.id,
-                    hadContent
-                        ? 'Response stopped. Partial assistant text was saved.'
-                        : 'Response stopped before the assistant returned text.',
+                stoppedBeforeAssistantText = this._finalizeCancelledAssistantResponse(
+                    conversation,
+                    assistantView,
                 );
-                return;
+                shouldSendQueued = ownsActiveTurn && stoppedBeforeAssistantText;
+            } else {
+                assistantView.set_stream_text(assistantText, assistantText);
+                assistantView.set_artifacts?.(this._materializeAssistantArtifacts(assistantText, conversation.id));
+                if (conversation.agentModeEnabled) {
+                    assistantView.set_run_duration?.(
+                        Math.max(0, Math.round((GLib.get_monotonic_time() - responseStartedAt) / 1000)),
+                    );
+                }
+                assistantView.persist?.();
+                this._refreshConversationList();
+                this._renderActiveConversation();
+                shouldSendQueued = ownsActiveTurn;
             }
-
-            assistantView.set_stream_text(assistantText, assistantText);
-            assistantView.set_artifacts?.(this._materializeAssistantArtifacts(assistantText, conversation.id));
-            assistantView.persist?.();
-            this._refreshConversationList();
-            this._renderActiveConversation();
-            shouldSendQueued = ownsActiveTurn;
         } catch (error) {
             assistantView = assistantViewState?.view ?? assistantView;
 
             if (wasOperationCancelled(error, cancellable)) {
-                const hadContent = assistantView?.hasContent?.() ?? false;
-                const hadToolResults = assistantView?.hasToolResults?.() ?? false;
-
-                if (hadContent || hadToolResults)
-                    assistantView?.clear_status?.();
-                else
-                    assistantView?.remove?.();
-
-                this._appendStoppedMessage(
-                    conversation.id,
-                    hadContent
-                        ? 'Response stopped. Partial assistant text was saved.'
-                        : 'Response stopped before the assistant returned text.',
+                stoppedBeforeAssistantText = this._finalizeCancelledAssistantResponse(
+                    conversation,
+                    assistantView,
                 );
-                return;
-            }
+                shouldSendQueued = ownsActiveTurn && stoppedBeforeAssistantText;
+            } else {
+                if (assistantView) {
+                    if (assistantView.hasContent() || assistantView.hasToolResults())
+                        assistantView.clear_status();
+                    else
+                        assistantView.remove();
+                }
 
-            if (assistantView) {
-                if (assistantView.hasContent() || assistantView.hasToolResults())
-                    assistantView.clear_status();
-                else
-                    assistantView.remove();
+                throw error;
             }
-
-            throw error;
         } finally {
+            (assistantViewState?.view ?? assistantView)?.finish_working?.();
             this._stopLongResponseNotification();
             this._setFollowLatestMessage(false);
 
@@ -3812,6 +3898,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 this._handleQueuedUserMessageError(error);
             });
         }
+
+        return { stoppedBeforeAssistantText };
     }
 
     async _collectProviderResponse(providerId, modelId, providerMessages, cancellable, onChunk = null, collectOptions = {}) {
@@ -3989,7 +4077,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
             else
                 previousView?.remove?.();
 
-            assistantViewState.view = this._createStreamingAssistantView(conversation);
+            previousView?.finish_working?.();
+            assistantViewState.view = this._createStreamingAssistantView(conversation, {
+                workingStartedAt: assistantViewState.workingStartedAt,
+            });
         };
 
         for (let iteration = 0; iteration < DEFAULT_AGENT_MAX_ITERATIONS; iteration++) {
@@ -4590,7 +4681,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         }
     }
 
-    _createStreamingAssistantView(conversation) {
+    _createStreamingAssistantView(conversation, options = {}) {
         let view = null;
         let assistantMessage = null;
         let currentText = '';
@@ -4601,8 +4692,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (!this._isActiveConversationId(conversation.id))
                 return null;
 
-            if (!view)
+            if (!view) {
                 view = this._addMessage('', 'assistant');
+
+                if (conversation.agentModeEnabled)
+                    view.start_working?.(options.workingStartedAt);
+            }
 
             return view;
         };
@@ -4673,6 +4768,20 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             assistantMessage = storedMessage;
         };
+        const updatePersistentRunDuration = (durationMilliseconds) => {
+            const message = ensureMessage(currentText);
+            const storedMessage = this._conversations.updateMessageMetadata(
+                conversation.id,
+                message.id,
+                {
+                    ...message.metadata,
+                    agentRunDurationMs: Math.max(0, Math.round(Number(durationMilliseconds) || 0)),
+                },
+                { persist: false },
+            );
+
+            assistantMessage = storedMessage;
+        };
 
         return {
             set_label: (text) => updatePersistentText(text, text),
@@ -4680,9 +4789,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
             set_reasoning: updatePersistentReasoning,
             set_usage: updatePersistentUsage,
             set_artifacts: updatePersistentArtifacts,
+            set_run_duration: updatePersistentRunDuration,
             set_loading: () => ensureView()?.set_loading(),
             set_status: (text) => ensureView()?.set_status(text),
             clear_status: () => view?.clear_loading?.(),
+            finish_working: () => view?.finish_working?.(),
             persist: () => this._conversations.persist(),
             remove: () => view?.remove?.(),
             hasContent: () => currentText.length > 0 || currentReasoning.length > 0 || Boolean(currentUsage),
@@ -5819,6 +5930,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             body: conversation.title,
         });
         dialog.add_response('cancel', 'Cancel');
+        dialog.add_response('clipboard', 'Clipboard');
         dialog.add_response('markdown', 'Markdown');
         dialog.add_response('json', 'JSON');
         dialog.add_response('pdf', 'PDF');
@@ -5829,6 +5941,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             if (format === 'cancel')
                 return;
+
+            if (format === 'clipboard') {
+                copyTextToClipboard(exportConversation(conversation, 'markdown'));
+                this._showToast('Chat copied to clipboard');
+                return;
+            }
 
             this._saveConversationExport(conversation, format);
         });
@@ -6496,6 +6614,110 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return icon;
     }
 
+    _createTextShimmerController(label) {
+        let text = '';
+        let phase = 0;
+        let sourceId = 0;
+
+        const stopSource = () => {
+            if (!sourceId)
+                return;
+
+            GLib.Source.remove(sourceId);
+            sourceId = 0;
+        };
+        const render = () => {
+            label.set_markup(buildShimmerMarkup(text, phase));
+            phase += 1;
+        };
+
+        return {
+            set: (nextText, active = false) => {
+                stopSource();
+                text = String(nextText ?? '');
+                phase = 0;
+
+                if (!active || !text || this._appSettings.reducedMotionEnabled) {
+                    label.set_label(text);
+                    return;
+                }
+
+                render();
+                sourceId = GLib.timeout_add(
+                    GLib.PRIORITY_DEFAULT,
+                    SHIMMER_INTERVAL_MS,
+                    () => {
+                        render();
+                        return GLib.SOURCE_CONTINUE;
+                    },
+                );
+            },
+            stop: () => {
+                stopSource();
+                label.set_label(text);
+            },
+        };
+    }
+
+    _createAgentWorkingRow(startedAt = GLib.get_monotonic_time()) {
+        const normalizedStartedAt = Number.isFinite(startedAt)
+            ? startedAt
+            : GLib.get_monotonic_time();
+        const row = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 6,
+            halign: Gtk.Align.START,
+            valign: Gtk.Align.CENTER,
+        });
+        const workingLabel = new Gtk.Label({
+            label: 'Working…',
+            xalign: 0,
+            valign: Gtk.Align.CENTER,
+        });
+        const elapsedLabel = new Gtk.Label({
+            xalign: 0,
+            valign: Gtk.Align.CENTER,
+            tooltip_text: 'Elapsed agent run time',
+        });
+        const shimmer = this._createTextShimmerController(workingLabel);
+        let elapsedSourceId = 0;
+
+        const updateElapsed = () => {
+            const elapsedSeconds = (GLib.get_monotonic_time() - normalizedStartedAt) / 1000000;
+            elapsedLabel.set_label(formatRunningTime(elapsedSeconds));
+        };
+
+        row.add_css_class('cusco-agent-working');
+        workingLabel.add_css_class('caption');
+        workingLabel.add_css_class('cusco-agent-working-label');
+        elapsedLabel.add_css_class('caption');
+        elapsedLabel.add_css_class('dim-label');
+        row.append(workingLabel);
+        row.append(elapsedLabel);
+
+        shimmer.set('Working…', true);
+        updateElapsed();
+        elapsedSourceId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT,
+            1000,
+            () => {
+                updateElapsed();
+                return GLib.SOURCE_CONTINUE;
+            },
+        );
+
+        row.stop = () => {
+            if (elapsedSourceId) {
+                GLib.Source.remove(elapsedSourceId);
+                elapsedSourceId = 0;
+            }
+
+            shimmer.stop();
+        };
+
+        return row;
+    }
+
     _createKnotStatusRow(text = '', options = {}) {
         const row = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
@@ -6768,6 +6990,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             xalign: 0.5,
             valign: Gtk.Align.CENTER,
         });
+        const statusShimmer = this._createTextShimmerController(statusPill);
         const targetLabel = new Gtk.Label({
             xalign: 0,
             valign: Gtk.Align.CENTER,
@@ -6919,7 +7142,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             setStatusClass(display.status);
             actionLabel.set_label(display.action);
-            statusPill.set_label(display.statusLabel);
+            statusShimmer.set(display.statusLabel, display.status === 'running');
             targetLabel.set_label(target);
             targetLabel.set_visible(Boolean(target));
             detailLabel.set_label(detail);
@@ -7080,6 +7303,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._userMessageReferenceContents.add(bodyContent);
         let currentBodyText = String(displayBody ?? '');
         let loadingRow = null;
+        let workingRow = null;
         let hasToolResults = false;
 
         if ((isStreamingAssistant || imageAttachmentPreviews) && !currentBodyText)
@@ -7115,6 +7339,21 @@ class CuscoWindow extends Adw.ApplicationWindow {
             clearLoading();
             bodyContent.set_visible(true);
             bodyContent.updateContent(nextText, { defer: isStreamingAssistant });
+        };
+        const startWorking = (startedAt) => {
+            if (!isStreamingAssistant || workingRow)
+                return;
+
+            workingRow = this._createAgentWorkingRow(startedAt);
+            wrapper.append(workingRow);
+        };
+        const finishWorking = () => {
+            if (!workingRow)
+                return;
+
+            workingRow.stop?.();
+            wrapper.remove(workingRow);
+            workingRow = null;
         };
 
         let agentActivityBox = null;
@@ -7175,6 +7414,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
             set_loading: showLoading,
             set_status: showLoading,
             clear_loading: clearLoading,
+            start_working: startWorking,
+            finish_working: finishWorking,
             set_reasoning: (text) => {
                 if (!reasoningExpander)
                     return;
@@ -7193,6 +7434,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             append_reasoning_segment: appendReasoningSegment,
             has_tool_results: () => hasToolResults,
             remove: () => {
+                finishWorking();
                 const parent = wrapper.get_parent();
 
                 if (typeof parent?.remove === 'function')
@@ -7260,6 +7502,22 @@ class CuscoWindow extends Adw.ApplicationWindow {
         actions.append(this._createMessageActionButton('tab-new-symbolic', 'Branch from message', () => {
             this._branchFromMessage(message);
         }, { iconFile: GIT_BRANCH_ICON_FILE }));
+
+        const runDuration = message.role === 'assistant'
+            ? messageRunDurationLabel(message)
+            : '';
+
+        if (runDuration) {
+            const durationLabel = new Gtk.Label({
+                label: runDuration,
+                tooltip_text: `Agent worked for ${runDuration}`,
+                valign: Gtk.Align.CENTER,
+            });
+            durationLabel.add_css_class('caption');
+            durationLabel.add_css_class('dim-label');
+            durationLabel.add_css_class('cusco-message-run-duration');
+            actions.append(durationLabel);
+        }
 
         return actions;
     }
