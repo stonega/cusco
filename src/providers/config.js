@@ -1170,18 +1170,32 @@ export class ProviderConfigStore {
             discoveredImageModels: (config.discoveredImageModels ?? []).map((model) => ({ ...model })),
         }));
         this._loadPersistentState();
-        this.refreshApiKeyStatus();
+        this.refreshApiKeyStatus({ autoEnableEnvironmentProviders: true });
     }
 
-    refreshApiKeyStatus() {
+    refreshApiKeyStatus({ autoEnableEnvironmentProviders = false } = {}) {
+        let enabledProvidersChanged = false;
+
         for (const config of this._configs) {
-            const status = this._resolveApiKeyStatus(config);
+            const environmentApiKey = this._getEnvironmentApiKey(config);
+            const status = this._resolveApiKeyStatus(config, environmentApiKey);
             this._apiKeyStatuses.set(config.id, status);
             config.apiKeyConfigured = status.configured;
+
+            if (autoEnableEnvironmentProviders
+                && environmentApiKey
+                && !config.enabled
+                && this.canEnableProvider(config.id)) {
+                config.enabled = true;
+                enabledProvidersChanged = true;
+            }
         }
 
         this._webSearchApiKeyStatus = this._resolveApiKeyStatus(this._webSearchConfig);
         this._webSearchConfig.apiKeyConfigured = this._webSearchApiKeyStatus.configured;
+
+        if (enabledProvidersChanged)
+            this._persistEnabledProviders();
 
         return this.listProviders();
     }
@@ -1919,7 +1933,14 @@ export class ProviderConfigStore {
         return Boolean(provider.baseUrl);
     }
 
-    _resolveApiKeyStatus(provider) {
+    _getEnvironmentApiKey(provider) {
+        if (!provider?.apiKeyRequired || !provider.apiKeyEnvVar)
+            return '';
+
+        return this._envLookup(provider.apiKeyEnvVar) ?? '';
+    }
+
+    _resolveApiKeyStatus(provider, environmentApiKey = this._getEnvironmentApiKey(provider)) {
         if (!provider.apiKeyRequired)
             return {
                 configured: false,
@@ -1942,9 +1963,7 @@ export class ProviderConfigStore {
             secretError = error;
         }
 
-        const envApiKey = this._envLookup(provider.apiKeyEnvVar);
-
-        if (envApiKey)
+        if (environmentApiKey)
             return {
                 configured: true,
                 source: 'environment',
@@ -1970,7 +1989,7 @@ export class ProviderConfigStore {
             secretError = error;
         }
 
-        const envApiKey = this._envLookup(provider.apiKeyEnvVar);
+        const envApiKey = this._getEnvironmentApiKey(provider);
 
         if (envApiKey)
             return envApiKey;

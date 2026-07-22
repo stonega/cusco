@@ -679,6 +679,28 @@ const credentialConfigs = [
         ],
     },
 ];
+const environmentSettings = new MemorySettings();
+const environmentCredentialStore = new ProviderConfigStore(credentialConfigs, {
+    settings: environmentSettings,
+    apiKeyStore: new MemoryApiKeyStore(),
+    envLookup: name => name === 'SECURE_REMOTE_API_KEY' ? 'sk-environment' : '',
+});
+
+if (environmentCredentialStore.getApiKeyStatus('secure-remote').source !== 'environment')
+    throw new Error('Environment API key status was not detected');
+
+if (!environmentCredentialStore.isProviderAvailable('secure-remote'))
+    throw new Error('Provider with an environment API key was not enabled automatically');
+
+if (!environmentSettings.get_strv('enabled-providers').includes('secure-remote'))
+    throw new Error('Environment-enabled provider was not persisted');
+
+environmentCredentialStore.setProviderEnabled('secure-remote', false);
+environmentCredentialStore.refreshApiKeyStatus();
+
+if (environmentCredentialStore.isProviderEnabled('secure-remote'))
+    throw new Error('API key status refresh overrode a manual provider disable');
+
 const credentialStore = new ProviderConfigStore(credentialConfigs, {
     settings: null,
     apiKeyStore: new MemoryApiKeyStore(),
