@@ -1388,7 +1388,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
             selection_mode: Gtk.SelectionMode.NONE,
             column_spacing: 6,
             row_spacing: 6,
-            max_children_per_line: 4,
+            homogeneous: true,
+            max_children_per_line: 2,
             min_children_per_line: 1,
             hexpand: true,
         });
@@ -1853,7 +1854,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             });
         }
 
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
             const session = {
                 questions,
                 index: 0,
@@ -1870,9 +1871,26 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._activeQuestionSession = session;
 
             if (cancellable) {
-                session.cancelSignalId = cancellable.connect('cancelled', () => {
-                    this._finishAgentQuestions(null, { cancelled: true });
-                });
+                try {
+                    // Gio.Cancellable.connect() is g_cancellable_connect(), not
+                    // GObject.Object.connect(), so its first argument is the
+                    // callback rather than the name of the cancelled signal.
+                    session.cancelSignalId = cancellable.connect(() => {
+                        // Do not disconnect from inside a cancellable callback:
+                        // g_cancellable_disconnect() waits for callbacks to exit.
+                        session.cancelSignalId = 0;
+                        this._finishAgentQuestions(null, { cancelled: true });
+                    });
+                } catch (error) {
+                    this._activeQuestionSession = null;
+                    reject(error);
+                    return;
+                }
+
+                // connect() invokes the callback synchronously when cancellation
+                // won the race after the initial is_cancelled() check.
+                if (this._activeQuestionSession !== session)
+                    return;
             }
 
             this._setQuestionComposerMode(true);
@@ -1937,11 +1955,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
         for (const option of question.options) {
             const button = new Gtk.Button({
                 tooltip_text: option.description || option.label,
-                halign: Gtk.Align.START,
+                halign: Gtk.Align.FILL,
+                hexpand: true,
             });
             const content = new Gtk.Box({
                 orientation: Gtk.Orientation.VERTICAL,
                 spacing: 1,
+                hexpand: true,
             });
             const label = new Gtk.Label({
                 label: option.label,

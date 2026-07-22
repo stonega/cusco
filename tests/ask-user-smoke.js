@@ -1,3 +1,5 @@
+import Gio from 'gi://Gio?version=2.0';
+
 import {
     createAskUserTool,
     formatAskUserAnswers,
@@ -64,12 +66,13 @@ if (formatAskUserAnswers(null) !== '{\n  "answers": null\n}')
     throw new Error('Ask User null response was not explicit');
 
 const restoredDrafts = [];
+const questionModeStates = [];
 const questionHarness = {
     _activeQuestionSession: null,
     _composerReferences: [],
     _getComposerText: () => 'preserved draft',
     _getComposerReferences: () => [{ kind: 'file', value: '/tmp/note.txt' }],
-    _setQuestionComposerMode: () => {},
+    _setQuestionComposerMode: (active) => questionModeStates.push(active),
     _setComposerText: (text, options = {}) => restoredDrafts.push({ text, options }),
     _showActiveAgentQuestion: () => {},
     focusComposer: () => {},
@@ -100,5 +103,24 @@ const skipped = await skippedPromise;
 
 if (skipped.answers !== null || skipped.cancelled)
     throw new Error('Ask User Escape-style completion did not return a non-cancelled null answer');
+
+const cancellable = new Gio.Cancellable();
+const cancellablePromise = questionHarness._requestAgentQuestions(
+    normalized.slice(0, 1),
+    { cancellable },
+);
+
+if (!questionHarness._activeQuestionSession || questionModeStates.at(-1) !== true)
+    throw new Error('Ask User did not enter composer mode with a Gio.Cancellable');
+
+cancellable.cancel();
+const cancelled = await cancellablePromise;
+
+if (cancelled.answers !== null
+    || !cancelled.cancelled
+    || questionHarness._activeQuestionSession
+    || questionModeStates.at(-1) !== false) {
+    throw new Error('Ask User did not leave composer mode after Gio.Cancellable cancellation');
+}
 
 print('Cusco Ask User smoke passed');
