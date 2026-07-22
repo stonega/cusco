@@ -481,9 +481,23 @@ function saveArtifactAs(artifact, parent, fallbackSource = '') {
     });
 }
 
-function openArtifactExternally(artifact, parent) {
+function artifactImageDescriptor(artifact) {
+    return {
+        path: String(artifact?.path ?? ''),
+        title: String(artifact?.title ?? artifact?.name ?? 'Image'),
+        mimeType: String(artifact?.mimeType ?? ''),
+        sourceKind: 'artifact',
+    };
+}
+
+function openArtifact(artifact, parent, options = {}) {
     if (!artifactFileExists(artifact))
         return;
+
+    if ((artifact?.kind === 'image' || artifact?.kind === 'svg') && options.onOpenImage) {
+        options.onOpenImage(artifactImageDescriptor(artifact));
+        return;
+    }
 
     try {
         Gtk.show_uri(parent ?? null, Gio.File.new_for_path(artifact.path).get_uri(), 0);
@@ -553,7 +567,7 @@ function createArtifactHeader(artifact, source, options = {}) {
     const openButton = createArtifactActionButton(
         'document-open-symbolic',
         'Open artifact',
-        () => openArtifactExternally(artifact, options.parentWindow),
+        () => openArtifact(artifact, options.parentWindow, options),
     );
     openButton.set_sensitive(artifactFileExists(artifact));
     header.append(openButton);
@@ -598,7 +612,7 @@ function createArtifactImagePreview(artifact, options = {}) {
     openButton.add_css_class('flat');
     openButton.add_css_class('cusco-artifact-picture-button');
     openButton.connect('clicked', () => {
-        openArtifactExternally(artifact, options.parentWindow);
+        openArtifact(artifact, options.parentWindow, options);
     });
     return openButton;
 }

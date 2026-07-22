@@ -20,7 +20,9 @@ import {
     extractChatCompletionServerToolResults,
     extractDiscoveredModels,
     extractGeminiFinishReason,
+    extractGeminiProviderParts,
     extractGeminiReasoning,
+    extractGeminiResponse,
     extractGeminiText,
     extractGeminiToolCalls,
     extractGeminiUsage,
@@ -548,13 +550,15 @@ const geminiNativeSearchBody = buildGeminiGenerateContentBody(messages, {
     provider: {
         nativeSearch: {
             api: 'gemini-generate-content',
-            tools: ['google_search'],
+            tools: ['google_search', 'google_maps', 'url_context'],
         },
     },
     tools: [searchTool, mcpTool],
 });
 assertEqual(hasOwn(geminiNativeSearchBody.tools[0], 'googleSearch'), true, 'Gemini native Google Search');
-assertEqual(geminiNativeSearchBody.tools[1].functionDeclarations[0].name, 'mcp__context7__resolve_library_id', 'Gemini retained client tool');
+assertEqual(hasOwn(geminiNativeSearchBody.tools[1], 'googleMaps'), true, 'Gemini native Google Maps');
+assertEqual(hasOwn(geminiNativeSearchBody.tools[2], 'urlContext'), true, 'Gemini native URL Context');
+assertEqual(geminiNativeSearchBody.tools[3].functionDeclarations[0].name, 'mcp__context7__resolve_library_id', 'Gemini retained client tool');
 assertEqual(geminiNativeSearchBody.toolConfig.includeServerSideToolInvocations, true, 'Gemini exposed server tool activity');
 assertEqual(geminiNativeSearchBody.toolConfig.functionCallingConfig.mode, 'VALIDATED', 'Gemini validated combined tools');
 const geminiFallbackToolBody = buildGeminiGenerateContentBody(messages, {
@@ -697,6 +701,71 @@ const geminiToolCalls = extractGeminiToolCalls({
 assertEqual(geminiToolCalls[0].id, 'gemini-call-1', 'Gemini tool call ID extraction');
 assertEqual(geminiToolCalls[0].input, '{"libraryId":"/reactjs/react.dev","query":"hooks"}', 'Gemini tool call extraction');
 assertEqual(geminiToolCalls[0].thoughtSignature, 'gemini-response-signature', 'Gemini thought signature extraction');
+const geminiProviderResponse = {
+    candidates: [{
+        content: {
+            parts: [
+                {
+                    toolCall: {
+                        id: 'server-search-1',
+                        toolType: 'GOOGLE_SEARCH_WEB',
+                        args: { queries: ['Cusco GNOME'] },
+                    },
+                    thoughtSignature: 'server-search-signature',
+                },
+                {
+                    toolResponse: {
+                        id: 'server-search-1',
+                        toolType: 'GOOGLE_SEARCH_WEB',
+                        response: { searchSuggestions: 'Cusco GNOME' },
+                    },
+                    thoughtSignature: 'server-result-signature',
+                },
+                { text: 'Grounded Gemini response.' },
+            ],
+        },
+        groundingMetadata: {
+            webSearchQueries: ['Cusco GNOME', 'cafes near Taipei 101'],
+            groundingChunks: [
+                { web: { uri: 'https://example.com/cusco', title: 'Cusco' } },
+                {
+                    maps: {
+                        uri: 'https://maps.google.com/?cid=123',
+                        title: 'Taipei Cafe',
+                        placeId: 'places/cafe-123',
+                    },
+                },
+            ],
+        },
+        urlContextMetadata: {
+            urlMetadata: [{
+                retrievedUrl: 'https://example.com/docs',
+                urlRetrievalStatus: 'URL_RETRIEVAL_STATUS_SUCCESS',
+            }, {
+                retrievedUrl: 'https://example.com/private',
+                urlRetrievalStatus: 'URL_RETRIEVAL_STATUS_UNSAFE',
+            }],
+        },
+    }],
+};
+const geminiServerToolResults = extractGeminiServerToolResults(geminiProviderResponse);
+assertEqual(geminiServerToolResults.map((result) => result.name).join(','), 'search,google_maps,url_context', 'Gemini server tool result groups');
+assertEqual(geminiServerToolResults[1].results[0].title, 'Taipei Cafe', 'Gemini Maps source extraction');
+assertEqual(geminiServerToolResults[2].results[0].url, 'https://example.com/docs', 'Gemini URL Context source extraction');
+assertEqual(geminiServerToolResults[2].results.length, 1, 'Gemini URL Context excluded failed retrievals from sources');
+assertEqual(extractGeminiResponse(geminiProviderResponse).text.includes('— Google Maps'), true, 'Gemini Maps attribution');
+
+const geminiProviderParts = extractGeminiProviderParts(geminiProviderResponse);
+const geminiProviderHistoryBody = buildGeminiGenerateContentBody([
+    createMessage('user', 'Find and summarize this.'),
+    createMessage('assistant', 'Grounded Gemini response.', {
+        metadata: { geminiProviderParts },
+    }),
+    createMessage('user', 'Continue with those sources.'),
+]);
+assertEqual(geminiProviderHistoryBody.contents[1].parts[0].toolCall.id, 'server-search-1', 'Gemini server tool call history');
+assertEqual(geminiProviderHistoryBody.contents[1].parts[1].toolResponse.id, 'server-search-1', 'Gemini server tool response history');
+assertEqual(geminiProviderHistoryBody.contents[1].parts[0].thoughtSignature, 'server-search-signature', 'Gemini server tool signature history');
 assertEqual(extractGeminiUsage({
     usageMetadata: {
         promptTokenCount: 6,

@@ -46,6 +46,24 @@ const TOOL_DISPLAY_PRESETS = {
             cancelled: 'X search stopped',
         },
     },
+    google_maps: {
+        label: 'Google Maps',
+        actions: {
+            running: 'Looking up places',
+            completed: 'Looked up places',
+            failed: 'Maps lookup failed',
+            cancelled: 'Maps lookup stopped',
+        },
+    },
+    url_context: {
+        label: 'URL Context',
+        actions: {
+            running: 'Reading URLs',
+            completed: 'Read URLs',
+            failed: 'URL reading failed',
+            cancelled: 'URL reading stopped',
+        },
+    },
     calc: {
         label: 'Calculator',
         actions: {
@@ -153,7 +171,7 @@ function targetForTool(name, toolCall) {
     if (name === 'file_list' || name === 'file_read')
         return normalizeString(toolCall?.path, normalizeString(toolCall?.input));
 
-    if (name === 'search' || name === 'x_search')
+    if (name === 'search' || name === 'x_search' || name === 'google_maps' || name === 'url_context')
         return normalizeString(toolCall?.query, normalizeString(toolCall?.input));
 
     if (name === 'image_gen')
@@ -182,7 +200,8 @@ function detailForTool(name, toolCall) {
     if (name === 'file_read' && toolCall?.size !== undefined && toolCall?.size !== null)
         return `${toolCall.size} bytes${toolCall.truncated ? ' (truncated)' : ''}`;
 
-    if ((name === 'search' || name === 'x_search') && Array.isArray(toolCall?.results)) {
+    if (['search', 'x_search', 'google_maps', 'url_context'].includes(name)
+        && Array.isArray(toolCall?.results)) {
         const resultCount = `${toolCall.results.length} result${toolCall.results.length === 1 ? '' : 's'}`;
         const provider = normalizeString(toolCall?.providerName, normalizeString(toolCall?.providerId));
 

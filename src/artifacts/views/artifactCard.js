@@ -129,6 +129,7 @@ export function createManagedArtifactCard(reference, options = {}) {
     const preview = registry.createInlineView(resolved, {
         autoActivate: options.autoActivateHtml !== false,
         onOpenArtifact: () => options.onOpenArtifact?.(reference),
+        onOpenImage: options.onOpenImage,
         onExternalLink: options.onExternalLink,
         onTerminated: options.onArtifactTerminated,
     });

@@ -13,6 +13,7 @@ Cusco starts as a standalone native GNOME application.
 - Tool layer: web search, file context, calculations, and namespaced MCP tools.
 - Workspace layer: prompt library, agent profiles, folders, tags, export, local cache, plugin tools, and user-managed MCP server configs.
 - Artifact layer: immutable revisions, managed file bundles, message references, typed renderers, export, and an isolated HTML runtime.
+- Image editor layer: native viewing, normalized annotation history, source-resolution Cairo rendering, and non-destructive PNG export.
 - Storage layer: local conversations, memory, workspace database, and Secret Service for credentials.
 
 ## Initial Structure
@@ -24,6 +25,7 @@ Cusco starts as a standalone native GNOME application.
 - `src/chat/conversation.js`: conversation manager for chat creation, active selection, titles, archive/delete/search, provider/model assignment, and messages.
 - `src/chat/markdown.js`: small markdown-to-Pango parser plus fenced code block splitting.
 - `src/chat/messageView.js`: transcript message renderer with markdown labels, GtkSourceView code blocks, and code copy actions.
+- `src/imageEditor/`: native image document, renderer/exporter, and viewer/editor window.
 - `src/artifacts/manager.js`: artifact lifecycle, immutable revisions, optimistic concurrency, legacy import, and export.
 - `src/artifacts/renderers/registry.js`: artifact renderer selection for inline and workspace presentation.
 - `src/artifacts/web/runtime.js`: restricted `cusco-artifact://` WebKit origin and capability policy.

@@ -327,6 +327,7 @@ const PROVIDER_MODEL_ID_ALIASES = {
         'claude-haiku-4-5-20251001': 'claude-haiku-4-5',
     },
     gemini: {
+        'gemini-3.5-flash': 'gemini-3.6-flash',
         'gemini-3.1-pro': 'gemini-3.1-pro-preview',
     },
     zai: {
@@ -342,7 +343,7 @@ const PROVIDER_SUPPORTED_MODEL_IDS = {
         'claude-haiku-4-5',
     ]),
     gemini: new Set([
-        'gemini-3.5-flash',
+        'gemini-3.6-flash',
         'gemini-3.1-pro-preview',
     ]),
     kimi: new Set([
@@ -671,7 +672,7 @@ const PROVIDER_MODEL_CONTEXT_WINDOW_TOKENS = {
         'claude-haiku-4-5': 200000,
     },
     gemini: {
-        'gemini-3.5-flash': 1048576,
+        'gemini-3.6-flash': 1048576,
         'gemini-3.1-pro-preview': 1048576,
     },
     grok: {
@@ -941,15 +942,15 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
         nativeSearch: {
             api: 'gemini-generate-content',
-            tools: ['google_search'],
+            tools: ['google_search', 'google_maps', 'url_context'],
         },
-        defaultModelId: 'gemini-3.5-flash',
+        defaultModelId: 'gemini-3.6-flash',
         defaultImageModelId: 'gemini-3.1-flash-image',
         models: [
             {
-                id: 'gemini-3.5-flash',
-                name: 'Gemini 3.5 Flash',
-                description: 'Stable Gemini 3 model for sustained frontier performance.',
+                id: 'gemini-3.6-flash',
+                name: 'Gemini 3.6 Flash',
+                description: 'Stable Gemini model balancing speed and intelligence for agentic and multimodal tasks.',
                 contextWindowTokens: 1048576,
                 thinking: GEMINI_3_LEVEL_THINKING,
             },

@@ -176,8 +176,8 @@ if (staleAnthropicStore.getProvider('anthropic').models.map((model) => model.id)
 if (staleAnthropicStore.getDefaultModel('anthropic').id !== 'claude-sonnet-5')
     throw new Error('Stale Anthropic default should fall back to Claude Sonnet 5');
 
-if (defaultStore.resolve('gemini', 'gemini-3.5-flash').model.contextWindowTokens !== 1048576)
-    throw new Error('Gemini 3.5 Flash context window should match the documented input token limit');
+if (defaultStore.resolve('gemini', 'gemini-3.6-flash').model.contextWindowTokens !== 1048576)
+    throw new Error('Gemini 3.6 Flash context window should match the documented input token limit');
 
 if (defaultStore.resolve('grok', 'grok-4.3').model.contextWindowTokens !== 1000000)
     throw new Error('Grok 4.3 context window should be 1M tokens');
@@ -185,7 +185,7 @@ if (defaultStore.resolve('grok', 'grok-4.3').model.contextWindowTokens !== 10000
 const expectedNativeSearchTools = {
     openai: 'web_search',
     anthropic: 'web_search',
-    gemini: 'google_search',
+    gemini: 'google_search,google_maps,url_context',
     grok: 'web_search,x_search',
     zai: 'web_search',
 };
@@ -351,8 +351,8 @@ if (defaultStore.getImageGenerationSelection().provider.id !== 'gemini'
     throw new Error('Standalone image generation selection was not updated');
 }
 
-if (!defaultStore.getThinkingLevels('gemini', 'gemini-3.5-flash').includes('minimal'))
-    throw new Error('Gemini 3.5 Flash minimal thinking level was not configured');
+if (!defaultStore.getThinkingLevels('gemini', 'gemini-3.6-flash').includes('minimal'))
+    throw new Error('Gemini 3.6 Flash minimal thinking level was not configured');
 
 if (defaultStore.getThinkingLevels('gemini', 'gemini-3.1-pro-preview').includes('minimal'))
     throw new Error('Gemini 3.1 Pro should not expose minimal thinking');
@@ -382,6 +382,28 @@ if (staleGeminiStore.getActiveSelection().model.id !== 'gemini-3.1-pro-preview')
 
 if (staleGeminiStore.getProvider('gemini').models.some((model) => model.id.startsWith('gemini-2.')))
     throw new Error('Unsupported Gemini 2.x model was loaded from persisted settings');
+
+const retiredGeminiFlashSettings = new MemorySettings({
+    strings: {
+        'active-provider': 'gemini',
+        'active-model': 'gemini-3.5-flash',
+        'provider-default-models': '{"gemini":"gemini-3.5-flash"}',
+    },
+    strv: {
+        'enabled-providers': ['gemini'],
+    },
+});
+const retiredGeminiFlashStore = new ProviderConfigStore(undefined, {
+    settings: retiredGeminiFlashSettings,
+    apiKeyStore: new MemoryApiKeyStore({ gemini: 'gemini-key' }),
+    envLookup: () => '',
+});
+
+if (retiredGeminiFlashStore.getDefaultModel('gemini').id !== 'gemini-3.6-flash')
+    throw new Error('Retired Gemini 3.5 Flash default was not migrated to Gemini 3.6 Flash');
+
+if (retiredGeminiFlashStore.getActiveSelection().model.id !== 'gemini-3.6-flash')
+    throw new Error('Retired Gemini 3.5 Flash selection was not migrated to Gemini 3.6 Flash');
 
 const staleGeminiImageSettings = new MemorySettings({
     strings: {

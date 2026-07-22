@@ -22,15 +22,36 @@ function formatToolForPrompt(tool) {
     ].filter(Boolean).join('\n');
 }
 
+function providerManagedToolInstruction(nativeTools) {
+    const tools = (nativeTools ?? []).map(String).filter(Boolean);
+
+    if (tools.length === 0)
+        return '';
+
+    const toolSet = new Set(tools);
+    const instructions = [
+        `Provider-managed tools are enabled: ${tools.join(', ')}.`,
+    ];
+
+    if (toolSet.has('web_search') || toolSet.has('google_search') || toolSet.has('x_search'))
+        instructions.push('Use provider search directly for current web or social information; do not request a Cusco search tool.');
+
+    if (toolSet.has('google_maps'))
+        instructions.push('Use Google Maps only for clearly location-related questions. Cusco does not provide the device location, so rely on locations stated by the user.');
+
+    if (toolSet.has('url_context'))
+        instructions.push('Use URL Context when the user supplies complete public URLs that need to be read or compared.');
+
+    return instructions.join(' ');
+}
+
 export function buildAgentModeSystemPrompt(tools, {
     maxIterations = DEFAULT_AGENT_MAX_ITERATIONS,
     nativeSearchTools = [],
     nativeToolCalling = false,
 } = {}) {
     const toolList = (tools ?? []).map(formatToolForPrompt).join('\n\n') || 'No tools are available.';
-    const nativeSearchInstruction = nativeSearchTools.length > 0
-        ? `Provider-managed search tools are enabled: ${nativeSearchTools.join(', ')}. Use them directly for current web or social information; do not request a Cusco search tool.`
-        : '';
+    const nativeSearchInstruction = providerManagedToolInstruction(nativeSearchTools);
     const toolProtocol = nativeToolCalling
         ? [
             'Use the provider native function-calling interface whenever you need a tool.',
@@ -226,7 +247,12 @@ export function createAgentToolRuntimeMessages(
     ];
 }
 
-export function createNativeToolRuntimeBatch(responseText, nativeToolCalls, runtimeMessages) {
+export function createNativeToolRuntimeBatch(
+    responseText,
+    nativeToolCalls,
+    runtimeMessages,
+    { providerParts = [] } = {},
+) {
     const toolCalls = Array.isArray(nativeToolCalls)
         ? nativeToolCalls.filter((call) => String(call?.name ?? '').trim())
         : [];
@@ -239,6 +265,9 @@ export function createNativeToolRuntimeBatch(responseText, nativeToolCalls, runt
             role: 'assistant',
             content: String(responseText ?? ''),
             toolCalls,
+            ...(Array.isArray(providerParts) && providerParts.length > 0
+                ? { providerParts: providerParts.map((part) => ({ ...part })) }
+                : {}),
         },
         ...(runtimeMessages ?? []).filter((message) => message?.role !== 'assistant'),
     ];

@@ -34,7 +34,7 @@ const ANTHROPIC_DEFAULT_THINKING_BUDGETS = {
     high: 3072,
 };
 const SUPPORTED_GEMINI_MODEL_IDS = new Set([
-    'gemini-3.5-flash',
+    'gemini-3.6-flash',
     'gemini-3.1-pro-preview',
 ]);
 const MAX_NATIVE_TOOL_DESCRIPTION_CHARS = 1024;
@@ -231,6 +231,20 @@ function messageToolCalls(message) {
     return Array.isArray(message?.toolCalls)
         ? message.toolCalls.filter(call => String(call?.name ?? '').trim())
         : [];
+}
+
+function normalizeGeminiProviderParts(parts) {
+    return Array.isArray(parts)
+        ? parts
+            .filter((part) => part && typeof part === 'object' && !Array.isArray(part))
+            .map((part) => ({ ...part }))
+        : [];
+}
+
+function messageGeminiProviderParts(message) {
+    return normalizeGeminiProviderParts(
+        message?.providerParts ?? message?.metadata?.geminiProviderParts,
+    );
 }
 
 function toolArguments(input) {
@@ -462,10 +476,10 @@ async function* displayStream(text, cancellable = null) {
 
 function normalizeProviderResponse(response) {
     if (typeof response === 'string')
-        return { text: response, reasoning: '', toolCalls: [], serverToolResults: [] };
+        return { text: response, reasoning: '', toolCalls: [], serverToolResults: [], providerParts: [] };
 
     if (!response || typeof response !== 'object')
-        return { text: '', reasoning: '', toolCalls: [], serverToolResults: [] };
+        return { text: '', reasoning: '', toolCalls: [], serverToolResults: [], providerParts: [] };
 
     return {
         text: String(response.text ?? ''),
@@ -488,7 +502,9 @@ function normalizeProviderResponse(response) {
             : [],
         serverToolResults: Array.isArray(response.serverToolResults)
             ? response.serverToolResults.map((result) => ({
-                name: result?.name === 'x_search' ? 'x_search' : 'search',
+                name: ['x_search', 'google_maps', 'url_context'].includes(result?.name)
+                    ? result.name
+                    : 'search',
                 label: String(result?.label ?? (result?.name === 'x_search' ? 'X Search' : 'Web Search')),
                 query: String(result?.query ?? ''),
                 results: deduplicateSearchResults(result?.results ?? []),
@@ -496,6 +512,7 @@ function normalizeProviderResponse(response) {
                 providerName: String(result?.providerName ?? ''),
             }))
             : [],
+        providerParts: normalizeGeminiProviderParts(response.providerParts),
     };
 }
 
@@ -776,7 +793,15 @@ function anthropicNativeSearchToolDefinitions(configuration) {
 }
 
 function geminiNativeSearchToolDefinitions(configuration) {
-    return configuration ? [{ googleSearch: {} }] : [];
+    const definitions = {
+        google_search: { googleSearch: {} },
+        google_maps: { googleMaps: {} },
+        url_context: { urlContext: {} },
+    };
+
+    return (configuration?.tools ?? [])
+        .map((tool) => definitions[String(tool)] ?? null)
+        .filter(Boolean);
 }
 
 function zaiNativeSearchToolDefinitions(configuration) {
@@ -1043,15 +1068,11 @@ export function extractAnthropicServerToolResults(response) {
 }
 
 export function extractGeminiServerToolResults(response) {
-    const metadata = response?.candidates?.[0]?.groundingMetadata
-        ?? response?.candidates?.[0]?.grounding_metadata;
-
-    if (!metadata)
-        return [];
-
+    const candidate = response?.candidates?.[0] ?? {};
+    const metadata = candidate.groundingMetadata ?? candidate.grounding_metadata ?? {};
     const queries = metadata.webSearchQueries ?? metadata.web_search_queries ?? [];
     const chunks = metadata.groundingChunks ?? metadata.grounding_chunks ?? [];
-    const results = chunks.map((chunk) => {
+    const webResults = chunks.map((chunk) => {
         const web = chunk?.web ?? chunk?.retrievedContext ?? chunk?.retrieved_context;
 
         return web ? {
@@ -1060,16 +1081,65 @@ export function extractGeminiServerToolResults(response) {
             snippet: web.text,
         } : null;
     }).filter(Boolean);
+    const mapsResults = chunks.map((chunk) => {
+        const maps = chunk?.maps;
 
-    if (queries.length === 0 && results.length === 0)
-        return [];
+        return maps ? {
+            url: maps.uri ?? maps.url ?? maps.googleMapsUri ?? maps.google_maps_uri,
+            title: maps.title ?? maps.name,
+            snippet: maps.text ?? (maps.placeId ?? maps.place_id
+                ? `Google Maps place ${maps.placeId ?? maps.place_id}`
+                : ''),
+        } : null;
+    }).filter(Boolean);
+    const results = [];
 
-    return [{
-        name: 'search',
-        label: 'Google Search',
-        query: queries.map(String).filter(Boolean).join(' · '),
-        results: deduplicateSearchResults(results),
-    }];
+    if (webResults.length > 0 || (queries.length > 0 && mapsResults.length === 0)) {
+        results.push({
+            name: 'search',
+            label: 'Google Search',
+            query: queries.map(String).filter(Boolean).join(' · '),
+            results: deduplicateSearchResults(webResults),
+        });
+    }
+
+    if (mapsResults.length > 0) {
+        results.push({
+            name: 'google_maps',
+            label: 'Google Maps',
+            query: queries.map(String).filter(Boolean).join(' · '),
+            results: deduplicateSearchResults(mapsResults),
+        });
+    }
+
+    const urlContextMetadata = candidate.urlContextMetadata ?? candidate.url_context_metadata ?? {};
+    const urlMetadata = urlContextMetadata.urlMetadata ?? urlContextMetadata.url_metadata ?? [];
+    const urlAttempts = urlMetadata.map((item) => {
+        const url = item?.retrievedUrl ?? item?.retrieved_url;
+        const status = item?.urlRetrievalStatus ?? item?.url_retrieval_status;
+
+        return url ? {
+            url,
+            status: status ? String(status) : '',
+        } : null;
+    }).filter(Boolean);
+    const urlResults = urlAttempts
+        .filter((item) => !item.status || /(?:^|_)SUCCESS$/i.test(item.status))
+        .map((item) => ({
+            url: item.url,
+            snippet: item.status,
+        }));
+
+    if (urlAttempts.length > 0) {
+        results.push({
+            name: 'url_context',
+            label: 'URL Context',
+            query: urlAttempts.map((item) => item.url).join(' · '),
+            results: deduplicateSearchResults(urlResults),
+        });
+    }
+
+    return results;
 }
 
 export function extractChatCompletionServerToolResults(response) {
@@ -1087,16 +1157,33 @@ export function extractChatCompletionServerToolResults(response) {
 }
 
 function appendSearchSources(text, serverToolResults) {
-    const sourceResults = deduplicateSearchResults(
-        (serverToolResults ?? []).flatMap((result) => result.results ?? []),
-    );
-    const missingSources = sourceResults.filter((result) => !String(text ?? '').includes(result.url));
+    const sourceResults = new Map();
+
+    for (const toolResult of serverToolResults ?? []) {
+        for (const rawResult of toolResult?.results ?? []) {
+            const result = normalizeSearchResult(rawResult);
+
+            if (!result)
+                continue;
+
+            const existing = sourceResults.get(result.url);
+            const attribution = toolResult?.name === 'google_maps' ? 'Google Maps' : '';
+            sourceResults.set(result.url, {
+                ...(existing ?? result),
+                attribution: attribution || existing?.attribution || '',
+            });
+        }
+    }
+
+    const missingSources = [...sourceResults.values()].filter((result) => (
+        result.attribution === 'Google Maps' || !String(text ?? '').includes(result.url)
+    ));
 
     if (missingSources.length === 0)
         return String(text ?? '');
 
     const sourceList = missingSources
-        .map((result) => `- [${result.title}](${result.url})`)
+        .map((result) => `- [${result.title}](${result.url})${result.attribution ? ` — ${result.attribution}` : ''}`)
         .join('\n');
 
     return `${String(text ?? '').trim()}\n\nSources:\n${sourceList}`.trim();
@@ -1430,6 +1517,11 @@ function anthropicContent(message) {
 }
 
 function geminiParts(message) {
+    const providerParts = messageGeminiProviderParts(message);
+
+    if (message.role === 'assistant' && providerParts.length > 0)
+        return providerParts;
+
     const parts = [];
     const text = messageContent(message);
 
@@ -1925,6 +2017,10 @@ export function extractGeminiFinishReason(response) {
     return response.candidates?.[0]?.finishReason ?? '';
 }
 
+export function extractGeminiProviderParts(response) {
+    return normalizeGeminiProviderParts(response?.candidates?.[0]?.content?.parts);
+}
+
 export function extractGeminiResponse(response) {
     const serverToolResults = extractGeminiServerToolResults(response);
 
@@ -1935,6 +2031,7 @@ export function extractGeminiResponse(response) {
         finishReason: extractGeminiFinishReason(response),
         toolCalls: extractGeminiToolCalls(response),
         serverToolResults,
+        providerParts: extractGeminiProviderParts(response),
     };
 }
 
@@ -2140,6 +2237,13 @@ class RemoteProvider extends ChatProvider {
                 yield {
                     type: 'reasoning',
                     text: response.reasoning,
+                };
+            }
+
+            if (response.providerParts.length > 0) {
+                yield {
+                    type: 'provider_context',
+                    providerParts: response.providerParts,
                 };
             }
 

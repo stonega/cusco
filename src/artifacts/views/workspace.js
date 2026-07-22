@@ -288,6 +288,7 @@ export function createArtifactWorkspace(options = {}) {
 
         const view = registry.createWorkspaceView(activeResolved, {
             onExternalLink: (uri) => options.onExternalLink?.(uri),
+            onOpenImage: options.onOpenImage,
             onOpenExternal: (path) => {
                 if (options.onOpenExternal) {
                     options.onOpenExternal(path);

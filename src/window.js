@@ -68,6 +68,7 @@ import {
 } from './providers/thinking.js';
 import { normalizeTokenUsage } from './providers/usage.js';
 import { createBundledIcon, getBundledImagePath } from './bundledIcons.js';
+import { presentImageViewer } from './imageEditor/window.js';
 import { AppSettingsStore } from './settings/appSettings.js';
 import { presentArchivedChatsWindow } from './settings/archivedChats.js';
 import { presentProviderSettingsDialog } from './settings/providerSettings.js';
@@ -482,7 +483,7 @@ export function messageRunDurationLabel(message) {
     if (!Number.isFinite(durationMilliseconds) || durationMilliseconds < 0)
         return '';
 
-    return formatRunningTime(durationMilliseconds / 1000);
+    return `Worked for ${formatRunningTime(durationMilliseconds / 1000)}`;
 }
 
 export function buildShimmerMarkup(text, phase = 0) {
@@ -578,6 +579,14 @@ function normalizeProviderChunk(chunk) {
             usage: null,
         };
 
+    if (chunk.type === 'provider_context')
+        return {
+            type: 'provider_context',
+            text: '',
+            providerParts: Array.isArray(chunk.providerParts) ? chunk.providerParts : [],
+            usage: null,
+        };
+
     if (chunk.type === 'status')
         return {
             type: 'status',
@@ -644,6 +653,19 @@ function imageAttachmentSummaryLine(attachment) {
 function attachmentPathExists(attachment) {
     const path = String(attachment?.path ?? '').trim();
     return Boolean(path) && GLib.file_test(path, GLib.FileTest.EXISTS);
+}
+
+export function replacePendingAttachment(attachments, currentAttachment, replacementAttachment) {
+    if (!Array.isArray(attachments) || !currentAttachment || !replacementAttachment)
+        return false;
+
+    const index = attachments.indexOf(currentAttachment);
+
+    if (index < 0)
+        return false;
+
+    attachments.splice(index, 1, replacementAttachment);
+    return true;
 }
 
 function cacheScaledImagePaintable(cacheKey, paintable) {
@@ -891,6 +913,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._cron = new CronJobManager();
         this._mcp = new McpManager({ workspaceManager: this._workspace });
         this._pendingAttachments = [];
+        this._imageViewer = null;
         this._composerReferences = [];
         this._userMessageReferenceContents = new Set();
         this._composerSuggestionItems = [];
@@ -1044,6 +1067,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             parentWindow: this,
             onClose: () => this._closeArtifactWorkspace(),
             onExternalLink: (uri) => this._confirmOpenArtifactLink(uri),
+            onOpenImage: (image) => this._openImageViewer(image),
             onArtifactChanged: () => this._syncArtifactWorkspaceButton(),
         });
         this._artifactSplitView = new Adw.OverlaySplitView({
@@ -1389,16 +1413,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             propagate_natural_height: true,
         });
         this._attachmentPreviewScroller.add_css_class('cusco-attachment-preview-scroller');
-        this._removeAttachmentButton = new Gtk.Button({
-            icon_name: 'window-close-symbolic',
-            tooltip_text: 'Clear attachments',
-            valign: Gtk.Align.CENTER,
-        });
-        this._removeAttachmentButton.add_css_class('flat');
-        this._removeAttachmentButton.add_css_class('circular');
-        this._removeAttachmentButton.connect('clicked', () => this._clearPendingAttachments());
         this._attachmentRow.append(this._attachmentPreviewScroller);
-        this._attachmentRow.append(this._removeAttachmentButton);
         this._pendingUserMessagesRow = this._createPendingUserMessagesRow();
 
         this._attachButton = new Gtk.Button({
@@ -3522,6 +3537,93 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return provider?.supportsImageAttachments !== false;
     }
 
+    _imageAttachCapability() {
+        const allowed = this._activeProviderSupportsImageAttachments();
+
+        return {
+            allowed,
+            reason: allowed ? '' : this._activeImageAttachmentUnsupportedMessage(),
+        };
+    }
+
+    _openImageViewer(image) {
+        const path = String(image?.path ?? '').trim();
+        const attachmentToReplace = image?.attachmentToReplace ?? null;
+
+        if (!path || !GLib.file_test(path, GLib.FileTest.EXISTS)) {
+            this._showToast('That image is no longer available.');
+            return null;
+        }
+
+        try {
+            const viewer = presentImageViewer({
+                parent: this,
+                image: {
+                    path,
+                    title: String(image?.title ?? GLib.path_get_basename(path)),
+                    mimeType: String(image?.mimeType ?? ''),
+                    sourceKind: String(image?.sourceKind ?? 'image'),
+                },
+                getAttachCapability: () => this._imageAttachCapability(),
+                onAttach: (outputPath) => this._attachEditedImageToComposer(
+                    outputPath,
+                    attachmentToReplace,
+                ),
+            });
+
+            this._imageViewer = viewer;
+            viewer.connect('destroy', () => {
+                if (this._imageViewer === viewer)
+                    this._imageViewer = null;
+            });
+            return viewer;
+        } catch (error) {
+            logError(error, `Failed to open image viewer: ${path}`);
+            this._showToast('The image could not be opened.');
+            return null;
+        }
+    }
+
+    _attachEditedImageToComposer(path, attachmentToReplace = null) {
+        const capability = this._imageAttachCapability();
+
+        if (!capability.allowed) {
+            this._showToast(capability.reason);
+            return false;
+        }
+
+        if (!GLib.file_test(path, GLib.FileTest.EXISTS)) {
+            this._showToast('The edited image could not be found.');
+            return false;
+        }
+
+        const editedAttachment = this._createAttachmentFromPath(path);
+        let replaced = false;
+
+        if (attachmentToReplace) {
+            replaced = replacePendingAttachment(
+                this._pendingAttachments,
+                attachmentToReplace,
+                editedAttachment,
+            );
+
+            if (!replaced) {
+                this._showToast('The original attachment is no longer in the composer.');
+                return false;
+            }
+        } else if (!this._pendingAttachments.some((attachment) => attachment.path === path)) {
+            this._pendingAttachments.push(editedAttachment);
+        }
+
+        this._updateAttachmentLabel();
+        this.present();
+        this.focusComposer();
+        this._showToast(replaced
+            ? 'Attachment replaced with the edited image.'
+            : 'Edited image added to the composer.');
+        return true;
+    }
+
     _activeImageAttachmentUnsupportedMessage() {
         const providerId = this._conversations.activeConversation?.providerId
             ?? this._providerPicker?.get_active_id?.()
@@ -3613,12 +3715,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return attachments;
     }
 
-    _clearPendingAttachments() {
-        this._pendingAttachments = [];
-        this._updateAttachmentLabel();
-        this.focusComposer();
-    }
-
     _discardPendingImageAttachmentsIfUnsupportedProvider() {
         if (this._activeProviderSupportsImageAttachments())
             return;
@@ -3657,6 +3753,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return this._createAttachmentPreviewCard(attachment, {
             onRemove: () => this._removePendingAttachment(index),
             removeTooltip: `Remove ${attachment.name}`,
+            attachmentToReplace: attachment,
         });
     }
 
@@ -3678,7 +3775,21 @@ class CuscoWindow extends Adw.ApplicationWindow {
             picture.set_content_fit(Gtk.ContentFit.COVER);
             picture.set_size_request(COMPOSER_ATTACHMENT_THUMBNAIL_WIDTH, COMPOSER_ATTACHMENT_THUMBNAIL_HEIGHT);
             picture.add_css_class('cusco-composer-attachment-thumbnail');
-            card.append(picture);
+            const imageButton = new Gtk.Button({
+                child: picture,
+                tooltip_text: `Open ${attachment.name}`,
+                valign: Gtk.Align.CENTER,
+            });
+            imageButton.add_css_class('flat');
+            imageButton.add_css_class('cusco-attachment-image-button');
+            imageButton.connect('clicked', () => this._openImageViewer({
+                path: attachment.path,
+                title: attachment.name,
+                mimeType: attachment.contentType ?? '',
+                sourceKind: options.onRemove ? 'composer-attachment' : 'message-attachment',
+                attachmentToReplace: options.attachmentToReplace ?? null,
+            }));
+            card.append(imageButton);
             loadScaledImagePaintableAsync(
                 attachment.path,
                 COMPOSER_ATTACHMENT_THUMBNAIL_WIDTH,
@@ -3837,7 +3948,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
                         if (state?.type === 'reasoning')
                             assistantView.set_reasoning(state.reasoning);
 
-                        if (state?.type !== 'usage')
+                        if (state?.type === 'provider_context')
+                            assistantView.set_provider_context?.(state.providerParts);
+
+                        if (state?.type !== 'usage' && state?.type !== 'provider_context')
                             assistantView.set_label(text);
 
                         this._scheduleUsageDisplayUpdate(conversation);
@@ -3910,6 +4024,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         let usage = null;
         const toolCalls = [];
         const serverToolResults = [];
+        let providerParts = [];
 
         for await (const chunk of activeProvider.streamChat(providerMessages, {
             ...providerConfig,
@@ -3937,6 +4052,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 toolCalls.push(...normalizedChunk.toolCalls);
             else if (normalizedChunk.type === 'server_tool_results')
                 serverToolResults.push(...normalizedChunk.serverToolResults);
+            else if (normalizedChunk.type === 'provider_context')
+                providerParts = normalizedChunk.providerParts;
             else
                 responseText += normalizedChunk.text;
 
@@ -3947,6 +4064,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 usage,
                 toolCalls,
                 serverToolResults,
+                providerParts,
                 serverToolResultChunk: normalizedChunk.serverToolResults ?? [],
                 status: normalizedChunk.type === 'status' ? normalizedChunk.text : '',
                 statusKind: normalizedChunk.status ?? '',
@@ -3962,6 +4080,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 usage,
                 toolCalls,
                 serverToolResults,
+                providerParts,
             };
 
         return responseText;
@@ -4128,10 +4247,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
                         );
                     }
 
+                    if (state?.type === 'provider_context')
+                        getAssistantView()?.set_provider_context?.(state.providerParts);
+
                     if (state?.type !== 'usage'
                         && state?.type !== 'tool_calls'
                         && state?.type !== 'reasoning'
-                        && state?.type !== 'server_tool_results') {
+                        && state?.type !== 'server_tool_results'
+                        && state?.type !== 'provider_context') {
                         this._updateAgentModeAssistantView(conversation, getAssistantView(), text);
                     }
                 },
@@ -4190,6 +4313,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     responseText,
                     runtimeNativeToolCalls,
                     nativeRuntimeMessages,
+                    { providerParts: responseState.providerParts },
                 ));
 
                 if (ranAnyTool)
@@ -4458,11 +4582,18 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _appendProviderSearchResults(conversation, serverToolResults) {
         for (const searchResult of serverToolResults ?? []) {
-            const isXSearch = searchResult?.name === 'x_search';
+            const names = new Set(['search', 'x_search', 'google_maps', 'url_context']);
+            const name = names.has(searchResult?.name) ? searchResult.name : 'search';
+            const fallbackLabels = {
+                search: 'Web Search',
+                x_search: 'X Search',
+                google_maps: 'Google Maps',
+                url_context: 'URL Context',
+            };
             const request = {
-                name: isXSearch ? 'x_search' : 'search',
-                label: searchResult?.label ?? (isXSearch ? 'X Search' : 'Web Search'),
-                input: String(searchResult?.query ?? '').trim() || 'Provider-managed search',
+                name,
+                label: searchResult?.label ?? fallbackLabels[name],
+                input: String(searchResult?.query ?? '').trim() || 'Provider-managed tool',
                 permissionPolicy: 'allow',
                 requiresPermission: false,
             };
@@ -4476,7 +4607,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 results,
                 providerId: searchResult?.providerId ?? conversation.providerId,
                 providerName: searchResult?.providerName ?? '',
-                output: `${results.length} cited result${results.length === 1 ? '' : 's'} returned.`,
+                output: `${results.length} cited source${results.length === 1 ? '' : 's'} returned.`,
             };
 
             this._completeRunningToolMessage(
@@ -4782,6 +4913,23 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             assistantMessage = storedMessage;
         };
+        const updatePersistentProviderContext = (providerParts) => {
+            if (!Array.isArray(providerParts) || providerParts.length === 0)
+                return;
+
+            const message = ensureMessage(currentText);
+            const storedMessage = this._conversations.updateMessageMetadata(
+                conversation.id,
+                message.id,
+                {
+                    ...message.metadata,
+                    geminiProviderParts: providerParts.map((part) => ({ ...part })),
+                },
+                { persist: false },
+            );
+
+            assistantMessage = storedMessage;
+        };
 
         return {
             set_label: (text) => updatePersistentText(text, text),
@@ -4790,6 +4938,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             set_usage: updatePersistentUsage,
             set_artifacts: updatePersistentArtifacts,
             set_run_duration: updatePersistentRunDuration,
+            set_provider_context: updatePersistentProviderContext,
             set_loading: () => ensureView()?.set_loading(),
             set_status: (text) => ensureView()?.set_status(text),
             clear_status: () => view?.clear_loading?.(),
@@ -6418,6 +6567,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             artifactRegistry: this._artifactRenderers,
             onOpenArtifact: (reference) => this._openArtifactWorkspace(reference),
             onExportArtifact: (reference) => this._exportArtifact(reference),
+            onOpenImage: (image) => this._openImageViewer(image),
             onExternalLink: (uri) => this._confirmOpenArtifactLink(uri),
             onArtifactTerminated: () => this._showToast('The artifact preview stopped unexpectedly.'),
             ...options,
@@ -7510,7 +7660,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (runDuration) {
             const durationLabel = new Gtk.Label({
                 label: runDuration,
-                tooltip_text: `Agent worked for ${runDuration}`,
+                tooltip_text: 'Agent run duration',
                 valign: Gtk.Align.CENTER,
             });
             durationLabel.add_css_class('caption');

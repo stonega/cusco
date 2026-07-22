@@ -19,7 +19,7 @@ const prompt = buildAgentModeSystemPrompt(tools.listTools(), { maxIterations: 2 
 const defaultPrompt = buildAgentModeSystemPrompt(tools.listTools());
 const nativeSearchPrompt = buildAgentModeSystemPrompt(
     tools.listTools().filter((tool) => tool.name !== 'search'),
-    { nativeSearchTools: ['web_search', 'x_search'] },
+    { nativeSearchTools: ['google_search', 'google_maps', 'url_context'] },
 );
 const nativeToolPrompt = buildAgentModeSystemPrompt([
     ...tools.listTools(),
@@ -54,9 +54,12 @@ if (!prompt.includes('Agent is enabled')
     throw new Error('Agent Mode prompt did not describe the tool protocol');
 }
 
-if (!nativeSearchPrompt.includes('Provider-managed search tools are enabled: web_search, x_search')
+if (!nativeSearchPrompt.includes('Provider-managed tools are enabled: google_search, google_maps, url_context')
+    || !nativeSearchPrompt.includes('Use Google Maps only for clearly location-related questions')
+    || !nativeSearchPrompt.includes('Cusco does not provide the device location')
+    || !nativeSearchPrompt.includes('Use URL Context when the user supplies complete public URLs')
     || nativeSearchPrompt.includes('- search: Web Search')) {
-    throw new Error('Agent Mode prompt did not route search to provider-managed tools');
+    throw new Error('Agent Mode prompt did not route Gemini provider-managed tools');
 }
 
 if (!nativeToolPrompt.includes('native function-calling interface')
@@ -268,11 +271,19 @@ const parallelRuntimeBatch = createNativeToolRuntimeBatch(
             nativeToolCall: parallelNativeCalls[1],
         }),
     ],
+    {
+        providerParts: [{
+            toolCall: { id: 'server-search-1', toolType: 'GOOGLE_SEARCH_WEB' },
+            thoughtSignature: 'server-search-signature',
+        }],
+    },
 );
 
 if (parallelRuntimeBatch.length !== 3
     || parallelRuntimeBatch[0].role !== 'assistant'
     || parallelRuntimeBatch[0].toolCalls.length !== 2
+    || parallelRuntimeBatch[0].providerParts[0].toolCall.id !== 'server-search-1'
+    || parallelRuntimeBatch[0].providerParts[0].thoughtSignature !== 'server-search-signature'
     || parallelRuntimeBatch[0].toolCalls[0].thoughtSignature !== 'gemini-parallel-signature'
     || parallelRuntimeBatch[0].toolCalls[1].thoughtSignature !== undefined
     || parallelRuntimeBatch[1].role !== 'tool'

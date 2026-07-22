@@ -20,7 +20,11 @@ Memory is opt-in at write time. When a message looks like a useful long-term fac
 
 Tools can be requested from the composer with `/search`, `/calc`, and `/data`. Web search asks for permission before sending a query and returns cited results. The attachment button adds local file context or image attachment notes to the next message.
 
+Select any generated image, image attachment, tool result, or image artifact to open Cusco's native viewer. It supports zooming, cropping, rotation, flipping, and editable drawing, shape, arrow, and text annotations. Edited copies can be saved as PNG or added to the composer without sending immediately. See [Image Viewer and Editor](image-editor.md).
+
 In Agent mode, the model can pause its work with an `ask_user` request when it needs information or a choice. Cusco temporarily replaces the provider controls with one question and its suggested options while keeping a custom-answer input. Multiple questions are shown sequentially. Select an option or type an answer and press Enter; press Escape to return a `null` answer and let the agent continue. Any existing composer draft is restored afterward.
+
+Gemini Agent mode enables Google Search, Google Maps grounding, and URL Context as provider-managed tools. Maps is intended for clearly location-related questions; Cusco does not access or transmit the device location, so include the relevant city, address, or area in the prompt. URL Context can read complete public URLs included in the prompt. Cusco displays provider-tool activity and appends returned sources, including required Google Maps attribution, to grounded answers.
 
 The composer also provides inline references. Type `$` to filter enabled skills, `@` to find files under your Home folder, `@artifact:` to reference an exact artifact revision, or `#` to find executable commands available on `PATH`. Use the arrow keys and Enter or Tab to insert a styled reference, or Escape to close the list. Referenced files are attached to the message, referenced skills are loaded for that turn, referenced artifacts provide bounded working context, and referenced commands are never executed automatically.
 

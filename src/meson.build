@@ -58,6 +58,12 @@ computer_use_sources = files(
   'computerUse/tools.js',
 )
 
+image_editor_sources = files(
+  'imageEditor/document.js',
+  'imageEditor/renderer.js',
+  'imageEditor/window.js',
+)
+
 provider_sources = files(
   'providers/config.js',
   'providers/imageGeneration.js',
@@ -162,6 +168,11 @@ install_data(
 install_data(
   computer_use_sources,
   install_dir: pkgdatadir / 'computerUse',
+)
+
+install_data(
+  image_editor_sources,
+  install_dir: pkgdatadir / 'imageEditor',
 )
 
 install_data(

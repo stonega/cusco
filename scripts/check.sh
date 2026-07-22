@@ -34,6 +34,8 @@ gjs -m tests/usage-smoke.js
 gjs -m tests/compaction-smoke.js
 gjs -m tests/memory-smoke.js
 gjs -m tests/image-generation-smoke.js
+gjs -m tests/image-editor-smoke.js
+gjs -m tests/image-editor-window-smoke.js
 gjs -m tests/tools-smoke.js
 gjs -m tests/cron-smoke.js
 gjs -m tests/agent-mode-smoke.js

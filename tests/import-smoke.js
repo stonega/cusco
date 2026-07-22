@@ -20,6 +20,13 @@ import { estimateConversationUsage } from '../src/chat/usage.js';
 import { createCronCreateTool, CronJobManager } from '../src/cron/manager.js';
 import { ComputerUseService } from '../src/computerUse/service.js';
 import { createComputerUseTools } from '../src/computerUse/tools.js';
+import { ImageDocument } from '../src/imageEditor/document.js';
+import {
+    exportDocumentPng,
+    loadImageSource,
+    renderDocumentToSurface,
+} from '../src/imageEditor/renderer.js';
+import { presentImageViewer } from '../src/imageEditor/window.js';
 import { MemoryManager } from '../src/memory/memory.js';
 import { defaultMcpConfigFilePath, parseMcpConfigFile } from '../src/mcp/config.js';
 import { parseWwwAuthenticate, SecretServiceMcpTokenStore } from '../src/mcp/auth.js';
@@ -62,10 +69,12 @@ import { WorkspaceManager } from '../src/workspace/workspace.js';
 import {
     buildShimmerMarkup,
     composerHintPresentation,
+    CuscoWindow,
     formatConversationUpdatedAt,
     formatRunningTime,
     messageRunDurationLabel,
     normalizeConversationMessageStartIndex,
+    replacePendingAttachment,
     shouldAutoSendQueuedMessages,
     shouldSendLongResponseNotification,
 } from '../src/window.js';
@@ -125,6 +134,65 @@ if (!shouldAutoSendQueuedMessages()
     throw new Error('Queued-message continuation changed unexpectedly');
 }
 
+const firstAttachment = { path: '/tmp/first.png' };
+const editedAttachmentSource = { path: '/tmp/source.png' };
+const lastAttachment = { path: '/tmp/last.png' };
+const replacementAttachment = { path: '/tmp/source-edited.png' };
+const pendingAttachments = [firstAttachment, editedAttachmentSource, lastAttachment];
+
+if (!replacePendingAttachment(
+    pendingAttachments,
+    editedAttachmentSource,
+    replacementAttachment,
+) || pendingAttachments.length !== 3
+    || pendingAttachments[0] !== firstAttachment
+    || pendingAttachments[1] !== replacementAttachment
+    || pendingAttachments[2] !== lastAttachment) {
+    throw new Error('Editing a composer image did not replace its exact attachment slot');
+}
+
+if (replacePendingAttachment(
+    pendingAttachments,
+    { path: replacementAttachment.path },
+    editedAttachmentSource,
+)) {
+    throw new Error('Attachment replacement matched a different object by path');
+}
+
+let attachmentRefreshes = 0;
+let attachmentToast = '';
+const composerAttachment = { kind: 'image', path: '/tmp/original.png' };
+const siblingAttachment = { kind: 'file', path: '/tmp/notes.txt' };
+const editedComposerAttachment = {
+    kind: 'image',
+    path: 'data/icons/hicolor/64x64/apps/io.github.stonega.Cusco.png',
+};
+const fakeComposerWindow = {
+    _pendingAttachments: [composerAttachment, siblingAttachment],
+    _imageAttachCapability: () => ({ allowed: true, reason: '' }),
+    _createAttachmentFromPath: () => editedComposerAttachment,
+    _updateAttachmentLabel: () => attachmentRefreshes++,
+    _showToast: (message) => {
+        attachmentToast = message;
+    },
+    present() {},
+    focusComposer() {},
+};
+const didReplaceComposerAttachment = CuscoWindow.prototype._attachEditedImageToComposer.call(
+    fakeComposerWindow,
+    editedComposerAttachment.path,
+    composerAttachment,
+);
+
+if (!didReplaceComposerAttachment
+    || fakeComposerWindow._pendingAttachments.length !== 2
+    || fakeComposerWindow._pendingAttachments[0] !== editedComposerAttachment
+    || fakeComposerWindow._pendingAttachments[1] !== siblingAttachment
+    || attachmentRefreshes !== 1
+    || attachmentToast !== 'Attachment replaced with the edited image.') {
+    throw new Error('The image editor callback did not replace its composer attachment');
+}
+
 const [, queuedIconBytes] = GLib.file_get_contents('data/resources/queued-symbolic.svg');
 const queuedIcon = new TextDecoder().decode(queuedIconBytes);
 if (!queuedIcon.includes('fill="currentColor"') || queuedIcon.includes('fill="#000000"'))
@@ -136,7 +204,8 @@ if (formatRunningTime(0) !== '0s'
     throw new Error('Agent running time formatting changed unexpectedly');
 }
 
-if (messageRunDurationLabel({ metadata: { agentRunDurationMs: 65000 } }) !== '1m 05s'
+if (messageRunDurationLabel({ metadata: { agentRunDurationMs: 880000 } }) !== 'Worked for 14m 40s'
+    || messageRunDurationLabel({ metadata: { agentRunDurationMs: 65000 } }) !== 'Worked for 1m 05s'
     || messageRunDurationLabel({ metadata: {} }) !== '') {
     throw new Error('Completed Agent run duration presentation changed unexpectedly');
 }
@@ -188,6 +257,14 @@ if (typeof getProviderGIcon !== 'function' || typeof createProviderIcon !== 'fun
 
 if (typeof ConversationManager !== 'function')
     throw new Error('ConversationManager did not import as a class');
+
+if (typeof ImageDocument !== 'function'
+    || typeof loadImageSource !== 'function'
+    || typeof renderDocumentToSurface !== 'function'
+    || typeof exportDocumentPng !== 'function'
+    || typeof presentImageViewer !== 'function') {
+    throw new Error('Image viewer/editor modules did not import');
+}
 
 if (typeof buildAgentModeSystemPrompt !== 'function' || typeof parseAgentToolCall !== 'function')
     throw new Error('Agent Mode helpers did not import');

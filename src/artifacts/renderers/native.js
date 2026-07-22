@@ -133,7 +133,27 @@ export class NativeImageArtifactRenderer {
         picture.set_vexpand(!options.inline);
         picture.set_size_request(options.inline ? 360 : 480, options.inline ? 240 : 360);
         picture.add_css_class('cusco-artifact-picture');
-        return picture;
+
+        if (!options.onOpenImage)
+            return picture;
+
+        const button = new Gtk.Button({
+            child: picture,
+            tooltip_text: 'Open image',
+            hexpand: true,
+            vexpand: !options.inline,
+        });
+        button.add_css_class('flat');
+        button.add_css_class('cusco-artifact-picture-button');
+        button.connect('clicked', () => options.onOpenImage({
+            path,
+            title: resolved.artifact.title,
+            mimeType: resolved.artifact.mimeType,
+            sourceKind: 'managed-artifact',
+            artifactId: resolved.artifact.id,
+            revisionId: resolved.revision.id,
+        }));
+        return button;
     }
 
     createInlineView(manager, resolved, options = {}) {
