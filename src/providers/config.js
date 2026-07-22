@@ -344,6 +344,7 @@ const PROVIDER_SUPPORTED_MODEL_IDS = {
     ]),
     gemini: new Set([
         'gemini-3.6-flash',
+        'gemini-3.5-flash-lite',
         'gemini-3.1-pro-preview',
     ]),
     kimi: new Set([
@@ -673,6 +674,7 @@ const PROVIDER_MODEL_CONTEXT_WINDOW_TOKENS = {
     },
     gemini: {
         'gemini-3.6-flash': 1048576,
+        'gemini-3.5-flash-lite': 1048576,
         'gemini-3.1-pro-preview': 1048576,
     },
     grok: {
@@ -951,6 +953,13 @@ export const DEFAULT_PROVIDER_CONFIGS = [
                 id: 'gemini-3.6-flash',
                 name: 'Gemini 3.6 Flash',
                 description: 'Stable Gemini model balancing speed and intelligence for agentic and multimodal tasks.',
+                contextWindowTokens: 1048576,
+                thinking: GEMINI_3_LEVEL_THINKING,
+            },
+            {
+                id: 'gemini-3.5-flash-lite',
+                name: 'Gemini 3.5 Flash-Lite',
+                description: 'Low-latency, cost-effective multimodal model for high-throughput agentic workflows and document parsing.',
                 contextWindowTokens: 1048576,
                 thinking: GEMINI_3_LEVEL_THINKING,
             },

@@ -35,6 +35,7 @@ const ANTHROPIC_DEFAULT_THINKING_BUDGETS = {
 };
 const SUPPORTED_GEMINI_MODEL_IDS = new Set([
     'gemini-3.6-flash',
+    'gemini-3.5-flash-lite',
     'gemini-3.1-pro-preview',
 ]);
 const MAX_NATIVE_TOOL_DESCRIPTION_CHARS = 1024;

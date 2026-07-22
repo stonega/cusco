@@ -179,6 +179,9 @@ if (staleAnthropicStore.getDefaultModel('anthropic').id !== 'claude-sonnet-5')
 if (defaultStore.resolve('gemini', 'gemini-3.6-flash').model.contextWindowTokens !== 1048576)
     throw new Error('Gemini 3.6 Flash context window should match the documented input token limit');
 
+if (defaultStore.resolve('gemini', 'gemini-3.5-flash-lite').model.contextWindowTokens !== 1048576)
+    throw new Error('Gemini 3.5 Flash-Lite context window should match the documented input token limit');
+
 if (defaultStore.resolve('grok', 'grok-4.3').model.contextWindowTokens !== 1000000)
     throw new Error('Grok 4.3 context window should be 1M tokens');
 
@@ -325,6 +328,11 @@ if (staleZaiImageModelIds.join(',') !== 'glm-image')
     throw new Error(`Unsupported Z.ai image model was loaded: ${staleZaiImageModelIds.join(', ')}`);
 
 const geminiProvider = defaultStore.getProvider('gemini');
+const expectedGeminiModelIds = [
+    'gemini-3.6-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-3.1-pro-preview',
+];
 
 if (geminiProvider.models.some((model) => model.id === 'gemini-3.1-pro'))
     throw new Error('Gemini model list still contains stale gemini-3.1-pro id');
@@ -332,7 +340,7 @@ if (geminiProvider.models.some((model) => model.id === 'gemini-3.1-pro'))
 if (!geminiProvider.models.some((model) => model.id === 'gemini-3.1-pro-preview'))
     throw new Error('Gemini 3.1 Pro preview model was not configured');
 
-if (geminiProvider.models.length !== 2 || geminiProvider.models.some((model) => model.id.startsWith('gemini-2.')))
+if (geminiProvider.models.map((model) => model.id).join(',') !== expectedGeminiModelIds.join(','))
     throw new Error(`Gemini model list should only include supported Gemini 3 models: ${geminiProvider.models.map((model) => model.id).join(', ')}`);
 
 const geminiImageModelIds = geminiProvider.imageModels.map((model) => model.id);
@@ -353,6 +361,9 @@ if (defaultStore.getImageGenerationSelection().provider.id !== 'gemini'
 
 if (!defaultStore.getThinkingLevels('gemini', 'gemini-3.6-flash').includes('minimal'))
     throw new Error('Gemini 3.6 Flash minimal thinking level was not configured');
+
+if (!defaultStore.getThinkingLevels('gemini', 'gemini-3.5-flash-lite').includes('minimal'))
+    throw new Error('Gemini 3.5 Flash-Lite minimal thinking level was not configured');
 
 if (defaultStore.getThinkingLevels('gemini', 'gemini-3.1-pro-preview').includes('minimal'))
     throw new Error('Gemini 3.1 Pro should not expose minimal thinking');

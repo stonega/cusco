@@ -14,7 +14,7 @@ support keep the chat picker disabled.
 | Level | Meaning |
 |---|---|
 | `Off` | Disable provider reasoning when the API supports disabling it. |
-| `Minimal` | Smallest explicit thinking mode, currently used by Gemini 3.6 Flash. |
+| `Minimal` | Smallest explicit thinking mode, currently used by Gemini 3.6 Flash and Gemini 3.5 Flash-Lite. |
 | `Auto` | Let the provider choose its default thinking behavior. |
 | `Low` | Request low reasoning effort or a low thinking budget. |
 | `Medium` | Request medium reasoning effort or a medium thinking budget. |
@@ -32,7 +32,7 @@ support keep the chat picker disabled.
 | Anthropic | `claude-sonnet-5` | `claude-fable-5` | `Low`, `Medium`, `High`, `X-High`, `Max` |
 | Anthropic | `claude-sonnet-5` | `claude-opus-4-8`, `claude-sonnet-5` | `Off`, `Low`, `Medium`, `High`, `X-High`, `Max` |
 | Anthropic | `claude-sonnet-5` | `claude-haiku-4-5` | `Off`, `Auto`, `Low`, `Medium`, `High` |
-| Google Gemini | `gemini-3.6-flash` | `gemini-3.6-flash` | `Minimal`, `Auto`, `Low`, `Medium`, `High` |
+| Google Gemini | `gemini-3.6-flash` | `gemini-3.6-flash`, `gemini-3.5-flash-lite` | `Minimal`, `Auto`, `Low`, `Medium`, `High` |
 | Google Gemini | `gemini-3.6-flash` | `gemini-3.1-pro-preview` | `Auto`, `Low`, `Medium`, `High` |
 | Kimi | `kimi-k3` | `kimi-k3` | `Max` |
 | Kimi | `kimi-k3` | `kimi-k2.7-code` | `Auto` |
@@ -62,6 +62,7 @@ from the built-in model metadata.
 | Anthropic | `claude-sonnet-5` | 1M tokens |
 | Anthropic | `claude-haiku-4-5` | 200K tokens |
 | Google Gemini | `gemini-3.6-flash` | 1,048,576 tokens |
+| Google Gemini | `gemini-3.5-flash-lite` | 1,048,576 tokens |
 | Google Gemini | `gemini-3.1-pro-preview` | 1,048,576 tokens |
 | Kimi | `kimi-k3` | 1M tokens |
 | Kimi | `kimi-k2.7-code` | 256K tokens |
@@ -97,13 +98,14 @@ models that use its OpenAI-compatible image generation endpoint.
   `gpt-5.6` alias is normalized to `gpt-5.6-sol`; Terra balances intelligence
   and cost, and Luna is optimized for cost-sensitive workloads. Only the GPT-5.6
   family exposes `X-High` and `Max` reasoning in Cusco.
-- Gemini is intentionally limited to `gemini-3.6-flash` and
-  `gemini-3.1-pro-preview`. Persisted or discovered Gemini 2.x models are
+- Gemini is intentionally limited to `gemini-3.6-flash`,
+  `gemini-3.5-flash-lite`, and `gemini-3.1-pro-preview`. Persisted or
+  discovered Gemini 2.x models are
   ignored. The retired `gemini-3.5-flash` ID is migrated to
   `gemini-3.6-flash`, and the stale `gemini-3.1-pro` ID is migrated to
   `gemini-3.1-pro-preview`. Gemini image generation excludes
   `gemini-2.5-flash-image`; only the Gemini 3 image models listed above are
-  supported. In Agent mode, both built-in Gemini chat models can use Google
+  supported. In Agent mode, all built-in Gemini chat models can use Google
   Search, Google Maps grounding, and URL Context. Cusco shows provider tool
   activity and cited sources, preserves Gemini's server-tool context between
   turns, and never sends the device location. Name a location explicitly for
@@ -156,6 +158,7 @@ models that use its OpenAI-compatible image generation endpoint.
 | Anthropic | `claude-sonnet-5` | Best balance of speed and intelligence for production workloads. Context 1M. | `Off`, `Low`, `Medium`, `High`, `X-High`, `Max` |
 | Anthropic | `claude-haiku-4-5` | Fastest Claude model with near-frontier intelligence. Context 200K. | `Off`, `Auto`, `Low`, `Medium`, `High` |
 | Google Gemini | `gemini-3.6-flash` | Stable Gemini model balancing speed and intelligence for agentic and multimodal tasks. | `Minimal`, `Auto`, `Low`, `Medium`, `High` |
+| Google Gemini | `gemini-3.5-flash-lite` | Low-latency, cost-effective multimodal model for high-throughput agentic workflows and document parsing. | `Minimal`, `Auto`, `Low`, `Medium`, `High` |
 | Google Gemini | `gemini-3.1-pro-preview` | Advanced intelligence and agentic coding model. | `Auto`, `Low`, `Medium`, `High` |
 | Kimi | `kimi-k3` | Kimi flagship model for long-horizon coding, knowledge work, reasoning, and visual understanding. Context 1M. | `Max` |
 | Kimi | `kimi-k2.7-code` | Kimi coding model with stronger long-context instruction following and higher coding task success. Context 256k. | `Auto` |
@@ -175,6 +178,7 @@ models that use its OpenAI-compatible image generation endpoint.
 - Claude extended thinking: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
 - Kimi K3 quickstart: https://platform.kimi.ai/docs/guide/kimi-k3-quickstart
 - Gemini 3.6 Flash model: https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash
+- Gemini 3.5 Flash-Lite model: https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite
 - Gemini latest model guide: https://ai.google.dev/gemini-api/docs/latest-model
 - Gemini thinking guide: https://ai.google.dev/gemini-api/docs/thinking
 - Gemini Google Maps grounding: https://ai.google.dev/gemini-api/docs/generate-content/maps-grounding
