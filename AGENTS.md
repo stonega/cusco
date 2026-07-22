@@ -46,6 +46,14 @@ Do not run `meson install -C builddir`, copy files into `~/.local/share/cusco`, 
 - `tests/`: lightweight smoke checks.
 - `scripts/`: repeatable local development scripts.
 
+## Changelog
+
+- Maintain `CHANGELOG.md` as the chronological, user-facing record of notable changes.
+- Before every commit or push, check whether the work changes user-visible behavior. If it does, add a concise entry under `## [Unreleased]` in the appropriate Added, Changed, Fixed, Deprecated, Removed, or Security section.
+- Do not add entries for internal refactors, tests, formatting, or documentation-only maintenance unless they materially affect users or contributors.
+- When cutting a release, move the Unreleased entries into a versioned section with the release date, add a fresh `## [Unreleased]` section, and update the comparison links at the bottom of the file.
+- Do not rewrite released entries except to correct factual errors.
+
 ## Coding Notes
 
 - Keep the first app surface native to GNOME: prefer GTK 4/libadwaita widgets over web views unless a feature needs web content.
