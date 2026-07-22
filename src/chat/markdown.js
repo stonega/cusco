@@ -160,6 +160,19 @@ function consumeWrapped(text, index, delimiter, openTag, closeTag) {
     };
 }
 
+function normalizeLinkTarget(target) {
+    const value = String(target ?? '');
+
+    if (!value.startsWith('/') || value.startsWith('//'))
+        return value;
+
+    try {
+        return GLib.filename_to_uri(value, null);
+    } catch {
+        return value;
+    }
+}
+
 function consumeLink(text, index) {
     const labelEnd = text.indexOf(']', index + 1);
 
@@ -178,7 +191,7 @@ function consumeLink(text, index) {
         return null;
 
     return {
-        markup: `<a href="${escapeMarkup(url)}">${inlineMarkdownToPangoMarkup(label)}</a>`,
+        markup: `<a href="${escapeMarkup(normalizeLinkTarget(url))}">${inlineMarkdownToPangoMarkup(label)}</a>`,
         nextIndex: urlEnd + 1,
     };
 }

@@ -94,6 +94,18 @@ if (!inlineMarkdownToPangoMarkup('Use **bold** and `code`.').includes('<b>bold</
 if (!inlineMarkdownToPangoMarkup('<unsafe>').includes('&lt;unsafe&gt;'))
     throw new Error('Markup was not escaped');
 
+const localFileLinkMarkup = inlineMarkdownToPangoMarkup(
+    '[Generated image](/home/stone/Generated image.jpg)',
+);
+
+if (!localFileLinkMarkup.includes('href="file:///home/stone/Generated%20image.jpg"'))
+    throw new Error(`Absolute file link was not converted to a file URI: ${localFileLinkMarkup}`);
+
+const webLinkMarkup = inlineMarkdownToPangoMarkup('[Cusco](https://example.com/cusco)');
+
+if (!webLinkMarkup.includes('href="https://example.com/cusco"'))
+    throw new Error(`Web link URI changed unexpectedly: ${webLinkMarkup}`);
+
 const emojiMarkup = inlineMarkdownToPangoMarkup('Hihi! \u{1F44B} How are you?');
 
 if (!emojiMarkup.includes('\u{1F44B}') || emojiMarkup.includes('\uFFFD'))

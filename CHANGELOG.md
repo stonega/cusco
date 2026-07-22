@@ -7,6 +7,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Absolute local file links, including generated images, now open through valid file URIs.
+- User message bubbles now keep the same background color in light and dark themes.
+
 ## [0.5.16] - 2026-07-22
 
 ### Added

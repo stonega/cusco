@@ -333,7 +333,7 @@
 }
 
 .cusco-message-user {
-    background-color: @accent_color;
+    background-color: @accent_bg_color;
     color: @accent_fg_color;
 }
 
