@@ -7,9 +7,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.16] - 2026-07-22
+
+### Added
+
+- Added a maintained changelog and a current application screenshot to the public project documentation.
+
 ### Changed
 
 - Providers with matching API keys in the environment are now enabled automatically at startup.
+- GitHub releases now publish their notes from the matching changelog section.
 
 ## [0.5.15] - 2026-07-22
 
@@ -55,7 +62,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.15...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.16...HEAD
+[0.5.16]: https://github.com/stonega/cusco/compare/v0.5.15...v0.5.16
 [0.5.15]: https://github.com/stonega/cusco/compare/v0.5.14...v0.5.15
 [0.5.14]: https://github.com/stonega/cusco/compare/v0.5.13...v0.5.14
 [0.5.13]: https://github.com/stonega/cusco/compare/v0.5.12...v0.5.13
