@@ -8,11 +8,15 @@ Chat navigation is designed to keep GTK's main loop responsive even when the loc
 - The four most recently used conversation views keep their GTK widget trees, so switching back to a recent chat normally reuses the existing view.
 - A long conversation initially shows its latest 32 messages. Use **Show earlier messages** above the transcript to load the preceding page. This only windows the presentation; no history is deleted.
 - When a page boundary falls inside an Agent Mode reasoning or tool sequence, Cusco includes up to six earlier context messages so the sequence is not shown without its lead-in.
+- The chat sidebar initially exposes 50 summary IDs and appends another page near the scroll boundary. `Gtk.ListView` recycles the visible row widgets instead of retaining one widget tree per chat.
 
 ## Root causes and mitigations
 
 | Previous bottleneck | Mitigation |
 |---|---|
+| Startup parsed every message in every chat and each mutation rewrote the complete transcript database. | `conversations.json` is now a lightweight summary/search index. Full transcripts live in private per-chat records under `conversations.json.d/`, hydrate on first use, and persist independently. |
+| The sidebar created a permanent `Gtk.ListBoxRow` for every chat. | A virtualized `Gtk.ListView` receives IDs in pages of 50 and rebinds a bounded set of row widgets while scrolling. |
+| Full-text sidebar and Shell searches required all transcripts in memory. | Each summary carries a fixed-size Bloom filter. Search rejects definite non-matches from the index, reads only possible record candidates, and verifies exact message text so false positives never become user-visible matches. |
 | Selecting a row serialized and atomically rewrote the complete conversation database. | Active selection is stored in the small `conversations.json.state` sidecar. Selecting the already active chat is a no-op. |
 | Every switch rebuilt every message widget, including chats the user had just viewed. | A four-entry least-recently-used view cache retains recent GTK transcript trees. Cache fingerprints invalidate a view when its conversation or visual theme changes. |
 | Opening a long chat materialized its entire history synchronously. | Only the latest 32 messages are initially materialized, with explicit backward pagination. |
@@ -23,7 +27,13 @@ Chat navigation is designed to keep GTK's main loop responsive even when the loc
 
 ## Persistence boundaries
 
-`conversations.json` remains the authoritative transcript database. Writes are compact JSON and use the existing atomic temporary-file replacement. `conversations.json.state` contains only the active conversation ID and is also written atomically.
+`conversations.json` is the version 2 conversation-summary index. Each full transcript is stored in a hashed record beneath `conversations.json.d/`; IDs are not used as file paths. The index, transcript records, and `conversations.json.state` selection sidecar use same-directory temporary files and atomic replacement. Directories are mode `0700` and files are mode `0600`.
+
+Record updates create constant-size markers under `conversations.json.pending-index.d/` before replacement. A successful index commit clears the corresponding markers. If the process exits between record and index commits, the next startup reads only the marked records and repairs their summaries before exposing the database; it does not scan or hydrate unaffected transcripts. Per-record markers also keep a large first-run migration linear instead of repeatedly rewriting a growing journal.
+
+Opening a version 1 monolithic database writes every normalized per-chat record first and commits the summary index last. An interrupted migration therefore leaves the original database authoritative and can be retried. Metadata-only changes to an unloaded chat merge with its existing record without hydrating that transcript into the manager. Deletion commits the index before removing the now-unreferenced record, favoring a harmless orphan over an index entry that points to missing data.
+
+If the index cannot be parsed or migration cannot complete, the manager enters a read-only recovery state for that session. Cusco may show an in-memory welcome chat, but it does not persist over the unreadable database and tells the user that existing history was left unchanged.
 
 Mutations outside an active response stream remain durable immediately. Assistant streaming is the exception: intermediate text, reasoning, artifact, and usage deltas update the normalized in-memory conversation without rewriting the full database. Successful completion or the stopped-response transcript update persists the result, and the window close handler performs a final safety flush. If the process exits abnormally during a response, the newest unflushed partial delta can be lost; completed messages and the already-persisted user message remain durable.
 
@@ -36,6 +46,7 @@ The relevant limits are deliberately small and centralized near the top of `src/
 - `MAX_CACHED_CONVERSATION_VIEWS = 4`
 - `CONVERSATION_MESSAGE_PAGE_SIZE = 32`
 - `CONVERSATION_PAGE_CONTEXT_LIMIT = 6`
+- `CONVERSATION_LIST_PAGE_SIZE = 50`
 - `CONVERSATION_RENDER_BATCH_BUDGET_US = 8000`
 - `CONTENT_UPDATE_INTERVAL_MS = 33`
 - `STREAMING_USAGE_UPDATE_INTERVAL_MS = 100`
@@ -51,7 +62,7 @@ Run the normal source checks after changing navigation, persistence, or message 
 scripts/check.sh
 ```
 
-The smoke coverage verifies that selection does not rewrite the full database, repeated selection is a no-op, deferred streaming updates do not persist synchronously, explicit flushes use the normalized save path, and transcript page boundaries preserve Agent Mode context.
+The smoke coverage verifies automatic version 1 migration, summary-only startup, one-chat hydration and persistence, indexed full-text search, selection without transcript rewrites, deferred streaming flushes, sidebar page boundaries, and transcript page boundaries that preserve Agent Mode context.
 
 For interactive profiling, use a copy of a real database and alternate between cached and uncached chats containing markdown, code, reasoning, tools, and image artifacts. Measure the row-click handler separately from time-to-visible transcript; a fast handler can still hide expensive idle work.
 

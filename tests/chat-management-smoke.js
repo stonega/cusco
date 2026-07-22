@@ -60,6 +60,33 @@ persistedSelectionConversations.selectConversation(persistedFirstChat.id);
 if (selectionSaveCount !== 1)
     throw new Error('Selecting the active conversation persisted redundant state');
 
+let failedStoreSaveCount = 0;
+const failedStore = {
+    load: () => {
+        throw new Error('Unreadable fixture');
+    },
+    save: () => failedStoreSaveCount++,
+    saveActiveConversationId: () => failedStoreSaveCount++,
+};
+const originalLogError = globalThis.logError;
+let failedStoreConversations;
+
+try {
+    globalThis.logError = () => {};
+    failedStoreConversations = new ConversationManager({
+        providerId: defaultProvider.id,
+        modelId: defaultModel.id,
+        store: failedStore,
+    });
+} finally {
+    globalThis.logError = originalLogError;
+}
+
+failedStoreConversations.createConversation({ title: 'In-memory recovery chat' });
+
+if (!failedStoreConversations.storageError || failedStoreSaveCount !== 0)
+    throw new Error('A failed database load allowed existing chat data to be overwritten');
+
 persistedSelectionConversations.appendMessage(
     persistedSecondChat.id,
     createMessage('assistant', 'Deferred streaming update'),
@@ -150,6 +177,28 @@ archiveFallbackConversations.deleteConversation(visibleFallbackChat.id);
 
 if (archiveFallbackConversations.activeConversation !== null)
     throw new Error('Deleting the last visible chat selected an archived chat');
+
+const pagedConversations = new ConversationManager({
+    providerId: defaultProvider.id,
+    modelId: defaultModel.id,
+});
+let oldestPagedConversation = null;
+
+for (let index = 0; index < 125; index += 1) {
+    const conversation = pagedConversations.createConversation({ title: `Paged chat ${index}` });
+    oldestPagedConversation ??= conversation;
+}
+
+const firstConversationPage = pagedConversations.conversationPage('', { limit: 50 });
+const lastConversationPage = pagedConversations.conversationPage('', { offset: 100, limit: 50 });
+
+if (firstConversationPage.conversations.length !== 50
+    || !firstConversationPage.hasMore
+    || lastConversationPage.conversations.length !== 25
+    || lastConversationPage.hasMore
+    || pagedConversations.conversationPosition(oldestPagedConversation.id) !== 124) {
+    throw new Error('Conversation manager did not return bounded lazy sidebar pages');
+}
 
 const providerIds = providers.listProviders().map((provider) => provider.id);
 const expectedProviderIds = ['openai', 'anthropic', 'gemini', 'kimi', 'deepseek', 'grok', 'zai'];

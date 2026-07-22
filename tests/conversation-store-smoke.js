@@ -261,4 +261,144 @@ const reloadedSelection = new ConversationManager({
 if (reloadedSelection.activeConversation?.id !== selectedChat.id)
     throw new Error('Lightweight active conversation state was not restored');
 
+const migrationDatabasePath = GLib.build_filenamev([
+    GLib.get_tmp_dir(),
+    `cusco-conversation-migration-${GLib.uuid_string_random()}`,
+    'conversations.json',
+]);
+const migrationDirectory = GLib.path_get_dirname(migrationDatabasePath);
+const migrationFirstId = 'legacy-first';
+const migrationSecondId = 'legacy-second';
+GLib.mkdir_with_parents(migrationDirectory, 0o700);
+GLib.file_set_contents(migrationDatabasePath, `${JSON.stringify({
+    version: 1,
+    activeConversationId: migrationFirstId,
+    conversations: [{
+        id: migrationFirstId,
+        title: 'Legacy first',
+        providerId: 'openai',
+        modelId: 'gpt-5.5',
+        messages: [{
+            id: 'legacy-message-first',
+            role: 'user',
+            content: 'Unique migration needle',
+        }],
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-02T00:00:00.000Z',
+    }, {
+        id: migrationSecondId,
+        title: 'Legacy second',
+        providerId: 'openai',
+        modelId: 'gpt-5.5',
+        messages: [{
+            id: 'legacy-message-second',
+            role: 'assistant',
+            content: 'Unrelated transcript',
+        }],
+        createdAt: '2026-01-03T00:00:00.000Z',
+        updatedAt: '2026-01-04T00:00:00.000Z',
+    }],
+})}\n`);
+
+const migrationStore = new ConversationFileStore({ path: migrationDatabasePath });
+const migratedDatabase = migrationStore.load();
+const [, migratedIndexBytes] = GLib.file_get_contents(migrationDatabasePath);
+const migratedIndex = JSON.parse(new TextDecoder().decode(migratedIndexBytes));
+
+if (migratedIndex.version !== 2
+    || migratedIndex.conversations.length !== 2
+    || Object.hasOwn(migratedIndex.conversations[0], 'messages')) {
+    throw new Error('Legacy conversation database did not migrate to a summary-only index');
+}
+
+if (Object.hasOwn(migratedDatabase.conversations[0], 'messages')
+    || migrationStore.loadConversation(migrationFirstId).messages[0].content !== 'Unique migration needle') {
+    throw new Error('Migrated transcripts were not split into per-conversation records');
+}
+
+let transcriptLoadCount = 0;
+const loadMigratedConversation = migrationStore.loadConversation.bind(migrationStore);
+migrationStore.loadConversation = (conversationId) => {
+    transcriptLoadCount += 1;
+    return loadMigratedConversation(conversationId);
+};
+const lazyConversations = new ConversationManager({
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
+    store: migrationStore,
+});
+
+if (transcriptLoadCount !== 0
+    || lazyConversations.activeConversation?.id !== migrationFirstId
+    || lazyConversations.conversations.map((conversation) => conversation.title).length !== 2
+    || lazyConversations.isConversationHydrated(migrationFirstId)) {
+    throw new Error('Conversation summaries hydrated transcripts during startup/list access');
+}
+
+const lazySearchResults = lazyConversations.searchConversations('migration needle');
+
+if (lazySearchResults[0]?.id !== migrationFirstId
+    || transcriptLoadCount !== 1
+    || lazyConversations.isConversationHydrated(migrationFirstId)) {
+    throw new Error('Indexed transcript search hydrated unrelated in-memory conversations');
+}
+
+if (lazyConversations.getConversation(migrationFirstId).messages[0].content !== 'Unique migration needle'
+    || transcriptLoadCount !== 2
+    || !lazyConversations.isConversationHydrated(migrationFirstId)) {
+    throw new Error('Selecting transcript data did not hydrate exactly one conversation');
+}
+
+const savedConversationIds = [];
+const saveMigratedConversation = migrationStore.saveConversation.bind(migrationStore);
+migrationStore.saveConversation = (conversation, options) => {
+    savedConversationIds.push(conversation.id);
+    return saveMigratedConversation(conversation, options);
+};
+lazyConversations.renameConversation(migrationSecondId, 'Renamed without hydration');
+
+if (savedConversationIds.join(',') !== migrationSecondId
+    || lazyConversations.isConversationHydrated(migrationSecondId)
+    || migrationStore.loadConversation(migrationSecondId).messages[0].content !== 'Unrelated transcript') {
+    throw new Error('Metadata persistence rewrote or hydrated unrelated transcripts');
+}
+
+const [, lazyIndexBytes] = GLib.file_get_contents(migrationDatabasePath);
+const lazyIndex = JSON.parse(new TextDecoder().decode(lazyIndexBytes));
+
+if (lazyIndex.conversations.some((conversation) => Object.hasOwn(conversation, 'messages')))
+    throw new Error('Conversation index retained eager transcript payloads');
+
+const interruptedConversation = migrationStore.loadConversation(migrationFirstId);
+interruptedConversation.title = 'Recovered interrupted update';
+migrationStore.saveConversation(interruptedConversation);
+
+const recoveredStore = new ConversationFileStore({ path: migrationDatabasePath });
+const recoveredDatabase = recoveredStore.load();
+const recoveredSummary = recoveredDatabase.conversations.find((conversation) => (
+    conversation.id === migrationFirstId
+));
+
+if (recoveredSummary?.title !== 'Recovered interrupted update'
+    || recoveredStore.hasPendingIndexUpdates()) {
+    throw new Error('Interrupted transcript/index persistence did not reconcile on startup');
+}
+
+const pendingDeleteConversations = new ConversationManager({
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
+    store: recoveredStore,
+});
+const pendingDeleteRecord = recoveredStore.loadConversation(migrationSecondId);
+pendingDeleteRecord.title = 'Pending update that will be deleted';
+recoveredStore.saveConversation(pendingDeleteRecord);
+pendingDeleteConversations.deleteConversation(migrationSecondId);
+
+const afterPendingDelete = new ConversationFileStore({ path: migrationDatabasePath }).load();
+
+if (afterPendingDelete.conversations.some((conversation) => conversation.id === migrationSecondId)
+    || recoveredStore.hasPendingIndexUpdates()) {
+    throw new Error('Deleting a conversation resurrected a pending index update');
+}
+
 print('Cusco conversation store smoke passed');

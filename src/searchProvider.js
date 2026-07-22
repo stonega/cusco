@@ -44,14 +44,19 @@ function conversationMatches(conversation, query) {
     if (conversation.title.toLowerCase().includes(query))
         return true;
 
-    return conversation.messages.some((message) => message.content.toLowerCase().includes(query));
+    return (conversation.messages ?? []).some((message) => (
+        message.content.toLowerCase().includes(query)
+    ));
 }
 
 function snippetForConversation(conversation, query) {
-    const message = conversation.messages.find((item) => item.content.toLowerCase().includes(query));
+    const messages = conversation.messages ?? [];
+    const message = messages.find((item) => item.content.toLowerCase().includes(query));
 
     if (!message)
-        return conversation.messages.at(-1)?.content ?? 'Cusco conversation';
+        return conversation.lastMessagePreview
+            || messages.at(-1)?.content
+            || 'Cusco conversation';
 
     return message.content.length > 160
         ? `${message.content.slice(0, 157)}...`
@@ -61,11 +66,22 @@ function snippetForConversation(conversation, query) {
 export class ConversationSearchIndex {
     constructor(store = new ConversationFileStore()) {
         this._store = store;
+        this._matches = new Map();
     }
 
     search(terms, { limit = 20 } = {}) {
         const query = normalizeQuery(terms);
         const database = this._store.load();
+
+        if (typeof this._store.search === 'function') {
+            const matches = this._store.search(query, {
+                conversations: database.conversations,
+                limit,
+                sortByUpdatedAt: true,
+            });
+            this._matches = new Map(matches.map((match) => [match.id, match]));
+            return matches.map((match) => match.id);
+        }
 
         return database.conversations
             .filter((conversation) => !conversation.archived)
@@ -86,8 +102,28 @@ export class ConversationSearchIndex {
             .map((conversation) => ({
                 id: conversation.id,
                 name: conversation.title,
-                description: snippetForConversation(conversation, query),
+                description: this._searchDescription(conversation, query),
             }));
+    }
+
+    _searchDescription(conversation, query) {
+        const cached = this._matches.get(conversation.id)?.snippet;
+
+        if (cached)
+            return cached;
+
+        if (typeof this._store.loadConversation === 'function') {
+            try {
+                return snippetForConversation(
+                    this._store.loadConversation(conversation.id),
+                    query,
+                );
+            } catch (error) {
+                logError(error, `Failed to load search metadata for ${conversation.id}`);
+            }
+        }
+
+        return snippetForConversation(conversation, query);
     }
 }
 

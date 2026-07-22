@@ -70,6 +70,7 @@ import {
     buildShimmerMarkup,
     clipboardFormatsContainImage,
     composerHintPresentation,
+    conversationListPageTarget,
     CuscoWindow,
     formatConversationUpdatedAt,
     formatRunningTime,
@@ -102,6 +103,13 @@ if (!clipboardFormatsContainImage(pngClipboardFormats)
     || clipboardFormatsContainImage(textClipboardFormats)
     || clipboardFormatsContainImage(null)) {
     throw new Error('Clipboard image formats were not detected safely');
+}
+
+if (conversationListPageTarget(0, 50) !== 0
+    || conversationListPageTarget(125, 50) !== 50
+    || conversationListPageTarget(125, 100) !== 100
+    || conversationListPageTarget(125, 50, 101) !== 125) {
+    throw new Error('Conversation sidebar page boundaries were not bounded correctly');
 }
 
 const [, mesonBuildBytes] = GLib.file_get_contents('meson.build');

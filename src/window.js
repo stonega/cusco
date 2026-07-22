@@ -122,6 +122,7 @@ const STREAMING_USAGE_UPDATE_INTERVAL_MS = 100;
 const CONVERSATION_RENDER_BATCH_BUDGET_US = 8000;
 const CONVERSATION_MESSAGE_PAGE_SIZE = 32;
 const CONVERSATION_PAGE_CONTEXT_LIMIT = 6;
+const CONVERSATION_LIST_PAGE_SIZE = 50;
 const MAX_CACHED_CONVERSATION_VIEWS = 4;
 const MAX_CACHED_ATTACHMENT_THUMBNAILS = 48;
 // SVG is XML text; most model image endpoints do not accept it as a vision input.
@@ -646,6 +647,21 @@ export function normalizeConversationMessageStartIndex(
     return startIndex;
 }
 
+export function conversationListPageTarget(
+    totalCount,
+    requestedCount,
+    requiredIndex = -1,
+    pageSize = CONVERSATION_LIST_PAGE_SIZE,
+) {
+    const total = Math.max(0, Number(totalCount) || 0);
+    const size = Math.max(1, Number(pageSize) || CONVERSATION_LIST_PAGE_SIZE);
+    const requested = Math.max(0, Number(requestedCount) || 0);
+    const required = Math.max(0, Number(requiredIndex) + 1 || 0);
+    const target = Math.max(Math.min(size, total), requested, required);
+
+    return Math.min(total, Math.ceil(target / size) * size);
+}
+
 function isImageAttachmentName(name) {
     const lowerName = String(name ?? '').toLowerCase();
     return IMAGE_ATTACHMENT_EXTENSIONS.some((extension) => lowerName.endsWith(extension));
@@ -966,6 +982,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._isBatchRenderingConversation = false;
         this._renderedConversationId = null;
         this._conversationSelectionSerial = 0;
+        this._conversationListResults = [];
+        this._conversationListLoadedCount = 0;
+        this._conversationListHasMore = false;
+        this._conversationListQuery = '';
+        this._isLoadingConversationListPage = false;
+        this._legacyArtifactMigrationIds = new Set();
+        this._conversationLoadErrorToastIds = new Set();
         this._usageDisplaySourceId = 0;
         this._pendingUsageConversationId = null;
         const { provider: defaultProvider, model: defaultModel } = this._providerConfigs.getActiveSelection();
@@ -1044,6 +1067,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return false;
         });
         this._buildUi();
+
+        if (this._conversations.storageError) {
+            GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                this._showToast('Chat history could not be loaded. Existing data was left unchanged.');
+                return GLib.SOURCE_REMOVE;
+            });
+        }
+
         this._refreshConversationList();
         this._renderActiveConversation();
         this._syncCronJobsWithConversations({ refreshUi: true }).catch((error) => {
@@ -1214,35 +1245,79 @@ class CuscoWindow extends Adw.ApplicationWindow {
             margin_start: 6,
             margin_end: 6,
         });
-        this._chatSearch.connect('search-changed', () => this._refreshConversationList());
+        this._chatSearch.connect('search-changed', () => {
+            this._refreshConversationList({ resetPage: true });
+        });
 
         sidebarContent.append(this._chatSearch);
 
-        this._conversationList = new Gtk.ListBox({
-            selection_mode: Gtk.SelectionMode.SINGLE,
+        this._conversationListModel = Gtk.StringList.new([]);
+        this._conversationSelectionModel = new Gtk.SingleSelection({
+            model: this._conversationListModel,
+            autoselect: false,
+            can_unselect: true,
+        });
+        const conversationListFactory = new Gtk.SignalListItemFactory();
+        // ListView recycles these containers; transcript summaries never retain
+        // one permanent GTK row tree per conversation.
+        conversationListFactory.connect('setup', (_factory, listItem) => {
+            listItem.set_child(new Gtk.Box({
+                orientation: Gtk.Orientation.VERTICAL,
+                hexpand: true,
+            }));
+        });
+        conversationListFactory.connect('bind', (_factory, listItem) => {
+            const container = listItem.get_child();
+            const conversationId = listItem.get_item()?.get_string?.() ?? '';
+            const conversation = this._conversations.getConversation(conversationId);
+            this._clearBox(container);
+
+            if (conversation)
+                container.append(this._createConversationRow(conversation));
+        });
+        conversationListFactory.connect('unbind', (_factory, listItem) => {
+            this._clearBox(listItem.get_child());
+        });
+
+        this._conversationList = new Gtk.ListView({
+            model: this._conversationSelectionModel,
+            factory: conversationListFactory,
             hexpand: true,
             vexpand: true,
         });
         this._conversationList.add_css_class('cusco-conversation-list');
-        this._conversationList.connect('row-selected', (_list, row) => {
-            if (this._isRefreshingConversations || !row)
+        this._conversationSelectionModel.connect('notify::selected', () => {
+            if (this._isRefreshingConversations)
+                return;
+
+            const item = this._conversationSelectionModel.get_selected_item();
+            const conversationId = item?.get_string?.() ?? '';
+
+            if (!conversationId)
                 return;
 
             this._conversationSelectionSerial += 1;
-            this._conversations.selectConversation(row.conversationId);
+            this._conversations.selectConversation(conversationId);
             this._renderActiveConversation({ deferIfUncached: true });
         });
 
-        const conversationListScroller = new Gtk.ScrolledWindow({
+        this._conversationListScroller = new Gtk.ScrolledWindow({
             child: this._conversationList,
             hexpand: true,
             vexpand: true,
             hscrollbar_policy: Gtk.PolicyType.NEVER,
             vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
         });
-        conversationListScroller.add_css_class('cusco-conversation-list-scroller');
+        this._conversationListScroller.add_css_class('cusco-conversation-list-scroller');
+        const conversationListAdjustment = this._conversationListScroller.get_vadjustment();
+        conversationListAdjustment.connect('value-changed', () => {
+            this._maybeLoadNextConversationListPage();
+        });
+        conversationListAdjustment.connect('changed', () => {
+            this._maybeLoadNextConversationListPage();
+        });
 
-        sidebarContent.append(conversationListScroller);
+        sidebarContent.append(this._conversationListScroller);
         sidebar.append(sidebarContent);
 
         return sidebar;
@@ -4841,28 +4916,42 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
     }
 
-    _migrateLegacyArtifacts() {
+    _migrateLegacyArtifacts(conversation = this._conversations.activeConversation) {
+        if (!conversation || this._legacyArtifactMigrationIds.has(conversation.id))
+            return;
+
+        const messages = conversation.messages;
+
+        if (!this._conversations.isConversationHydrated(conversation.id)) {
+            if (this._toastOverlay
+                && this._conversations.conversationLoadError(conversation.id)
+                && !this._conversationLoadErrorToastIds.has(conversation.id)) {
+                this._conversationLoadErrorToastIds.add(conversation.id);
+                this._showToast('This chat transcript could not be loaded and will not be overwritten.');
+            }
+            return;
+        }
+
+        this._legacyArtifactMigrationIds.add(conversation.id);
         let changed = false;
 
-        for (const conversation of this._conversations.allConversations) {
-            for (const message of conversation.messages) {
-                if ((message.artifacts ?? []).some((artifact) => !artifact?.artifactId)) {
-                    message.artifacts = this._manageArtifactList(message.artifacts, conversation.id);
-                    changed = true;
+        for (const message of messages) {
+            if ((message.artifacts ?? []).some((artifact) => !artifact?.artifactId)) {
+                message.artifacts = this._manageArtifactList(message.artifacts, conversation.id);
+                changed = true;
+            }
+
+            if (message.toolCall) {
+                let toolArtifacts = message.toolCall.artifacts ?? [];
+
+                if (toolArtifacts.length === 0 && message.toolCall.name === 'image_gen') {
+                    const imageArtifact = imageArtifactForToolCall(message.toolCall);
+                    toolArtifacts = imageArtifact ? [imageArtifact] : [];
                 }
 
-                if (message.toolCall) {
-                    let toolArtifacts = message.toolCall.artifacts ?? [];
-
-                    if (toolArtifacts.length === 0 && message.toolCall.name === 'image_gen') {
-                        const imageArtifact = imageArtifactForToolCall(message.toolCall);
-                        toolArtifacts = imageArtifact ? [imageArtifact] : [];
-                    }
-
-                    if (toolArtifacts.some((artifact) => !artifact?.artifactId)) {
-                        message.toolCall.artifacts = this._manageArtifactList(toolArtifacts, conversation.id);
-                        changed = true;
-                    }
+                if (toolArtifacts.some((artifact) => !artifact?.artifactId)) {
+                    message.toolCall.artifacts = this._manageArtifactList(toolArtifacts, conversation.id);
+                    changed = true;
                 }
             }
         }
@@ -5903,27 +5992,90 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._refreshConversationList();
     }
 
-    _refreshConversationList() {
+    _refreshConversationList({ resetPage = false } = {}) {
         this._isRefreshingConversations = true;
-        this._clearBox(this._conversationList);
-
         const activeConversation = this._conversations.activeConversation;
+        const query = this._chatSearch?.get_text() ?? '';
+        const queryChanged = query !== this._conversationListQuery;
+        const requestedCount = resetPage || queryChanged
+            ? CONVERSATION_LIST_PAGE_SIZE
+            : Math.max(CONVERSATION_LIST_PAGE_SIZE, this._conversationListLoadedCount);
+        const activePosition = query.trim()
+            ? -1
+            : this._conversations.conversationPosition(activeConversation?.id);
+        const targetCount = conversationListPageTarget(
+            Number.MAX_SAFE_INTEGER,
+            requestedCount,
+            activePosition,
+        );
+        const page = this._conversations.conversationPage(query, {
+            limit: targetCount,
+        });
+        const conversations = page.conversations;
+        const loadedCount = conversations.length;
+        const activeIndex = conversations.findIndex((conversation) => (
+            conversation.id === activeConversation?.id
+        ));
+        const conversationIds = conversations
+            .map((conversation) => conversation.id);
 
-        for (const conversation of this._getVisibleConversations()) {
-            const row = new Gtk.ListBoxRow();
-            row.conversationId = conversation.id;
-            row.set_child(this._createConversationRow(conversation, row));
-            this._conversationList.append(row);
+        this._conversationListResults = conversations;
+        this._conversationListLoadedCount = loadedCount;
+        this._conversationListHasMore = page.hasMore;
+        this._conversationListQuery = query;
+        this._conversationListModel.splice(
+            0,
+            this._conversationListModel.get_n_items(),
+            conversationIds,
+        );
 
-            if (conversation.id === activeConversation?.id)
-                this._conversationList.select_row(row);
-        }
+        if (activeIndex >= 0 && activeIndex < loadedCount)
+            this._conversationSelectionModel.set_selected(activeIndex);
+        else
+            this._conversationSelectionModel.set_selected(Gtk.INVALID_LIST_POSITION);
 
         this._isRefreshingConversations = false;
     }
 
-    _getVisibleConversations() {
-        return this._conversations.searchConversations(this._chatSearch?.get_text() ?? '');
+    _maybeLoadNextConversationListPage() {
+        if (this._isRefreshingConversations
+            || this._isLoadingConversationListPage
+            || !this._conversationListHasMore) {
+            return;
+        }
+
+        const adjustment = this._conversationListScroller?.get_vadjustment?.();
+
+        if (!adjustment)
+            return;
+
+        const remaining = adjustment.get_upper()
+            - adjustment.get_page_size()
+            - adjustment.get_value();
+
+        if (remaining > 128)
+            return;
+
+        this._isLoadingConversationListPage = true;
+
+        try {
+            const page = this._conversations.conversationPage(this._conversationListQuery, {
+                offset: this._conversationListLoadedCount,
+                limit: CONVERSATION_LIST_PAGE_SIZE,
+            });
+            const nextIds = page.conversations.map((conversation) => conversation.id);
+
+            this._conversationListModel.splice(
+                this._conversationListModel.get_n_items(),
+                0,
+                nextIds,
+            );
+            this._conversationListResults.push(...page.conversations);
+            this._conversationListLoadedCount += page.conversations.length;
+            this._conversationListHasMore = page.hasMore;
+        } finally {
+            this._isLoadingConversationListPage = false;
+        }
     }
 
     _isCronConversation(conversation) {
@@ -6282,7 +6434,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         return [
             conversation.updatedAt ?? '',
-            conversation.messages?.length ?? 0,
+            conversation.messageCount ?? conversation.messages?.length ?? 0,
             this._appSettings.codeTheme,
             Adw.StyleManager.get_default().get_dark() ? 'dark' : 'light',
         ].join('\u0000');
@@ -6498,6 +6650,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _renderActiveConversation(options = {}) {
         const conversation = this._conversations.activeConversation;
+        this._migrateLegacyArtifacts(conversation);
         this._artifactWorkspace?.setConversation(conversation?.id ?? '');
         this._syncArtifactWorkspaceButton();
 
