@@ -18,7 +18,7 @@ Provider settings can refresh model lists from supported remote APIs after crede
 
 Memory is opt-in at write time. When a message looks like a useful long-term fact, Cusco asks before saving it. The Memory page in Preferences can search, edit, pin, disable, delete, import, and export memories. When memories are used in a chat, Cusco records a local audit entry without adding a transcript note.
 
-Tools can be requested from the composer with `/search`, `/calc`, and `/data`. Web search asks for permission before sending a query and returns cited results. The attachment button adds local file context or image attachment notes to the next message.
+Tools can be requested from the composer with `/search`, `/calc`, and `/data`. Web search asks for permission before sending a query and returns cited results. The attachment button adds local file context or images to the next message. You can also copy an image or screenshot and paste it directly into the composer; Cusco adds it as an image attachment without sending the message.
 
 Select any generated image, image attachment, tool result, or image artifact to open Cusco's native viewer. It supports zooming, cropping, rotation, flipping, and editable drawing, shape, arrow, and text annotations. Edited copies can be saved as PNG or added to the composer without sending immediately. See [Image Viewer and Editor](image-editor.md).
 

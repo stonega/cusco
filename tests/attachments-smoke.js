@@ -1,10 +1,12 @@
 import GLib from 'gi://GLib?version=2.0';
+import Gdk from 'gi://Gdk?version=4.0';
 
 import {
     createFileAttachment,
     fileAttachmentSummary,
     hideBinaryAttachmentData,
     isTextAttachmentContentType,
+    savePastedImageTexture,
 } from '../src/chat/attachments.js';
 
 function assert(condition, message) {
@@ -61,5 +63,27 @@ const cleanedLegacyBody = hideBinaryAttachmentData(legacyBody, [legacyPdfAttachm
 assert(cleanedLegacyBody.includes('PDF attachment: document.pdf (preview unavailable)'),
     'Legacy PDF message did not receive a clean summary');
 assert(!cleanedLegacyBody.includes('%PDF'), 'Legacy PDF raw bytes remained visible');
+
+const texture = Gdk.MemoryTexture.new(
+    1,
+    1,
+    Gdk.MemoryFormat.R8G8B8A8,
+    new GLib.Bytes(Uint8Array.from([0x33, 0x66, 0x99, 0xff])),
+    4,
+);
+const pastedImageDirectory = GLib.build_filenamev([tempRoot, 'pasted-images']);
+const pastedImagePath = savePastedImageTexture(texture, {
+    directory: pastedImageDirectory,
+});
+
+assert(
+    GLib.file_test(pastedImagePath, GLib.FileTest.IS_REGULAR),
+    'Pasted clipboard texture was not persisted as an image attachment',
+);
+assert(
+    GLib.path_get_basename(pastedImagePath).startsWith('pasted-image-')
+        && pastedImagePath.endsWith('.png'),
+    'Pasted clipboard texture did not receive a durable PNG path',
+);
 
 print('Cusco attachments smoke passed');

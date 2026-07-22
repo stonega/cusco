@@ -68,6 +68,7 @@ import { extractPromptVariables, renderPromptTemplate } from '../src/workspace/p
 import { WorkspaceManager } from '../src/workspace/workspace.js';
 import {
     buildShimmerMarkup,
+    clipboardFormatsContainImage,
     composerHintPresentation,
     CuscoWindow,
     formatConversationUpdatedAt,
@@ -87,6 +88,21 @@ if (APPLICATION_APP_ID !== APP_ID)
 
 if (APP_NAME !== 'Cusco' || APP_VERSION.length === 0 || APP_AUTHOR.length === 0)
     throw new Error('App info metadata did not import correctly');
+
+const pngClipboardFormats = {
+    contain_gtype: () => false,
+    contain_mime_type: (mimeType) => mimeType === 'image/png',
+};
+const textClipboardFormats = {
+    contain_gtype: () => false,
+    contain_mime_type: () => false,
+};
+
+if (!clipboardFormatsContainImage(pngClipboardFormats)
+    || clipboardFormatsContainImage(textClipboardFormats)
+    || clipboardFormatsContainImage(null)) {
+    throw new Error('Clipboard image formats were not detected safely');
+}
 
 const [, mesonBuildBytes] = GLib.file_get_contents('meson.build');
 const mesonBuild = new TextDecoder().decode(mesonBuildBytes);

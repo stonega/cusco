@@ -29,6 +29,7 @@ import {
     createFileAttachment,
     fileAttachmentSummary,
     hideBinaryAttachmentData,
+    savePastedImageTexture,
 } from './chat/attachments.js';
 import {
     AUTO_COMPACTION_MAX_SUMMARY_OUTPUT_TOKENS,
@@ -125,6 +126,14 @@ const MAX_CACHED_CONVERSATION_VIEWS = 4;
 const MAX_CACHED_ATTACHMENT_THUMBNAILS = 48;
 // SVG is XML text; most model image endpoints do not accept it as a vision input.
 const IMAGE_ATTACHMENT_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
+const IMAGE_CLIPBOARD_MIME_TYPES = [
+    'image/png',
+    'image/jpeg',
+    'image/gif',
+    'image/webp',
+    'image/bmp',
+    'image/tiff',
+];
 const MAX_ATTACHMENT_TEXT_CHARS = 20000;
 const MAX_REFERENCED_ARTIFACT_TEXT_CHARS = 30000;
 const MAX_REFERENCED_ARTIFACTS = 3;
@@ -646,6 +655,19 @@ function isImageAttachment(attachment) {
     return attachment?.kind === 'image' || isImageAttachmentName(attachment?.name);
 }
 
+export function clipboardFormatsContainImage(formats) {
+    if (!formats)
+        return false;
+
+    if (typeof formats.contain_gtype === 'function'
+        && formats.contain_gtype(Gdk.Texture.$gtype)) {
+        return true;
+    }
+
+    return typeof formats.contain_mime_type === 'function'
+        && IMAGE_CLIPBOARD_MIME_TYPES.some((mimeType) => formats.contain_mime_type(mimeType));
+}
+
 function imageAttachmentSummaryLine(attachment) {
     return `Image attachment: ${attachment.name}`;
 }
@@ -913,6 +935,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._cron = new CronJobManager();
         this._mcp = new McpManager({ workspaceManager: this._workspace });
         this._pendingAttachments = [];
+        this._clipboardImagePasteCancellables = new Set();
         this._imageViewer = null;
         this._composerReferences = [];
         this._userMessageReferenceContents = new Set();
@@ -994,6 +1017,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._conversations.persist();
             this._stopCronLogSync();
             this._homeFileIndex.stop();
+
+            for (const cancellable of this._clipboardImagePasteCancellables)
+                cancellable.cancel();
+            this._clipboardImagePasteCancellables.clear();
 
             if (this._composerSuggestionRefreshSourceId) {
                 GLib.Source.remove(this._composerSuggestionRefreshSourceId);
@@ -1469,6 +1496,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
             wrap_mode: Gtk.WrapMode.WORD_CHAR,
         });
         this._composer.add_css_class('cusco-composer-text');
+        this._composer.connect('paste-clipboard', () => {
+            if (!this._pasteClipboardImageIfAvailable())
+                return;
+
+            GObject.signal_stop_emission_by_name(this._composer, 'paste-clipboard');
+        });
 
         this._composerPlaceholder = new Gtk.Label({
             label: 'Message Cusco',
@@ -3632,6 +3665,45 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const name = provider?.name ?? 'The selected provider';
 
         return `${name} does not support image attachments.`;
+    }
+
+    _pasteClipboardImageIfAvailable() {
+        const clipboard = this._composer?.get_clipboard?.();
+
+        if (!clipboardFormatsContainImage(clipboard?.get_formats?.()))
+            return false;
+
+        const capability = this._imageAttachCapability();
+
+        if (!capability.allowed) {
+            this._showToast(capability.reason);
+            return true;
+        }
+
+        const cancellable = new Gio.Cancellable();
+        this._clipboardImagePasteCancellables.add(cancellable);
+        clipboard.read_texture_async(cancellable, (source, result) => {
+            this._clipboardImagePasteCancellables.delete(cancellable);
+
+            try {
+                const texture = source.read_texture_finish(result);
+
+                if (!texture)
+                    throw new Error('The clipboard did not provide an image texture.');
+
+                const path = savePastedImageTexture(texture);
+                this._pendingAttachments.push(this._createAttachmentFromPath(path));
+                this._updateAttachmentLabel();
+                this.focusComposer();
+            } catch (error) {
+                if (wasOperationCancelled(error, cancellable))
+                    return;
+
+                logError(error, 'Failed to paste clipboard image');
+                this._showToast('The clipboard image could not be attached.');
+            }
+        });
+        return true;
     }
 
     _attachFileContext() {

@@ -1,6 +1,8 @@
 import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 
+import { APP_ID } from '../appInfo.js';
+
 const TEXT_APPLICATION_TYPES = new Set([
     'application/javascript',
     'application/json',
@@ -14,6 +16,63 @@ const TEXT_APPLICATION_TYPES = new Set([
     'application/yaml',
     'image/svg+xml',
 ]);
+
+export function defaultPastedImageDirectory() {
+    return GLib.build_filenamev([
+        GLib.get_user_data_dir(),
+        APP_ID,
+        'pasted-images',
+    ]);
+}
+
+/**
+ * Persist a clipboard texture as a private, durable PNG for conversation history.
+ */
+export function savePastedImageTexture(texture, options = {}) {
+    if (typeof texture?.save_to_png !== 'function')
+        throw new Error('The clipboard did not provide a usable image texture.');
+
+    const directory = String(options.directory ?? defaultPastedImageDirectory()).trim();
+
+    if (!directory)
+        throw new Error('The pasted-image directory is not available.');
+
+    if (GLib.mkdir_with_parents(directory, 0o700) !== 0)
+        throw new Error('Could not create the pasted-image directory.');
+    if (GLib.chmod(directory, 0o700) !== 0)
+        throw new Error('Could not secure the pasted-image directory.');
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const uuid = GLib.uuid_string_random();
+    const name = `pasted-image-${timestamp}-${uuid}.png`;
+    const path = GLib.build_filenamev([directory, name]);
+    const temporaryPath = GLib.build_filenamev([
+        directory,
+        `.${name}.${GLib.uuid_string_random()}.tmp`,
+    ]);
+
+    try {
+        if (texture.save_to_png(temporaryPath) === false)
+            throw new Error('Could not encode the pasted image as PNG.');
+        if (GLib.chmod(temporaryPath, 0o600) !== 0)
+            throw new Error('Could not secure the temporary pasted image.');
+
+        Gio.File.new_for_path(temporaryPath).move(
+            Gio.File.new_for_path(path),
+            Gio.FileCopyFlags.NONE,
+            null,
+            null,
+        );
+
+        if (GLib.chmod(path, 0o600) !== 0)
+            throw new Error('Could not secure the pasted image.');
+    } finally {
+        if (GLib.file_test(temporaryPath, GLib.FileTest.EXISTS))
+            GLib.unlink(temporaryPath);
+    }
+
+    return path;
+}
 
 function attachmentContentType(path) {
     const file = Gio.File.new_for_path(path);
