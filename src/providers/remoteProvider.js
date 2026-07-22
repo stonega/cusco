@@ -796,7 +796,6 @@ function anthropicNativeSearchToolDefinitions(configuration) {
 function geminiNativeSearchToolDefinitions(configuration) {
     const definitions = {
         google_search: { googleSearch: {} },
-        google_maps: { googleMaps: {} },
         url_context: { urlContext: {} },
     };
 

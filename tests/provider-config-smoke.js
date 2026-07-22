@@ -188,7 +188,7 @@ if (defaultStore.resolve('grok', 'grok-4.3').model.contextWindowTokens !== 10000
 const expectedNativeSearchTools = {
     openai: 'web_search',
     anthropic: 'web_search',
-    gemini: 'google_search,google_maps,url_context',
+    gemini: 'google_search,url_context',
     grok: 'web_search,x_search',
     zai: 'web_search',
 };
@@ -480,16 +480,61 @@ const kimiEndpointStore = new ProviderConfigStore(undefined, {
 if (kimiEndpointStore.getProvider('kimi').baseUrl !== 'https://api.moonshot.cn/v1')
     throw new Error('Kimi CN endpoint preset was not loaded');
 
-kimiEndpointStore.setProviderEndpointPreset('kimi', 'global');
+kimiEndpointStore.setProviderCustomEndpoint('kimi', 'https://gateway.example/v1/');
 
-if (kimiEndpointStore.getProvider('kimi').baseUrl !== 'https://api.moonshot.ai/v1')
-    throw new Error('Kimi global endpoint preset was not restored');
+if (kimiEndpointStore.getProvider('kimi').baseUrl !== 'https://gateway.example/v1'
+    || !kimiEndpointStore.getProvider('kimi').usesCustomEndpoint
+    || !kimiEndpointSettings.get_string('provider-custom-endpoints').includes('https://gateway.example/v1')) {
+    throw new Error('Kimi custom endpoint was not normalized and persisted');
+}
 
-kimiEndpointStore.setProviderEndpointPreset('kimi', 'cn');
+const reloadedKimiEndpointStore = new ProviderConfigStore(undefined, {
+    settings: kimiEndpointSettings,
+    apiKeyStore: new MemoryApiKeyStore({ kimi: 'kimi-key' }),
+    envLookup: () => '',
+});
 
-if (kimiEndpointStore.getProvider('kimi').baseUrl !== 'https://api.moonshot.cn/v1'
+if (reloadedKimiEndpointStore.getProvider('kimi').baseUrl !== 'https://gateway.example/v1'
+    || !reloadedKimiEndpointStore.getProvider('kimi').usesCustomEndpoint) {
+    throw new Error('Kimi custom endpoint was not restored');
+}
+
+reloadedKimiEndpointStore.setProviderEndpointPreset('kimi', 'cn');
+
+if (reloadedKimiEndpointStore.getProvider('kimi').baseUrl !== 'https://api.moonshot.cn/v1'
+    || reloadedKimiEndpointStore.getProvider('kimi').usesCustomEndpoint
+    || kimiEndpointSettings.get_string('provider-custom-endpoints') !== '{}'
     || !kimiEndpointSettings.get_string('provider-endpoint-presets').includes('"kimi":"cn"')) {
-    throw new Error('Kimi CN endpoint preset was not persisted');
+    throw new Error('Kimi CN endpoint preset did not replace the custom endpoint');
+}
+
+reloadedKimiEndpointStore.setProviderCustomEndpoint('kimi', 'https://api.moonshot.ai/v1/');
+
+if (reloadedKimiEndpointStore.getProvider('kimi').usesCustomEndpoint
+    || reloadedKimiEndpointStore.getProvider('kimi').endpointPresetId !== 'global') {
+    throw new Error('Kimi global official endpoint was incorrectly treated as custom');
+}
+
+reloadedKimiEndpointStore.setProviderCustomEndpoint('kimi', 'https://gateway.example/v1');
+reloadedKimiEndpointStore.resetProviderEndpoint('kimi');
+
+if (reloadedKimiEndpointStore.getProvider('kimi').baseUrl !== 'https://api.moonshot.ai/v1'
+    || reloadedKimiEndpointStore.getProvider('kimi').usesCustomEndpoint
+    || reloadedKimiEndpointStore.getProvider('kimi').endpointPresetId !== 'global') {
+    throw new Error('Kimi endpoint reset did not restore the default global endpoint');
+}
+
+let rejectedInvalidEndpoint = false;
+
+try {
+    reloadedKimiEndpointStore.setProviderCustomEndpoint('kimi', 'ftp://gateway.example/v1');
+} catch (error) {
+    rejectedInvalidEndpoint = error.message.includes('HTTP or HTTPS');
+}
+
+if (!rejectedInvalidEndpoint
+    || reloadedKimiEndpointStore.getProvider('kimi').baseUrl !== 'https://api.moonshot.ai/v1') {
+    throw new Error('Invalid built-in provider endpoint was not rejected safely');
 }
 
 const staleKimiSettings = new MemorySettings({

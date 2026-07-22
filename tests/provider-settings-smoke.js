@@ -80,6 +80,28 @@ function findToggleButtonByLabel(root, label) {
     return found;
 }
 
+function findButtonByLabel(root, label) {
+    let found = null;
+
+    walkWidgets(root, (widget) => {
+        if (!found && widget instanceof Gtk.Button && widget.get_label() === label)
+            found = widget;
+    });
+
+    return found;
+}
+
+function findButtonByIconName(root, iconName) {
+    let found = null;
+
+    walkWidgets(root, (widget) => {
+        if (!found && widget instanceof Gtk.Button && widget.get_icon_name() === iconName)
+            found = widget;
+    });
+
+    return found;
+}
+
 if (Gtk.init_check()) {
     Adw.init();
 
@@ -153,31 +175,73 @@ if (Gtk.init_check()) {
         throw new Error('Multiple custom providers were not shown in the custom provider list');
     }
 
+    if (findActionRowByTitle(builtInGroup, 'Model discovery'))
+        throw new Error('Built-in providers should not show model discovery');
+
+    if (!findActionRowByTitle(customGroup, 'Model discovery'))
+        throw new Error('Custom APIs should retain model discovery');
+
     if (!findComboRowByTitle(page, 'Default model')?.get_list_factory())
         throw new Error('Settings model selector did not install the full-name list factory');
 
     const kimiRow = findExpanderRowByTitle(builtInGroup, 'Kimi');
     const kimiEndpointRow = findActionRowByTitle(kimiRow, 'Endpoint');
+    const kimiGlobalButton = findToggleButtonByLabel(kimiEndpointRow, 'Global');
     const kimiCnButton = findToggleButtonByLabel(kimiEndpointRow, 'CN');
+    const kimiResetButton = findButtonByLabel(kimiEndpointRow, 'Reset');
+    const kimiEditButton = findButtonByIconName(kimiEndpointRow, 'document-edit-symbolic');
 
-    if (!kimiEndpointRow || !kimiCnButton)
-        throw new Error('Kimi endpoint row did not include the CN button');
+    if (!kimiEndpointRow || !kimiGlobalButton || !kimiCnButton)
+        throw new Error('Kimi endpoint row did not include both official endpoints');
 
-    if (kimiCnButton.get_active())
-        throw new Error('Kimi CN endpoint button should initially be inactive');
+    if (!kimiGlobalButton.get_active() || kimiCnButton.get_active())
+        throw new Error('Kimi global endpoint button should initially be active');
 
-    kimiCnButton.set_active(true);
+    if (!kimiEditButton)
+        throw new Error('Built-in endpoint row did not include the custom endpoint edit action');
+
+    if (!kimiResetButton || kimiResetButton.get_visible())
+        throw new Error('Endpoint reset action should remain hidden for official endpoints');
+
+    kimiCnButton.emit('clicked');
 
     if (providerConfigs.getProvider('kimi').baseUrl !== 'https://api.moonshot.cn/v1'
-        || kimiEndpointRow.get_subtitle() !== 'https://api.moonshot.cn/v1') {
+        || kimiEndpointRow.get_subtitle() !== 'https://api.moonshot.cn/v1'
+        || !kimiCnButton.get_active()) {
         throw new Error('Kimi CN endpoint button did not activate the China endpoint');
     }
 
-    kimiCnButton.set_active(false);
+    kimiGlobalButton.emit('clicked');
 
     if (providerConfigs.getProvider('kimi').baseUrl !== 'https://api.moonshot.ai/v1'
-        || kimiEndpointRow.get_subtitle() !== 'https://api.moonshot.ai/v1') {
+        || kimiEndpointRow.get_subtitle() !== 'https://api.moonshot.ai/v1'
+        || !kimiGlobalButton.get_active()) {
         throw new Error('Kimi CN endpoint button did not restore the global endpoint');
+    }
+
+    const customEndpointConfigs = new ProviderConfigStore(undefined, {
+        settings: null,
+        apiKeyStore: new MemoryApiKeyStore(),
+        envLookup: () => '',
+    });
+    customEndpointConfigs.setProviderCustomEndpoint('openai', 'https://gateway.example/v1');
+    const customEndpointPage = createProviderSettingsPage(customEndpointConfigs, () => {});
+    const customEndpointBuiltInGroup = findPreferencesGroupByTitle(customEndpointPage, 'Built-in Providers');
+    const openAiRow = findExpanderRowByTitle(customEndpointBuiltInGroup, 'OpenAI');
+    const openAiEndpointRow = findActionRowByTitle(openAiRow, 'Endpoint');
+    const openAiResetButton = findButtonByLabel(openAiEndpointRow, 'Reset');
+
+    if (openAiEndpointRow.get_subtitle() !== 'Custom endpoint: https://gateway.example/v1'
+        || !openAiResetButton?.get_visible()) {
+        throw new Error('Custom built-in endpoint did not show its state and reset action');
+    }
+
+    openAiResetButton.emit('clicked');
+
+    if (customEndpointConfigs.getProvider('openai').baseUrl !== 'https://api.openai.com/v1'
+        || customEndpointConfigs.getProvider('openai').usesCustomEndpoint
+        || openAiResetButton.get_visible()) {
+        throw new Error('Endpoint reset action did not restore the built-in default');
     }
 
     const imageProviderRow = findComboRowByTitle(page, 'Provider');

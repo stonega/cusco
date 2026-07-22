@@ -31,6 +31,11 @@
       <summary>Provider endpoint presets</summary>
       <description>JSON object mapping provider identifiers to their selected endpoint preset identifiers.</description>
     </key>
+    <key name="provider-custom-endpoints" type="s">
+      <default>'{}'</default>
+      <summary>Provider custom endpoints</summary>
+      <description>JSON object mapping built-in provider identifiers to user-supplied endpoint URLs.</description>
+    </key>
     <key name="provider-default-models" type="s">
       <default>'{}'</default>
       <summary>Provider default models</summary>

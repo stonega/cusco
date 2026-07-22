@@ -258,49 +258,95 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows, 
     } else if (!provider.customizable) {
         row.add_row(new Adw.ActionRow({
             title: 'Models',
-            subtitle: 'Model discovery will be available when this provider is implemented.',
+            subtitle: 'No models are available for this provider yet.',
         }));
     }
 
     if (provider.baseUrl && !provider.customizable) {
         const endpointRow = new Adw.ActionRow({
             title: 'Endpoint',
-            subtitle: provider.baseUrl,
+            subtitle: provider.usesCustomEndpoint
+                ? `Custom endpoint: ${provider.baseUrl}`
+                : provider.baseUrl,
         });
-        const endpointPresetButtons = (provider.endpointPresets ?? [])
-            .filter((preset) => preset.id !== provider.defaultEndpointPresetId)
-            .map((preset) => {
-                const button = new Gtk.ToggleButton({
-                    label: preset.label ?? preset.id.toUpperCase(),
-                    tooltip_text: `Use the ${preset.label ?? preset.id} endpoint`,
-                    valign: Gtk.Align.CENTER,
-                });
-                button.add_css_class('flat');
-                button.connect('toggled', () => {
-                    if (button._syncing)
-                        return;
-
-                    try {
-                        providerConfigs.setProviderEndpointPreset(
-                            providerId,
-                            button.get_active() ? preset.id : provider.defaultEndpointPresetId,
-                        );
-                        syncAllRows();
-                        onChanged();
-                    } catch (error) {
-                        syncAllRows();
-                        logError(error, 'Failed to update provider endpoint');
-                    }
-                });
-                endpointRow.add_suffix(button);
-                return { button, presetId: preset.id };
+        const endpointPresetBox = new Gtk.Box({
+            spacing: 0,
+            valign: Gtk.Align.CENTER,
+        });
+        endpointPresetBox.add_css_class('linked');
+        let firstEndpointPresetButton = null;
+        const endpointPresetButtons = (provider.endpointPresets ?? []).map((preset) => {
+            const button = new Gtk.ToggleButton({
+                label: preset.label ?? preset.id.toUpperCase(),
+                tooltip_text: `Use the ${preset.label ?? preset.id} endpoint`,
+                valign: Gtk.Align.CENTER,
             });
+            if (firstEndpointPresetButton)
+                button.set_group(firstEndpointPresetButton);
+            else
+                firstEndpointPresetButton = button;
+
+            button.connect('clicked', () => {
+                if (button._syncing)
+                    return;
+
+                try {
+                    providerConfigs.setProviderEndpointPreset(providerId, preset.id);
+                    syncAllRows();
+                    onChanged();
+                } catch (error) {
+                    syncAllRows();
+                    logError(error, 'Failed to update provider endpoint');
+                }
+            });
+            endpointPresetBox.append(button);
+            return { button, presetId: preset.id };
+        });
+        if (endpointPresetButtons.length > 0)
+            endpointRow.add_suffix(endpointPresetBox);
+
+        const resetEndpointButton = new Gtk.Button({
+            label: 'Reset',
+            tooltip_text: 'Reset to the default endpoint',
+            valign: Gtk.Align.CENTER,
+            visible: provider.usesCustomEndpoint,
+        });
+        resetEndpointButton.add_css_class('flat');
+        resetEndpointButton.connect('clicked', () => {
+            try {
+                providerConfigs.resetProviderEndpoint(providerId);
+                syncAllRows();
+                onChanged();
+            } catch (error) {
+                syncAllRows();
+                logError(error, 'Failed to reset provider endpoint');
+            }
+        });
+        endpointRow.add_suffix(resetEndpointButton);
+
+        const editEndpointButton = new Gtk.Button({
+            icon_name: 'document-edit-symbolic',
+            tooltip_text: 'Use a custom endpoint',
+            valign: Gtk.Align.CENTER,
+        });
+        editEndpointButton.add_css_class('flat');
+        editEndpointButton.connect('clicked', () => presentCustomEndpointDialog(
+            row.get_root() ?? row,
+            providerConfigs,
+            providerId,
+            onChanged,
+            syncAllRows,
+        ));
+        endpointRow.add_suffix(editEndpointButton);
         row.add_row(endpointRow);
         row._endpointActionRow = endpointRow;
         row._endpointPresetButtons = endpointPresetButtons;
+        row._resetEndpointButton = resetEndpointButton;
     }
 
-    if (provider.apiFormat) {
+    if (provider.customizable
+        && provider.apiFormat
+        && provider.supportsModelDiscovery !== false) {
         const discoveryRow = new Adw.ActionRow({
             title: 'Model discovery',
             subtitle: 'Refresh the model list from this provider.',
@@ -439,11 +485,15 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows, 
         if (row._modelsEntryRow)
             row._modelsEntryRow.set_text(currentProvider.models.map((model) => model.id).join(', '));
 
-        row._endpointActionRow?.set_subtitle(currentProvider.baseUrl ?? '');
+        row._endpointActionRow?.set_subtitle(currentProvider.usesCustomEndpoint
+            ? `Custom endpoint: ${currentProvider.baseUrl}`
+            : currentProvider.baseUrl ?? '');
+        row._resetEndpointButton?.set_visible(currentProvider.usesCustomEndpoint);
 
         for (const { button, presetId } of row._endpointPresetButtons ?? []) {
             button._syncing = true;
-            button.set_active(currentProvider.endpointPresetId === presetId);
+            button.set_active(!currentProvider.usesCustomEndpoint
+                && currentProvider.endpointPresetId === presetId);
             button._syncing = false;
         }
 
@@ -721,6 +771,67 @@ function createDialogField(labelText, entry) {
     return field;
 }
 
+function presentCustomEndpointDialog(parent, providerConfigs, providerId, onChanged, syncAllRows) {
+    const provider = providerConfigs.getProvider(providerId);
+
+    if (!provider || provider.customizable)
+        return;
+
+    const content = new Gtk.Box({
+        orientation: Gtk.Orientation.VERTICAL,
+        spacing: 10,
+        margin_top: 6,
+        margin_bottom: 6,
+        margin_start: 6,
+        margin_end: 6,
+    });
+    const endpointEntry = new Gtk.Entry({
+        text: provider.baseUrl,
+        placeholder_text: provider.defaultBaseUrl,
+        activates_default: true,
+        hexpand: true,
+        input_purpose: Gtk.InputPurpose.URL,
+    });
+    const dialog = new Adw.AlertDialog({
+        heading: `Use a Custom ${provider.name} Endpoint?`,
+        body: 'Requests, including your API key and chat content, will be sent to this URL. Cusco tests built-in providers with their official endpoints only, so compatibility, reliability, and the same experience cannot be guaranteed.',
+    });
+
+    content.append(createDialogField('API base URL', endpointEntry));
+    dialog.set_extra_child(content);
+    dialog.add_response('cancel', 'Cancel');
+    dialog.add_response('save', 'Use Endpoint');
+    dialog.set_default_response('save');
+    dialog.set_close_response('cancel');
+    dialog.set_response_appearance('save', Adw.ResponseAppearance.SUGGESTED);
+
+    const syncSaveEnabled = () => {
+        dialog.set_response_enabled('save', Boolean(endpointEntry.get_text().trim()));
+    };
+
+    endpointEntry.connect('changed', syncSaveEnabled);
+    syncSaveEnabled();
+
+    dialog.choose(parent, null, (_dialog, result) => {
+        if (dialog.choose_finish(result) !== 'save')
+            return;
+
+        try {
+            providerConfigs.setProviderCustomEndpoint(providerId, endpointEntry.get_text());
+            syncAllRows();
+            onChanged();
+        } catch (error) {
+            syncAllRows();
+            showProviderMessage(
+                parent,
+                'Could Not Update Endpoint',
+                error.userMessage ?? error.message,
+            );
+            logError(error, 'Failed to update provider endpoint');
+        }
+    });
+}
+
 function presentAddCustomProviderDialog(parent, providerConfigs, onChanged, syncAllRows) {
     const content = new Gtk.Box({
         orientation: Gtk.Orientation.VERTICAL,
@@ -847,7 +958,7 @@ export function createProviderSettingsPage(providerConfigs, onChanged) {
 
     const builtInGroup = new Adw.PreferencesGroup({
         title: 'Built-in Providers',
-        description: 'Choose which built-in providers are available and configure default models.',
+        description: 'Choose which built-in providers are available and configure their models and endpoints.',
     });
     const customGroup = new Adw.PreferencesGroup({
         title: 'Custom APIs',

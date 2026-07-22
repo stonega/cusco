@@ -71,7 +71,7 @@ Cusco starts as a standalone native GNOME application.
 - Provider availability, default models, active selection, and chat preferences are persisted with GSettings.
 - API keys are stored in Secret Service; environment variables remain a development fallback.
 - Custom OpenAI-compatible providers are stored as a multi-entry list in GSettings, while each stable provider ID keeps an independent API key in Secret Service. Legacy singleton settings migrate into the list.
-- Provider model discovery refreshes model lists from supported provider APIs and persists discovered model metadata in GSettings. Provider/model capability metadata, including supported thinking levels, lives in the provider registry and is documented in `docs/user/provider-models.md`.
+- Built-in chat model lists and capability metadata, including supported thinking levels, live in the provider registry. Custom OpenAI-compatible APIs can discover and persist their model metadata from `/models`. Built-in provider endpoint overrides are explicit, warning-gated, separately persisted in GSettings, and resettable to official defaults; Kimi retains Global and CN as first-class official presets. The complete provider registry is documented in `docs/user/provider-models.md`.
 - Memory writes are never implicit: user messages can trigger a proposal dialog, and only explicit approval stores memory.
 - Memory use is per-chat controllable and creates a stored usage audit entry without adding a transcript system message.
 - Installed skills are discovered from `~/.agents/skills`, enabled in the Skills preferences page, selected per chat, and injected as ephemeral hidden provider context.

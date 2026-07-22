@@ -32,6 +32,7 @@ const REQUIRED_SETTINGS_KEYS = [
     'default-image-model',
     'enabled-providers',
     'provider-endpoint-presets',
+    'provider-custom-endpoints',
     'provider-default-models',
     'provider-discovered-models',
     'provider-default-image-models',
@@ -48,6 +49,7 @@ const FALLBACK_STRING_DEFAULTS = {
     'default-image-provider': '',
     'default-image-model': '',
     'provider-endpoint-presets': '{}',
+    'provider-custom-endpoints': '{}',
     'provider-default-models': '{}',
     'provider-discovered-models': '{}',
     'provider-default-image-models': '{}',
@@ -216,6 +218,53 @@ function parseDefaultModelSettings(value) {
     }
 
     return {};
+}
+
+function normalizeEndpointUrl(value) {
+    const endpoint = String(value ?? '').trim();
+    let uri;
+
+    try {
+        uri = GLib.Uri.parse(endpoint, GLib.UriFlags.NONE);
+    } catch (_error) {
+        uri = null;
+    }
+
+    const scheme = uri?.get_scheme()?.toLowerCase() ?? '';
+
+    if (!endpoint || !uri?.get_host() || (scheme !== 'http' && scheme !== 'https')) {
+        const error = new Error('Endpoint must be a complete HTTP or HTTPS URL.');
+        error.userMessage = 'Enter a complete endpoint URL beginning with http:// or https://.';
+        throw error;
+    }
+
+    return endpoint.replace(/\/+$/, '');
+}
+
+function endpointUrlsMatch(left, right) {
+    return String(left ?? '').trim().replace(/\/+$/, '')
+        === String(right ?? '').trim().replace(/\/+$/, '');
+}
+
+function applyProviderEndpointUrl(provider, baseUrl) {
+    const normalizedBaseUrl = normalizeEndpointUrl(baseUrl);
+    const matchingPreset = provider.endpointPresets?.find((preset) => (
+        endpointUrlsMatch(preset.baseUrl, normalizedBaseUrl)
+    ));
+
+    if (matchingPreset) {
+        provider.endpointPresetId = matchingPreset.id;
+        provider.baseUrl = matchingPreset.baseUrl;
+        provider.usesCustomEndpoint = false;
+    } else if (endpointUrlsMatch(provider.defaultBaseUrl, normalizedBaseUrl)) {
+        provider.endpointPresetId = provider.defaultEndpointPresetId ?? '';
+        provider.baseUrl = provider.defaultBaseUrl;
+        provider.usesCustomEndpoint = false;
+    } else {
+        provider.endpointPresetId = '';
+        provider.baseUrl = normalizedBaseUrl;
+        provider.usesCustomEndpoint = true;
+    }
 }
 
 function normalizeCustomModels(models) {
@@ -944,7 +993,7 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
         nativeSearch: {
             api: 'gemini-generate-content',
-            tools: ['google_search', 'google_maps', 'url_context'],
+            tools: ['google_search', 'url_context'],
         },
         defaultModelId: 'gemini-3.6-flash',
         defaultImageModelId: 'gemini-3.1-flash-image',
@@ -1112,6 +1161,8 @@ export class ProviderConfigStore {
         };
         this._configs = configs.map((config) => ({
             ...config,
+            defaultBaseUrl: String(config.defaultBaseUrl ?? config.baseUrl ?? '').trim(),
+            usesCustomEndpoint: false,
             endpointPresets: (config.endpointPresets ?? []).map((preset) => ({ ...preset })),
             models: config.models.map((model) => ({ ...model })),
             imageModels: (config.imageModels ?? []).map((model) => ({ ...model })),
@@ -1229,7 +1280,46 @@ export class ProviderConfigStore {
 
         provider.endpointPresetId = preset.id;
         provider.baseUrl = preset.baseUrl;
+        provider.usesCustomEndpoint = false;
         this._persistEndpointPresets();
+        this._persistCustomEndpoints();
+        return provider;
+    }
+
+    setProviderCustomEndpoint(providerId, baseUrl) {
+        const provider = this.getProvider(providerId);
+
+        if (!provider)
+            throw new Error(`Provider does not exist: ${providerId}`);
+
+        if (provider.customizable)
+            throw new Error(`Use custom provider settings to update ${provider.name}`);
+
+        applyProviderEndpointUrl(provider, baseUrl);
+
+        this._persistEndpointPresets();
+        this._persistCustomEndpoints();
+        return provider;
+    }
+
+    resetProviderEndpoint(providerId) {
+        const provider = this.getProvider(providerId);
+
+        if (!provider)
+            throw new Error(`Provider does not exist: ${providerId}`);
+
+        if (provider.customizable)
+            throw new Error(`Provider does not have a built-in endpoint: ${provider.name}`);
+
+        const defaultPreset = provider.endpointPresets?.find((preset) => (
+            preset.id === provider.defaultEndpointPresetId
+        ));
+
+        provider.endpointPresetId = defaultPreset?.id ?? provider.defaultEndpointPresetId ?? '';
+        provider.baseUrl = defaultPreset?.baseUrl ?? provider.defaultBaseUrl;
+        provider.usesCustomEndpoint = false;
+        this._persistEndpointPresets();
+        this._persistCustomEndpoints();
         return provider;
     }
 
@@ -1937,6 +2027,7 @@ export class ProviderConfigStore {
 
         this._loadCustomProviderSettings();
         this._loadEndpointPresetSettings();
+        this._loadCustomEndpointSettings();
         this._loadDiscoveredModelSettings();
         this._loadDiscoveredImageModelSettings();
         this._loadCustomImageModelSettings();
@@ -2033,6 +2124,25 @@ export class ProviderConfigStore {
 
             provider.endpointPresetId = preset.id;
             provider.baseUrl = preset.baseUrl;
+        }
+    }
+
+    _loadCustomEndpointSettings() {
+        const customEndpoints = parseDefaultModelSettings(
+            this._settings.get_string('provider-custom-endpoints'),
+        );
+
+        for (const [providerId, baseUrl] of Object.entries(customEndpoints)) {
+            const provider = this.getProvider(providerId);
+
+            if (!provider || provider.customizable)
+                continue;
+
+            try {
+                applyProviderEndpointUrl(provider, baseUrl);
+            } catch (_error) {
+                // Invalid persisted endpoints should not stop the application from opening.
+            }
         }
     }
 
@@ -2146,6 +2256,18 @@ export class ProviderConfigStore {
         }
 
         this._settings?.set_string('provider-endpoint-presets', JSON.stringify(selectedPresets));
+        flushSettings();
+    }
+
+    _persistCustomEndpoints() {
+        const customEndpoints = {};
+
+        for (const provider of this._configs) {
+            if (!provider.customizable && provider.usesCustomEndpoint)
+                customEndpoints[provider.id] = provider.baseUrl;
+        }
+
+        this._settings?.set_string('provider-custom-endpoints', JSON.stringify(customEndpoints));
         flushSettings();
     }
 

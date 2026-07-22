@@ -36,9 +36,6 @@ function providerManagedToolInstruction(nativeTools) {
     if (toolSet.has('web_search') || toolSet.has('google_search') || toolSet.has('x_search'))
         instructions.push('Use provider search directly for current web or social information; do not request a Cusco search tool.');
 
-    if (toolSet.has('google_maps'))
-        instructions.push('Use Google Maps only for clearly location-related questions. Cusco does not provide the device location, so rely on locations stated by the user.');
-
     if (toolSet.has('url_context'))
         instructions.push('Use URL Context when the user supplies complete public URLs that need to be read or compared.');
 

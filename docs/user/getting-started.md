@@ -14,7 +14,12 @@ Messages can be edited, retried, regenerated, or branched from the transcript. F
 
 The Custom APIs list in Preferences accepts multiple OpenAI-compatible endpoints. Add a name, base URL, and API key; Cusco stores each key separately in Secret Service and fetches that endpoint's models from `GET /models`. Model IDs can still be entered manually when an endpoint does not support discovery.
 
-Provider settings can refresh model lists from supported remote APIs after credentials are configured. Cusco keeps a supported built-in model matrix with per-model thinking levels in [Provider Models](provider-models.md).
+Built-in providers use Cusco's maintained chat model lists. Their Endpoint row can
+be edited for a proxy or compatible deployment, but that URL will receive the
+provider API key and chat content and may behave differently from the official
+service. Use Reset to return to the default official URL. Kimi exposes both its
+Global and CN official endpoints directly. The supported built-in model matrix
+and per-model thinking levels are listed in [Provider Models](provider-models.md).
 
 Memory is opt-in at write time. When a message looks like a useful long-term fact, Cusco asks before saving it. The Memory page in Preferences can search, edit, pin, disable, delete, import, and export memories. When memories are used in a chat, Cusco records a local audit entry without adding a transcript note.
 
@@ -24,7 +29,7 @@ Select any generated image, image attachment, tool result, or image artifact to 
 
 In Agent mode, the model can pause its work with an `ask_user` request when it needs information or a choice. Cusco temporarily replaces the provider controls with one question and its suggested options while keeping a custom-answer input. Multiple questions are shown sequentially. Select an option or type an answer and press Enter; press Escape to return a `null` answer and let the agent continue. Any existing composer draft is restored afterward.
 
-Gemini Agent mode enables Google Search, Google Maps grounding, and URL Context as provider-managed tools. Maps is intended for clearly location-related questions; Cusco does not access or transmit the device location, so include the relevant city, address, or area in the prompt. URL Context can read complete public URLs included in the prompt. Cusco displays provider-tool activity and appends returned sources, including required Google Maps attribution, to grounded answers.
+Gemini Agent mode enables Google Search and URL Context as provider-managed tools. URL Context can read complete public URLs included in the prompt. Cusco displays provider-tool activity and appends returned sources to grounded answers.
 
 The composer also provides inline references. Type `$` to filter enabled skills, `@` to find files under your Home folder, `@artifact:` to reference an exact artifact revision, or `#` to find executable commands available on `PATH`. Use the arrow keys and Enter or Tab to insert a styled reference, or Escape to close the list. Referenced files are attached to the message, referenced skills are loaded for that turn, referenced artifacts provide bounded working context, and referenced commands are never executed automatically.
 

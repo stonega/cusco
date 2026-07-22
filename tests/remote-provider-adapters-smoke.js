@@ -556,9 +556,9 @@ const geminiNativeSearchBody = buildGeminiGenerateContentBody(messages, {
     tools: [searchTool, mcpTool],
 });
 assertEqual(hasOwn(geminiNativeSearchBody.tools[0], 'googleSearch'), true, 'Gemini native Google Search');
-assertEqual(hasOwn(geminiNativeSearchBody.tools[1], 'googleMaps'), true, 'Gemini native Google Maps');
-assertEqual(hasOwn(geminiNativeSearchBody.tools[2], 'urlContext'), true, 'Gemini native URL Context');
-assertEqual(geminiNativeSearchBody.tools[3].functionDeclarations[0].name, 'mcp__context7__resolve_library_id', 'Gemini retained client tool');
+assertEqual(geminiNativeSearchBody.tools.some((tool) => hasOwn(tool, 'googleMaps')), false, 'Gemini omitted incompatible Google Maps');
+assertEqual(hasOwn(geminiNativeSearchBody.tools[1], 'urlContext'), true, 'Gemini native URL Context');
+assertEqual(geminiNativeSearchBody.tools[2].functionDeclarations[0].name, 'mcp__context7__resolve_library_id', 'Gemini retained client tool');
 assertEqual(geminiNativeSearchBody.toolConfig.includeServerSideToolInvocations, true, 'Gemini exposed server tool activity');
 assertEqual(geminiNativeSearchBody.toolConfig.functionCallingConfig.mode, 'VALIDATED', 'Gemini validated combined tools');
 const geminiFallbackToolBody = buildGeminiGenerateContentBody(messages, {

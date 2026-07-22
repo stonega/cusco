@@ -44,6 +44,15 @@ support keep the chat picker disabled.
 | Z.ai | `glm-5.2` | `glm-5-turbo` | `Off`, `Auto` |
 | Custom APIs | First discovered model | Discovered or user configured | None |
 
+Built-in chat model lists are maintained by Cusco and are not discovered from
+the network in Settings. Each built-in provider's Endpoint row shows its active
+URL and offers an edit action for advanced custom deployments. Custom
+endpoints receive the provider API key and chat content, and may not provide
+the compatibility, reliability, or experience of the official service. A
+visible Reset action restores the provider's default official endpoint. Kimi
+also keeps Global (`api.moonshot.ai`) and CN (`api.moonshot.cn`) as explicit
+official choices; selecting either one exits custom-endpoint mode.
+
 ## Context Windows
 
 The composer usage percentage uses these approximate maximum context windows
@@ -99,18 +108,16 @@ models that use its OpenAI-compatible image generation endpoint.
   and cost, and Luna is optimized for cost-sensitive workloads. Only the GPT-5.6
   family exposes `X-High` and `Max` reasoning in Cusco.
 - Gemini is intentionally limited to `gemini-3.6-flash`,
-  `gemini-3.5-flash-lite`, and `gemini-3.1-pro-preview`. Persisted or
-  discovered Gemini 2.x models are
+  `gemini-3.5-flash-lite`, and `gemini-3.1-pro-preview`. Persisted Gemini 2.x
+  models are
   ignored. The retired `gemini-3.5-flash` ID is migrated to
   `gemini-3.6-flash`, and the stale `gemini-3.1-pro` ID is migrated to
   `gemini-3.1-pro-preview`. Gemini image generation excludes
   `gemini-2.5-flash-image`; only the Gemini 3 image models listed above are
   supported. In Agent mode, all built-in Gemini chat models can use Google
-  Search, Google Maps grounding, and URL Context. Cusco shows provider tool
-  activity and cited sources, preserves Gemini's server-tool context between
-  turns, and never sends the device location. Name a location explicitly for
-  Maps requests. Maps grounding currently supports English prompts and may
-  incur per-query charges. URL Context accepts up to 20 complete, publicly
+  Search and URL Context. Cusco shows provider tool activity and cited sources
+  and preserves Gemini's server-tool context between turns. URL Context accepts
+  up to 20 complete, publicly
   accessible URLs per request; private, local, authenticated, and paywalled
   URLs are not available to the provider tool.
 - Anthropic is intentionally limited to `claude-fable-5`,
@@ -121,9 +128,8 @@ models that use its OpenAI-compatible image generation endpoint.
   and support `X-High` and `Max`. Haiku 4.5 continues to use manual
   extended-thinking budgets and does not support those two higher efforts.
 - Kimi is intentionally limited to `kimi-k3`, `kimi-k2.7-code`, and
-  `kimi-k2.6`. Persisted or discovered
-  Moonshot V1 and older Kimi models are ignored. Kimi K3 uses always-on
-  thinking with its only currently supported effort, `Max`; requests use
+  `kimi-k2.6`. Persisted Moonshot V1 and older Kimi models are ignored. Kimi K3
+  uses always-on thinking with its only currently supported effort, `Max`; requests use
   top-level `reasoning_effort` and `max_completion_tokens`, not the K2.x
   `thinking` parameter. Kimi K2.7 Code uses always-on thinking through `Auto`;
   only Kimi K2.6 exposes `Off`.
@@ -136,8 +142,8 @@ models that use its OpenAI-compatible image generation endpoint.
   OpenAI-compatible image endpoint with `grok-imagine-image-quality` and
   `grok-imagine-image`. `grok-4.5` exposes `Low`, `Medium`, and `High`
   reasoning and defaults to `High`; `grok-4.3` also supports `Off`.
-- Z.ai is intentionally limited to `glm-5.2` and `glm-5-turbo`, and model
-  discovery is disabled. `glm-5.2` supports explicit `High` and `Max`
+- Z.ai is intentionally limited to `glm-5.2` and `glm-5-turbo`. `glm-5.2`
+  supports explicit `High` and `Max`
   reasoning effort; `glm-5-turbo` supports only thinking on/off. Z.ai image
   generation supports only `glm-image`; `cogview-4-250304` is intentionally
   excluded.
@@ -181,7 +187,6 @@ models that use its OpenAI-compatible image generation endpoint.
 - Gemini 3.5 Flash-Lite model: https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite
 - Gemini latest model guide: https://ai.google.dev/gemini-api/docs/latest-model
 - Gemini thinking guide: https://ai.google.dev/gemini-api/docs/thinking
-- Gemini Google Maps grounding: https://ai.google.dev/gemini-api/docs/generate-content/maps-grounding
 - Gemini URL Context: https://ai.google.dev/gemini-api/docs/generate-content/url-context
 - Gemini tool combinations: https://ai.google.dev/gemini-api/docs/generate-content/tool-combination
 - Gemini image generation guide: https://ai.google.dev/gemini-api/docs/image-generation

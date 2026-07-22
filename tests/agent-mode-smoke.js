@@ -19,7 +19,7 @@ const prompt = buildAgentModeSystemPrompt(tools.listTools(), { maxIterations: 2 
 const defaultPrompt = buildAgentModeSystemPrompt(tools.listTools());
 const nativeSearchPrompt = buildAgentModeSystemPrompt(
     tools.listTools().filter((tool) => tool.name !== 'search'),
-    { nativeSearchTools: ['google_search', 'google_maps', 'url_context'] },
+    { nativeSearchTools: ['google_search', 'url_context'] },
 );
 const nativeToolPrompt = buildAgentModeSystemPrompt([
     ...tools.listTools(),
@@ -54,9 +54,7 @@ if (!prompt.includes('Agent is enabled')
     throw new Error('Agent Mode prompt did not describe the tool protocol');
 }
 
-if (!nativeSearchPrompt.includes('Provider-managed tools are enabled: google_search, google_maps, url_context')
-    || !nativeSearchPrompt.includes('Use Google Maps only for clearly location-related questions')
-    || !nativeSearchPrompt.includes('Cusco does not provide the device location')
+if (!nativeSearchPrompt.includes('Provider-managed tools are enabled: google_search, url_context')
     || !nativeSearchPrompt.includes('Use URL Context when the user supplies complete public URLs')
     || nativeSearchPrompt.includes('- search: Web Search')) {
     throw new Error('Agent Mode prompt did not route Gemini provider-managed tools');
