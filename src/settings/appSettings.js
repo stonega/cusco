@@ -1,4 +1,5 @@
 import Adw from 'gi://Adw?version=1';
+import Gdk from 'gi://Gdk?version=4.0';
 import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
@@ -21,8 +22,10 @@ const PERSISTENT_SETTINGS_KEYS = [
     'auto-mode-enabled',
     'response-timeout-seconds',
     'provider-fallback-enabled',
+    'hooks-enabled',
     'thinking-level',
     'code-theme',
+    'empty-chat-image-path',
     'high-contrast-enabled',
     'reduced-motion-enabled',
     'computer-use-enabled',
@@ -36,6 +39,7 @@ const DEFAULT_SEND_WITH_ENTER = true;
 const DEFAULT_AUTO_MODE_ENABLED = true;
 const DEFAULT_RESPONSE_TIMEOUT_SECONDS = 45;
 const DEFAULT_PROVIDER_FALLBACK_ENABLED = false;
+const DEFAULT_HOOKS_ENABLED = true;
 const DEFAULT_HIGH_CONTRAST_ENABLED = false;
 const DEFAULT_REDUCED_MOTION_ENABLED = false;
 const DEFAULT_COMPUTER_USE_ENABLED = false;
@@ -52,6 +56,7 @@ const FALLBACK_BOOLEAN_DEFAULTS = {
     'send-with-enter': DEFAULT_SEND_WITH_ENTER,
     'auto-mode-enabled': DEFAULT_AUTO_MODE_ENABLED,
     'provider-fallback-enabled': DEFAULT_PROVIDER_FALLBACK_ENABLED,
+    'hooks-enabled': DEFAULT_HOOKS_ENABLED,
     'high-contrast-enabled': DEFAULT_HIGH_CONTRAST_ENABLED,
     'reduced-motion-enabled': DEFAULT_REDUCED_MOTION_ENABLED,
     'computer-use-enabled': DEFAULT_COMPUTER_USE_ENABLED,
@@ -66,6 +71,7 @@ const FALLBACK_UINT_DEFAULTS = {
 const FALLBACK_STRING_DEFAULTS = {
     'thinking-level': DEFAULT_THINKING_LEVEL,
     'code-theme': DEFAULT_CODE_THEME_ID,
+    'empty-chat-image-path': '',
 };
 
 function defaultFallbackSettingsPath() {
@@ -307,8 +313,10 @@ export class AppSettingsStore {
         this._autoModeEnabled = DEFAULT_AUTO_MODE_ENABLED;
         this._responseTimeoutSeconds = DEFAULT_RESPONSE_TIMEOUT_SECONDS;
         this._providerFallbackEnabled = DEFAULT_PROVIDER_FALLBACK_ENABLED;
+        this._hooksEnabled = DEFAULT_HOOKS_ENABLED;
         this._thinkingLevel = DEFAULT_THINKING_LEVEL;
         this._codeTheme = DEFAULT_CODE_THEME_ID;
+        this._emptyChatImagePath = '';
         this._highContrastEnabled = DEFAULT_HIGH_CONTRAST_ENABLED;
         this._reducedMotionEnabled = DEFAULT_REDUCED_MOTION_ENABLED;
         this._computerUseEnabled = DEFAULT_COMPUTER_USE_ENABLED;
@@ -359,6 +367,16 @@ export class AppSettingsStore {
         return this._providerFallbackEnabled;
     }
 
+    get hooksEnabled() {
+        return this._hooksEnabled;
+    }
+
+    setHooksEnabled(value) {
+        this._hooksEnabled = Boolean(value);
+        this._setBoolean('hooks-enabled', this._hooksEnabled);
+        return this._hooksEnabled;
+    }
+
     get thinkingLevel() {
         return this._thinkingLevel;
     }
@@ -377,6 +395,16 @@ export class AppSettingsStore {
         this._codeTheme = normalizeCodeTheme(value);
         this._setString('code-theme', this._codeTheme);
         return this._codeTheme;
+    }
+
+    get emptyChatImagePath() {
+        return this._emptyChatImagePath;
+    }
+
+    setEmptyChatImagePath(value) {
+        this._emptyChatImagePath = String(value ?? '');
+        this._setString('empty-chat-image-path', this._emptyChatImagePath);
+        return this._emptyChatImagePath;
     }
 
     get highContrastEnabled() {
@@ -535,8 +563,10 @@ export class AppSettingsStore {
             this._getUint('response-timeout-seconds', this._responseTimeoutSeconds),
         );
         this._providerFallbackEnabled = this._getBoolean('provider-fallback-enabled', this._providerFallbackEnabled);
+        this._hooksEnabled = this._getBoolean('hooks-enabled', this._hooksEnabled);
         this._thinkingLevel = normalizeThinkingLevel(this._getString('thinking-level', this._thinkingLevel));
         this._codeTheme = normalizeCodeTheme(this._getString('code-theme', this._codeTheme));
+        this._emptyChatImagePath = this._getString('empty-chat-image-path', this._emptyChatImagePath);
         this._highContrastEnabled = this._getBoolean('high-contrast-enabled', this._highContrastEnabled);
         this._reducedMotionEnabled = this._getBoolean('reduced-motion-enabled', this._reducedMotionEnabled);
         this._computerUseEnabled = this._getBoolean('computer-use-enabled', this._computerUseEnabled);
@@ -576,6 +606,34 @@ function createCodeThemeList(options) {
     return list;
 }
 
+function emptyChatImageSubtitle(path) {
+    if (!path)
+        return 'Cusco default artwork';
+
+    const filename = GLib.path_get_basename(path);
+    return GLib.file_test(path, GLib.FileTest.IS_REGULAR)
+        ? filename
+        : `${filename} (missing)`;
+}
+
+function createImageFileDialog() {
+    const imageFilter = new Gtk.FileFilter();
+    imageFilter.set_name('Images');
+    imageFilter.add_mime_type('image/*');
+
+    for (const extension of ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tif', 'tiff'])
+        imageFilter.add_pattern(`*.${extension}`);
+
+    const filters = new Gio.ListStore({ item_type: Gtk.FileFilter });
+    filters.append(imageFilter);
+    const dialog = new Gtk.FileDialog({
+        title: 'Choose Empty Chat Image',
+    });
+    dialog.set_filters(filters);
+    dialog.set_default_filter(imageFilter);
+    return dialog;
+}
+
 export function createApplicationSettingsPage(appSettings, onChanged, options = {}) {
     const page = new Adw.PreferencesPage({
         title: 'Chat',
@@ -585,6 +643,60 @@ export function createApplicationSettingsPage(appSettings, onChanged, options = 
     const chatsGroup = new Adw.PreferencesGroup({
         title: 'Chats',
     });
+    const emptyChatImageRow = new Adw.ActionRow({
+        title: 'Empty Chat Image',
+    });
+    const resetEmptyChatImageButton = new Gtk.Button({
+        icon_name: 'edit-clear-symbolic',
+        tooltip_text: 'Use default artwork',
+        valign: Gtk.Align.CENTER,
+    });
+    const chooseEmptyChatImageButton = new Gtk.Button({
+        label: 'Choose Image…',
+        valign: Gtk.Align.CENTER,
+    });
+    const syncEmptyChatImageRow = () => {
+        const path = appSettings.emptyChatImagePath;
+        emptyChatImageRow.set_subtitle(emptyChatImageSubtitle(path));
+        emptyChatImageRow.set_tooltip_text(path || null);
+        resetEmptyChatImageButton.set_visible(Boolean(path));
+    };
+    resetEmptyChatImageButton.add_css_class('flat');
+    resetEmptyChatImageButton.connect('clicked', () => {
+        appSettings.setEmptyChatImagePath('');
+        syncEmptyChatImageRow();
+        onChanged?.({ emptyChatImageChanged: true });
+    });
+    chooseEmptyChatImageButton.connect('clicked', () => {
+        const dialog = createImageFileDialog();
+        dialog.open(page.get_root(), null, (_dialog, result) => {
+            try {
+                const file = dialog.open_finish(result);
+                const path = file?.get_path();
+
+                if (!path)
+                    throw new Error('Only local image files are supported.');
+
+                Gdk.Texture.new_from_file(file);
+                appSettings.setEmptyChatImagePath(path);
+                syncEmptyChatImageRow();
+                onChanged?.({ emptyChatImageChanged: true });
+            } catch (error) {
+                if (error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                    return;
+
+                logError(error, 'Failed to choose empty chat image');
+                onChanged?.({
+                    errorMessage: 'The selected empty chat image could not be used.',
+                });
+            }
+        });
+    });
+    emptyChatImageRow.add_suffix(resetEmptyChatImageButton);
+    emptyChatImageRow.add_suffix(chooseEmptyChatImageButton);
+    syncEmptyChatImageRow();
+    chatsGroup.add(emptyChatImageRow);
+
     const archivedChatCount = Math.max(0, Number(options.archivedChatCount) || 0);
     const archivedChatsRow = new Adw.ActionRow({
         title: 'Archived Chats',

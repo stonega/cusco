@@ -516,12 +516,21 @@
 }
 
 .cusco-image-inline-text-entry {
-    min-height: 30px;
-    padding: 2px 6px;
-    border: 2px solid @accent_bg_color;
-    border-radius: 6px;
-    background-color: alpha(@view_bg_color, 0.94);
-    box-shadow: 0 2px 8px alpha(black, 0.28);
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    outline-width: 0;
+    background-color: transparent;
+    background-image: none;
+    box-shadow: none;
+    caret-color: currentColor;
+}
+
+.cusco-image-inline-text-entry selection {
+    color: @accent_fg_color;
+    background-color: @accent_bg_color;
 }
 
 .cusco-image-editor-sidebar {

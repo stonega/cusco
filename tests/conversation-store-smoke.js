@@ -100,6 +100,7 @@ conversations.appendMessage(chat.id, createMessage('assistant', '', {
 conversations.renameConversation(chat.id, 'Persistent chat');
 conversations.setMemoryEnabled(chat.id, false);
 conversations.setAgentModeEnabled(chat.id, true);
+conversations.setWorkingDirectory(chat.id, '/tmp/cusco-working-directory');
 conversations.setThinkingLevel(chat.id, 'high');
 conversations.setSkillIds(chat.id, ['review']);
 
@@ -153,6 +154,9 @@ if (reloadedChat.memoryEnabled !== false)
 
 if (reloadedChat.agentModeEnabled !== true)
     throw new Error('Persisted Agent Mode flag was not loaded');
+
+if (reloadedChat.workingDirectory !== '/tmp/cusco-working-directory')
+    throw new Error('Persisted working directory was not loaded');
 
 if (reloadedChat.skillIds[0] !== 'review')
     throw new Error('Persisted skill selection was not loaded');

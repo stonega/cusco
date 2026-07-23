@@ -57,6 +57,8 @@ import { createCronCreateTool, CronJobManager } from './cron/manager.js';
 import { isComputerUseError } from './computerUse/protocol.js';
 import { ComputerUseService } from './computerUse/service.js';
 import { createComputerUseTools } from './computerUse/tools.js';
+import { canonicalHookToolName } from './hooks/config.js';
+import { createTurnHookContext, HookManager } from './hooks/manager.js';
 import { MemoryManager } from './memory/memory.js';
 import { McpManager } from './mcp/manager.js';
 import { ProviderConfigStore } from './providers/config.js';
@@ -125,6 +127,7 @@ const CONVERSATION_PAGE_CONTEXT_LIMIT = 6;
 const CONVERSATION_LIST_PAGE_SIZE = 50;
 const MAX_CACHED_CONVERSATION_VIEWS = 4;
 const MAX_CACHED_ATTACHMENT_THUMBNAILS = 48;
+const MAX_STOP_HOOK_CONTINUATIONS = 3;
 // SVG is XML text; most model image endpoints do not accept it as a vision input.
 const IMAGE_ATTACHMENT_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
 const IMAGE_CLIPBOARD_MIME_TYPES = [
@@ -935,6 +938,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
 
         this._appSettings = new AppSettingsStore();
+        this._hooks = new HookManager({
+            settings: this._appSettings,
+            onStatus: (message) => this._showToast?.(message),
+        });
         this._memories = new MemoryManager({ store: new MemoryFileStore() });
         this._workspace = new WorkspaceManager({ store: new WorkspaceFileStore() });
         this._artifacts = new ArtifactManager();
@@ -1032,6 +1039,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._isUpdatingProviderControls = false;
         this._activeChatCancellable = null;
         this._activeTurnConversationId = null;
+        this._activeTurnId = null;
+        this._activeHookContexts = [];
+        this._sessionHookContexts = new Map();
         this._activeQuestionSession = null;
         this._pendingUserMessagesByConversation = new Map();
         this._lastAssistantMessageView = null;
@@ -1671,8 +1681,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             if (this._activeChatCancellable) {
                 if (text) {
-                    this._setComposerText('');
-                    this._enqueuePendingUserMessage(text, references);
+                    this._enqueuePendingUserMessageWithHooks(text, references).then((message) => {
+                        if (message)
+                            this._setComposerText('');
+                    }).catch((error) => {
+                        logError(error, 'Failed to run queued prompt hooks');
+                        this._showToast('The queued message could not be checked by hooks.');
+                    });
                 } else if (hasAttachments) {
                     this._showToast('Attachments can be sent after the current response finishes.');
                 }
@@ -2717,6 +2732,35 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return message;
     }
 
+    async _enqueuePendingUserMessageWithHooks(
+        text,
+        references = [],
+        conversationId = this._pendingConversationId(),
+    ) {
+        const conversation = this._conversations.getConversation(conversationId);
+
+        if (!conversation)
+            return null;
+
+        const hookContextStart = this._activeHookContexts.length;
+        if (!await this._runUserPromptHooks(
+            conversation,
+            text,
+            this._activeChatCancellable,
+        )) {
+            return null;
+        }
+
+        const message = this._enqueuePendingUserMessage(text, references, conversationId);
+
+        if (message) {
+            message.hookContexts = this._activeHookContexts.slice(hookContextStart);
+            message.hookTurnId = this._activeTurnId;
+        }
+
+        return message;
+    }
+
     _removePendingUserMessage(conversationId, messageId) {
         const messages = this._getPendingUserMessages(conversationId)
             .filter((message) => message.id !== messageId);
@@ -2852,6 +2896,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
             {
                 ...options,
                 computerUse: this._computerUse,
+                hookManager: this._hooks,
+                conversation: this._conversations.activeConversation,
+                conversationManager: this._conversations,
+                onWorkingDirectoryChanged: (conversation) => {
+                    this._sessionHookContexts.delete(conversation.id);
+                },
                 archivedChatCount: this._conversations.archivedConversations.length,
                 onOpenArchivedChats: (parent, onCountChanged) => (
                     this._showArchivedChatsWindow(parent, onCountChanged)
@@ -3180,6 +3230,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _handleProviderSettingsChanged(change = {}) {
+        if (change?.errorMessage)
+            this._showToast(change.errorMessage);
+
         this._mcp.reloadConfig();
         if (change?.computerUseChanged)
             this._syncComputerUseTools();
@@ -3208,6 +3261,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         if (change?.codeThemeChanged)
             this._renderActiveConversation();
+
+        if (change?.emptyChatImageChanged)
+            this._updateEmptyConversationImage();
     }
 
     _ensureConversationProviderAvailable(conversation) {
@@ -3261,6 +3317,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const messages = [];
 
         for (const pendingMessage of pendingMessages) {
+            if (pendingMessage.hookTurnId !== this._activeTurnId)
+                this._activeHookContexts.push(...(pendingMessage.hookContexts ?? []));
+
             const references = normalizeComposerReferences(pendingMessage.references);
             const attachments = this._createAttachmentsForComposerReferences(references);
             const userMessage = createMessage(
@@ -3359,23 +3418,41 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (!cancellable)
             return;
 
-        const normalizedReferences = normalizeComposerReferences(references);
-        const pendingAttachments = this._consumePendingAttachments();
-        const attachments = this._createAttachmentsForComposerReferences(
-            normalizedReferences,
-            pendingAttachments,
-        );
-        const userMessage = createMessage(
-            'user',
-            this._formatUserMessageContent(text, attachments),
-            {
-                attachments,
-                metadata: { composerReferences: normalizedReferences },
-            },
-        );
         let shouldSendQueued = false;
+        const restoreComposerDraft = () => {
+            if (this._getComposerText().trim())
+                return;
+
+            this._composerReferences = normalizeComposerReferences(references);
+            this._setComposerText(text, { preserveReferences: true });
+            this.focusComposer();
+        };
 
         try {
+            if (!await this._ensureTurnSessionHooks(conversation, cancellable)) {
+                restoreComposerDraft();
+                return;
+            }
+
+            if (!await this._runUserPromptHooks(conversation, text, cancellable)) {
+                restoreComposerDraft();
+                return;
+            }
+
+            const normalizedReferences = normalizeComposerReferences(references);
+            const pendingAttachments = this._consumePendingAttachments();
+            const attachments = this._createAttachmentsForComposerReferences(
+                normalizedReferences,
+                pendingAttachments,
+            );
+            const userMessage = createMessage(
+                'user',
+                this._formatUserMessageContent(text, attachments),
+                {
+                    attachments,
+                    metadata: { composerReferences: normalizedReferences },
+                },
+            );
             this._conversations.appendMessage(conversation.id, userMessage);
             this._addMessage(userMessage.content, userMessage.role, userMessage);
             this._promptMemoryProposal(userMessage, conversation);
@@ -3407,8 +3484,273 @@ class CuscoWindow extends Adw.ApplicationWindow {
         }
     }
 
+    _turnHookContext(conversation) {
+        return createTurnHookContext(conversation, {
+            turnId: this._activeTurnId,
+            autoModeEnabled: this._appSettings.autoModeEnabled,
+        });
+    }
+
+    _appendHookNotice(conversation, text) {
+        const content = String(text ?? '').trim();
+
+        if (!conversation || !content)
+            return null;
+
+        const message = createMessage('system', content, {
+            metadata: { hookNotice: true },
+        });
+        this._conversations.appendMessage(conversation.id, message);
+        this._addMessageIfActiveConversation(conversation.id, message);
+        return message;
+    }
+
+    _applyHookResult(conversation, result, options = {}) {
+        if (!result)
+            return;
+
+        const contexts = result.additionalContext
+            ?.map((context) => String(context ?? '').trim())
+            .filter(Boolean) ?? [];
+
+        if (options.session && conversation) {
+            this._sessionHookContexts.set(conversation.id, contexts);
+        } else {
+            this._activeHookContexts.push(...contexts);
+        }
+
+        for (const message of result.systemMessages ?? [])
+            this._appendHookNotice(conversation, message);
+
+        if ((result.failures?.length ?? 0) > 0) {
+            log(
+                `Cusco hook ${result.eventName} reported ${result.failures.length} failure(s); `
+                + 'review Hooks settings for the latest status.',
+            );
+        }
+    }
+
+    async _ensureTurnSessionHooks(conversation, cancellable) {
+        const result = await this._hooks.ensureSessionStarted(
+            this._turnHookContext(conversation),
+            {
+                source: conversation.messages.length === 0 ? 'startup' : 'resume',
+                cancellable,
+            },
+        );
+        this._applyHookResult(conversation, result, { session: true });
+
+        if (result.continue === false) {
+            const reason = result.stopReason || 'Session start was stopped by a hook.';
+            this._appendHookNotice(conversation, reason);
+            return false;
+        }
+
+        return true;
+    }
+
+    async _runUserPromptHooks(conversation, prompt, cancellable) {
+        const result = await this._hooks.dispatch(
+            'UserPromptSubmit',
+            this._turnHookContext(conversation),
+            {
+                cancellable,
+                eventInput: { prompt: String(prompt ?? '') },
+            },
+        );
+        this._applyHookResult(conversation, result);
+
+        if (result.blocked || result.continue === false) {
+            this._showToast(result.reason || result.stopReason || 'Prompt blocked by hook.');
+            return false;
+        }
+
+        return true;
+    }
+
+    _hookToolInput(request, options = {}) {
+        let input;
+
+        if (canonicalHookToolName(request.name) === 'Bash') {
+            input = { command: String(request.input ?? '') };
+        } else {
+            try {
+                const parsed = JSON.parse(String(request.input ?? ''));
+                input = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+                    ? parsed
+                    : { input: request.input };
+            } catch (_error) {
+                input = { input: request.input };
+            }
+        }
+
+        if (options.description)
+            input.description = options.description;
+
+        return input;
+    }
+
+    _requestWithHookInput(request, updatedInput) {
+        const toolName = canonicalHookToolName(request.name);
+        let input;
+
+        if (toolName === 'Bash') {
+            if (typeof updatedInput?.command !== 'string')
+                throw new Error('PreToolUse must rewrite Bash with a string command field.');
+
+            input = updatedInput.command;
+        } else {
+            input = JSON.stringify(updatedInput);
+        }
+
+        return {
+            ...this._tools.createRequest(request.name, input),
+            hookToolUseId: request.hookToolUseId,
+        };
+    }
+
+    async _authorizeToolRequestWithHooks(request, conversation, cancellable) {
+        let normalizedRequest = {
+            ...request,
+            hookToolUseId: request.hookToolUseId ?? GLib.uuid_string_random(),
+        };
+        const toolName = canonicalHookToolName(normalizedRequest.name);
+        const preResult = await this._hooks.dispatch(
+            'PreToolUse',
+            this._turnHookContext(conversation),
+            {
+                cancellable,
+                matchValue: toolName,
+                eventInput: {
+                    tool_name: toolName,
+                    tool_use_id: normalizedRequest.hookToolUseId,
+                    tool_input: this._hookToolInput(normalizedRequest),
+                },
+            },
+        );
+        this._applyHookResult(conversation, preResult);
+
+        if (preResult.blocked) {
+            return {
+                status: 'deny',
+                reason: preResult.reason || `${normalizedRequest.label} was blocked by a hook.`,
+                request: normalizedRequest,
+            };
+        }
+
+        if (preResult.updatedInput) {
+            try {
+                normalizedRequest = this._requestWithHookInput(
+                    normalizedRequest,
+                    preResult.updatedInput,
+                );
+            } catch (error) {
+                return {
+                    status: 'deny',
+                    reason: error.message,
+                    request: normalizedRequest,
+                };
+            }
+        }
+
+        const permissionDecision = createToolPermissionDecision(normalizedRequest, {
+            autoModeEnabled: this._appSettings.autoModeEnabled,
+        });
+
+        if (permissionDecision.status === 'deny') {
+            return {
+                status: 'deny',
+                reason: permissionDecision.reason,
+                request: normalizedRequest,
+            };
+        }
+
+        if (!permissionDecision.requiresUserApproval) {
+            return {
+                status: 'allow',
+                request: normalizedRequest,
+                requiresUserApproval: false,
+            };
+        }
+
+        const permissionResult = await this._hooks.dispatch(
+            'PermissionRequest',
+            this._turnHookContext(conversation),
+            {
+                cancellable,
+                matchValue: toolName,
+                eventInput: {
+                    tool_name: toolName,
+                    tool_input: this._hookToolInput(normalizedRequest, {
+                        description: permissionDecision.reason,
+                    }),
+                },
+            },
+        );
+        this._applyHookResult(conversation, permissionResult);
+
+        if (permissionResult.permissionDecision === 'deny') {
+            return {
+                status: 'deny',
+                reason: permissionResult.reason || `${normalizedRequest.label} was denied by a hook.`,
+                request: normalizedRequest,
+            };
+        }
+
+        return {
+            status: 'allow',
+            request: normalizedRequest,
+            requiresUserApproval: permissionResult.permissionDecision !== 'allow',
+        };
+    }
+
+    async _runPostToolUseHooks(request, conversation, toolResponse, cancellable) {
+        const toolName = canonicalHookToolName(request.name);
+        const result = await this._hooks.dispatch(
+            'PostToolUse',
+            this._turnHookContext(conversation),
+            {
+                cancellable,
+                matchValue: toolName,
+                eventInput: {
+                    tool_name: toolName,
+                    tool_use_id: request.hookToolUseId ?? GLib.uuid_string_random(),
+                    tool_input: this._hookToolInput(request),
+                    tool_response: toolResponse,
+                },
+            },
+        );
+        this._applyHookResult(conversation, result);
+        let feedback = [
+            ...(result.feedback ?? []),
+            result.stopReason,
+        ].map((value) => String(value ?? '').trim()).filter(Boolean).join('\n\n');
+
+        if (result.stopNormalProcessing && !feedback)
+            feedback = 'A lifecycle hook stopped normal processing of this tool result.';
+
+        if (feedback)
+            this._appendHookNotice(conversation, feedback);
+
+        return {
+            ...result,
+            feedback,
+        };
+    }
+
+    _setToolHookProviderOverride(conversationId, runningTool, postHookResult) {
+        if (!postHookResult?.stopNormalProcessing || !runningTool?.message)
+            return;
+
+        const message = runningTool.message;
+        this._conversations.updateMessageMetadata(conversationId, message.id, {
+            ...message.metadata,
+            hookProviderContentOverride: postHookResult.feedback,
+        });
+    }
+
     async _runRequestedTool(text, conversationId, cancellable = null) {
-        const request = this._tools.parseRequest(text);
+        let request = this._tools.parseRequest(text);
 
         if (!request)
             return 'skipped';
@@ -3418,18 +3760,22 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return 'cancelled';
         }
 
-        const permissionDecision = createToolPermissionDecision(request, {
-            autoModeEnabled: this._appSettings.autoModeEnabled,
-        });
+        const conversation = this._conversations.getConversation(conversationId);
+        const authorization = await this._authorizeToolRequestWithHooks(
+            request,
+            conversation,
+            cancellable,
+        );
+        request = authorization.request;
 
-        if (permissionDecision.status === 'deny') {
-            const message = createMessage('system', `${request.label} was not run because it is blocked by policy.`);
+        if (authorization.status === 'deny') {
+            const message = createMessage('system', authorization.reason);
             this._conversations.appendMessage(conversationId, message);
             this._addMessageIfActiveConversation(conversationId, message);
             return 'blocked';
         }
 
-        if (permissionDecision.requiresUserApproval && !await this._confirmToolPermission(request, cancellable)) {
+        if (authorization.requiresUserApproval && !await this._confirmToolPermission(request, cancellable)) {
             if (isCancellableCancelled(cancellable)) {
                 this._appendToolCancellation(conversationId, request);
                 return 'cancelled';
@@ -3442,7 +3788,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
         }
 
         const runningTool = this._appendRunningToolMessage(conversationId, request);
-        const conversation = this._conversations.getConversation(conversationId);
 
         try {
             const result = await this._tools.runRequest(request, {
@@ -3456,8 +3801,20 @@ class CuscoWindow extends Adw.ApplicationWindow {
             });
             const status = toolResultStatus(result);
             this._completeRunningToolMessage(conversationId, runningTool, result, status);
+            const postHookResult = await this._runPostToolUseHooks(
+                request,
+                conversation,
+                result,
+                cancellable,
+            );
+            this._setToolHookProviderOverride(conversationId, runningTool, postHookResult);
             return status;
         } catch (error) {
+            const postHookResult = await this._runPostToolUseHooks(request, conversation, {
+                error: error.userMessage ?? error.message,
+                cancelled: wasOperationCancelled(error, cancellable),
+            }, cancellable);
+
             if (wasOperationCancelled(error, cancellable)) {
                 this._completeRunningToolFailure(
                     conversationId,
@@ -3466,6 +3823,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     `${request.label} was stopped before it finished.`,
                     'cancelled',
                 );
+                this._setToolHookProviderOverride(conversationId, runningTool, postHookResult);
                 return 'cancelled';
             }
 
@@ -3476,6 +3834,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 error.userMessage ?? `Tool failed: ${error.message}`,
                 'failed',
             );
+            this._setToolHookProviderOverride(conversationId, runningTool, postHookResult);
             if (!isComputerUseError(error))
                 logError(error, 'Failed to run tool request');
             return 'failed';
@@ -4064,6 +4423,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._startLongResponseNotification();
 
         try {
+            if (!await this._ensureTurnSessionHooks(conversation, cancellable)) {
+                stoppedBeforeAssistantText = true;
+                return { stoppedBeforeAssistantText };
+            }
+
             this._injectMemoryContext(conversation);
             const activeSkills = this._injectSkillContext(conversation);
 
@@ -4073,7 +4437,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     cancellable,
                 });
 
-            await this._maybeAutoCompactConversation(conversation, activeSkills, cancellable);
+            const compactionStatus = await this._maybeAutoCompactConversation(
+                conversation,
+                activeSkills,
+                cancellable,
+            );
+
+            if (compactionStatus === 'stopped') {
+                stoppedBeforeAssistantText = true;
+                return { stoppedBeforeAssistantText };
+            }
 
             assistantView = this._createStreamingAssistantView(conversation, {
                 workingStartedAt: responseStartedAt,
@@ -4084,47 +4457,128 @@ class CuscoWindow extends Adw.ApplicationWindow {
             };
             assistantView.set_loading();
 
-            const providerMessages = this._buildProviderMessages(conversation, activeSkills, {
+            let providerMessages = this._buildProviderMessages(conversation, activeSkills, {
                 agentMode: Boolean(conversation.agentModeEnabled),
             });
             let assistantText;
+            let stopHookActive = false;
 
-            if (conversation.agentModeEnabled) {
-                assistantText = await this._runAgentModeResponse(
-                    conversation,
-                    providerMessages,
-                    assistantViewState,
-                    cancellable,
-                );
+            for (let continuation = 0; ; continuation += 1) {
                 assistantView = assistantViewState.view;
-            } else {
-                assistantText = await this._collectProviderResponseWithFallback(
-                    conversation,
-                    providerMessages,
-                    cancellable,
-                    (text, _chunk, state) => {
-                        if (state?.type === 'status') {
-                            assistantView.set_status(state.status);
+
+                if (conversation.agentModeEnabled) {
+                    assistantText = await this._runAgentModeResponse(
+                        conversation,
+                        providerMessages,
+                        assistantViewState,
+                        cancellable,
+                    );
+                    assistantView = assistantViewState.view;
+                } else {
+                    assistantText = await this._collectProviderResponseWithFallback(
+                        conversation,
+                        providerMessages,
+                        cancellable,
+                        (text, _chunk, state) => {
+                            const currentView = assistantViewState.view;
+
+                            if (state?.type === 'status') {
+                                currentView.set_status(state.status);
+                                this._scrollToBottom();
+                                return;
+                            }
+
+                            if (state?.type === 'usage')
+                                currentView.set_usage(state.usage);
+
+                            if (state?.type === 'reasoning')
+                                currentView.set_reasoning(state.reasoning);
+
+                            if (state?.type === 'provider_context')
+                                currentView.set_provider_context?.(state.providerParts);
+
+                            if (state?.type !== 'usage' && state?.type !== 'provider_context')
+                                currentView.set_label(text);
+
+                            this._scheduleUsageDisplayUpdate(conversation);
                             this._scrollToBottom();
-                            return;
-                        }
+                        },
+                    );
+                }
 
-                        if (state?.type === 'usage')
-                            assistantView.set_usage(state.usage);
+                if (isCancellableCancelled(cancellable))
+                    break;
 
-                        if (state?.type === 'reasoning')
-                            assistantView.set_reasoning(state.reasoning);
-
-                        if (state?.type === 'provider_context')
-                            assistantView.set_provider_context?.(state.providerParts);
-
-                        if (state?.type !== 'usage' && state?.type !== 'provider_context')
-                            assistantView.set_label(text);
-
-                        this._scheduleUsageDisplayUpdate(conversation);
-                        this._scrollToBottom();
+                const stopResult = await this._hooks.dispatch(
+                    'Stop',
+                    this._turnHookContext(conversation),
+                    {
+                        cancellable,
+                        eventInput: {
+                            stop_hook_active: stopHookActive,
+                            last_assistant_message: assistantText || null,
+                        },
                     },
                 );
+                this._applyHookResult(conversation, stopResult);
+
+                if (!stopResult.shouldContinue)
+                    break;
+
+                if (continuation >= MAX_STOP_HOOK_CONTINUATIONS) {
+                    this._appendHookNotice(
+                        conversation,
+                        `Stop hooks reached Cusco's ${MAX_STOP_HOOK_CONTINUATIONS}-continuation safety limit.`,
+                    );
+                    break;
+                }
+
+                const continuationPrompt = stopResult.continuationReasons.join('\n\n');
+                const promptResult = await this._hooks.dispatch(
+                    'UserPromptSubmit',
+                    this._turnHookContext(conversation),
+                    {
+                        cancellable,
+                        eventInput: { prompt: continuationPrompt },
+                    },
+                );
+                this._applyHookResult(conversation, promptResult);
+
+                if (promptResult.blocked || promptResult.continue === false) {
+                    this._appendHookNotice(
+                        conversation,
+                        promptResult.reason
+                            || promptResult.stopReason
+                            || 'A hook blocked the Stop continuation prompt.',
+                    );
+                    break;
+                }
+
+                assistantView.set_stream_text(assistantText, assistantText);
+                assistantView.set_artifacts?.(
+                    this._materializeAssistantArtifacts(assistantText, conversation.id),
+                );
+                assistantView.persist?.();
+                assistantView.finish_working?.();
+                this._appendHookNotice(
+                    conversation,
+                    `A Stop hook requested another response pass: ${continuationPrompt}`,
+                );
+                providerMessages = [
+                    ...this._buildProviderMessages(conversation, activeSkills, {
+                        agentMode: Boolean(conversation.agentModeEnabled),
+                    }),
+                    {
+                        role: 'user',
+                        content: continuationPrompt,
+                    },
+                ];
+                assistantView = this._createStreamingAssistantView(conversation, {
+                    workingStartedAt: responseStartedAt,
+                });
+                assistantViewState.view = assistantView;
+                assistantView.set_loading();
+                stopHookActive = true;
             }
 
             if (isCancellableCancelled(cancellable)) {
@@ -4600,6 +5054,19 @@ class CuscoWindow extends Adw.ApplicationWindow {
         cancellable = null,
         nativeToolCall = null,
     ) {
+        let hookContextStart = this._activeHookContexts.length;
+        const appendHookContextToRuntime = () => {
+            const contexts = this._activeHookContexts.slice(hookContextStart);
+            hookContextStart = this._activeHookContexts.length;
+
+            if (contexts.length > 0) {
+                runtimeMessages.push({
+                    role: 'system',
+                    content: contexts.join('\n\n'),
+                });
+            }
+        };
+
         if (isCancellableCancelled(cancellable)) {
             this._appendAgentToolCancellation(
                 request,
@@ -4611,12 +5078,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return false;
         }
 
-        const permissionDecision = createToolPermissionDecision(request, {
-            autoModeEnabled: this._appSettings.autoModeEnabled,
-        });
+        const authorization = await this._authorizeToolRequestWithHooks(
+            request,
+            conversation,
+            cancellable,
+        );
+        request = authorization.request;
+        appendHookContextToRuntime();
 
-        if (permissionDecision.status === 'deny') {
-            const reason = `${request.label} is blocked by policy.`;
+        if (authorization.status === 'deny') {
+            const reason = authorization.reason;
             this._appendAgentToolFailure(
                 request,
                 responseText,
@@ -4629,7 +5100,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return Boolean(nativeToolCall);
         }
 
-        if (permissionDecision.requiresUserApproval && !await this._confirmToolPermission(request, cancellable)) {
+        if (authorization.requiresUserApproval && !await this._confirmToolPermission(request, cancellable)) {
             if (isCancellableCancelled(cancellable)) {
                 this._appendAgentToolCancellation(
                     request,
@@ -4668,7 +5139,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     ? (command) => this._promptSudoPassword(command, cancellable)
                     : null,
             });
-            const transcriptText = formatToolResultForTranscript(result);
             this._completeRunningToolMessage(
                 conversation.id,
                 runningTool,
@@ -4676,6 +5146,17 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 toolResultStatus(result),
                 { agentMode: true },
             );
+            const postHookResult = await this._runPostToolUseHooks(
+                request,
+                conversation,
+                result,
+                cancellable,
+            );
+            appendHookContextToRuntime();
+            this._setToolHookProviderOverride(conversation.id, runningTool, postHookResult);
+            const transcriptText = postHookResult.stopNormalProcessing
+                ? postHookResult.feedback
+                : formatToolResultForTranscript(result);
 
             if (result.cancelled)
                 return false;
@@ -4705,6 +5186,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
             ));
             return true;
         } catch (error) {
+            const postHookResult = await this._runPostToolUseHooks(request, conversation, {
+                error: error.userMessage ?? error.message,
+                cancelled: wasOperationCancelled(error, cancellable),
+            }, cancellable);
+            appendHookContextToRuntime();
+
             if (wasOperationCancelled(error, cancellable)) {
                 const reason = `${request.label} was stopped before it finished.`;
                 this._completeRunningToolFailure(
@@ -4715,10 +5202,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     'cancelled',
                     { agentMode: true },
                 );
+                this._setToolHookProviderOverride(conversation.id, runningTool, postHookResult);
                 runtimeMessages.push(...createAgentToolRuntimeMessages(
                     request,
                     responseText,
-                    reason,
+                    postHookResult.stopNormalProcessing
+                        ? postHookResult.feedback || reason
+                        : reason,
                     { failed: true, nativeToolCall },
                 ));
                 return false;
@@ -4733,10 +5223,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 'failed',
                 { agentMode: true },
             );
+            this._setToolHookProviderOverride(conversation.id, runningTool, postHookResult);
             runtimeMessages.push(...createAgentToolRuntimeMessages(
                 request,
                 responseText,
-                reason,
+                postHookResult.stopNormalProcessing
+                    ? postHookResult.feedback || reason
+                    : reason,
                 { failed: true, nativeToolCall },
             ));
 
@@ -4848,6 +5341,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._activeTurnConversationId = conversationId
             ?? this._conversations.activeConversation?.id
             ?? null;
+        this._activeTurnId = GLib.uuid_string_random();
+        this._activeHookContexts = [];
         this._setComposerBusy(true);
         return cancellable;
     }
@@ -4858,6 +5353,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (this._activeChatCancellable === cancellable) {
             this._activeChatCancellable = null;
             this._activeTurnConversationId = null;
+            this._activeTurnId = null;
+            this._activeHookContexts = [];
         }
 
         this._setComposerBusy(false);
@@ -5351,6 +5848,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
             role: 'system',
             content: BASE_RESPONSE_SYSTEM_PROMPT,
         }];
+        const hookContexts = [
+            ...(this._sessionHookContexts.get(conversation.id) ?? []),
+            ...this._activeHookContexts,
+        ].map((context) => String(context ?? '').trim()).filter(Boolean);
 
         if (options.agentMode) {
             const nativeSearchTools = this._providerConfigs.getNativeSearchTools(
@@ -5379,7 +5880,26 @@ class CuscoWindow extends Adw.ApplicationWindow {
             });
         }
 
-        const conversationMessages = conversation.messages.map((message) => ({ ...message }));
+        if (hookContexts.length > 0) {
+            systemMessages.push({
+                role: 'system',
+                content: [
+                    'Trusted lifecycle hooks supplied the following context for this session or turn:',
+                    ...hookContexts,
+                ].join('\n\n'),
+            });
+        }
+
+        const conversationMessages = conversation.messages.map((message) => {
+            const providerContentOverride = String(
+                message.metadata?.hookProviderContentOverride ?? '',
+            ).trim();
+
+            return {
+                ...message,
+                content: providerContentOverride || message.content,
+            };
+        });
         const artifactContext = this._buildArtifactReferenceContext(conversation);
 
         if (artifactContext) {
@@ -5423,6 +5943,25 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (!compaction)
             return false;
 
+        const preCompactResult = await this._hooks.dispatch(
+            'PreCompact',
+            this._turnHookContext(conversation),
+            {
+                cancellable,
+                matchValue: 'auto',
+                eventInput: { trigger: 'auto' },
+            },
+        );
+        this._applyHookResult(conversation, preCompactResult);
+
+        if (preCompactResult.continue === false) {
+            this._appendHookNotice(
+                conversation,
+                preCompactResult.stopReason || 'Automatic compaction was stopped by a hook.',
+            );
+            return false;
+        }
+
         this._showToast('Compacting context...');
         const summary = await this._generateContextCompactionSummary(conversation, compaction, cancellable);
         const nextMessages = buildCompactedMessageList(summary, compaction, {
@@ -5437,6 +5976,25 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._refreshConversationList();
 
         this._showToast('Context compacted');
+        const postCompactResult = await this._hooks.dispatch(
+            'PostCompact',
+            this._turnHookContext(conversation),
+            {
+                cancellable,
+                matchValue: 'auto',
+                eventInput: { trigger: 'auto' },
+            },
+        );
+        this._applyHookResult(conversation, postCompactResult);
+
+        if (postCompactResult.continue === false) {
+            this._appendHookNotice(
+                conversation,
+                postCompactResult.stopReason || 'The turn was stopped after compaction by a hook.',
+            );
+            return 'stopped';
+        }
+
         return true;
     }
 
@@ -6941,9 +7499,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (!this._emptyConversationPicture)
             return;
 
-        const styleManager = Adw.StyleManager.get_default();
-        const filename = styleManager.get_dark() ? EMPTY_STATE_IMAGE_DARK : EMPTY_STATE_IMAGE_LIGHT;
-        const path = getBundledImagePath(filename);
+        const customPath = this._appSettings.emptyChatImagePath;
+        let path = customPath && GLib.file_test(customPath, GLib.FileTest.IS_REGULAR)
+            ? customPath
+            : null;
+
+        if (!path) {
+            const styleManager = Adw.StyleManager.get_default();
+            const filename = styleManager.get_dark() ? EMPTY_STATE_IMAGE_DARK : EMPTY_STATE_IMAGE_LIGHT;
+            path = getBundledImagePath(filename);
+        }
 
         if (!path) {
             this._emptyConversationPicture.set_visible(false);

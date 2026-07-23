@@ -81,6 +81,11 @@
       <summary>Provider fallback enabled</summary>
       <description>Whether failed provider requests should retry with another enabled provider.</description>
     </key>
+    <key name="hooks-enabled" type="b">
+      <default>true</default>
+      <summary>Lifecycle hooks enabled</summary>
+      <description>Whether trusted Cusco lifecycle command hooks may run.</description>
+    </key>
     <key name="thinking-level" type="s">
       <default>'auto'</default>
       <summary>Default thinking level</summary>
@@ -90,6 +95,11 @@
       <default>'Adwaita'</default>
       <summary>Code block color scheme</summary>
       <description>The GtkSourceView style scheme used for markdown code blocks.</description>
+    </key>
+    <key name="empty-chat-image-path" type="s">
+      <default>''</default>
+      <summary>Empty chat image</summary>
+      <description>The local image path displayed when the active chat has no messages.</description>
     </key>
     <key name="high-contrast-enabled" type="b">
       <default>false</default>

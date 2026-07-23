@@ -20,6 +20,16 @@ import { estimateConversationUsage } from '../src/chat/usage.js';
 import { createCronCreateTool, CronJobManager } from '../src/cron/manager.js';
 import { ComputerUseService } from '../src/computerUse/service.js';
 import { createComputerUseTools } from '../src/computerUse/tools.js';
+import {
+    canonicalHookToolName,
+    discoverHookSources,
+    workspaceHooksPath,
+} from '../src/hooks/config.js';
+import { HookAuditStore } from '../src/hooks/auditStore.js';
+import { createTurnHookContext, HookManager } from '../src/hooks/manager.js';
+import { reduceHookRuns } from '../src/hooks/protocol.js';
+import { runHookCommand } from '../src/hooks/runner.js';
+import { HookTrustStore } from '../src/hooks/trustStore.js';
 import { ImageDocument } from '../src/imageEditor/document.js';
 import {
     exportDocumentPng,
@@ -47,6 +57,7 @@ import { createAppInfoSettingsPage } from '../src/settings/appInfoSettings.js';
 import { AppSettingsStore, createApplicationSettingsPage } from '../src/settings/appSettings.js';
 import { createArchivedChatsWindow, presentArchivedChatsWindow } from '../src/settings/archivedChats.js';
 import { createComputerUseSettingsGroup } from '../src/settings/computerUseSettings.js';
+import { createHooksSettingsPage } from '../src/settings/hooksSettings.js';
 import { createMemorySettingsPage } from '../src/settings/memorySettings.js';
 import { createMcpSettingsPage } from '../src/settings/mcpSettings.js';
 import { createProviderSettingsPage, presentProviderSettingsDialog } from '../src/settings/providerSettings.js';

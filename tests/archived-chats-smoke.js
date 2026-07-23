@@ -52,9 +52,12 @@ if (Gtk.init_check()) {
 
     let openedArchivedChats = 0;
     let updateArchivedChatCount = null;
+    const appSettings = new AppSettingsStore({ settings: null });
+    appSettings.setEmptyChatImagePath('/tmp/custom-empty-chat.png');
+    const settingsChanges = [];
     const settingsPage = createApplicationSettingsPage(
-        new AppSettingsStore({ settings: null }),
-        () => {},
+        appSettings,
+        (change) => settingsChanges.push(change),
         {
             archivedChatCount: 2,
             onOpenArchivedChats: (_parent, onCountChanged) => {
@@ -64,11 +67,33 @@ if (Gtk.init_check()) {
         },
     );
     let archivedChatsRow = null;
+    let emptyChatImageRow = null;
+    let resetEmptyChatImageButton = null;
 
     walkWidgets(settingsPage, (widget) => {
         if (widget instanceof Adw.ActionRow && widget.get_title() === 'Archived Chats')
             archivedChatsRow = widget;
+
+        if (widget instanceof Adw.ActionRow && widget.get_title() === 'Empty Chat Image')
+            emptyChatImageRow = widget;
+
+        if (widget instanceof Gtk.Button && widget.get_tooltip_text() === 'Use default artwork')
+            resetEmptyChatImageButton = widget;
     });
+
+    if (!emptyChatImageRow
+        || emptyChatImageRow.get_subtitle() !== 'custom-empty-chat.png (missing)'
+        || !resetEmptyChatImageButton?.get_visible()) {
+        throw new Error('Chat settings did not show the current empty chat image');
+    }
+
+    resetEmptyChatImageButton.emit('clicked');
+
+    if (appSettings.emptyChatImagePath !== ''
+        || emptyChatImageRow.get_subtitle() !== 'Cusco default artwork'
+        || settingsChanges.at(-1)?.emptyChatImageChanged !== true) {
+        throw new Error('Chat settings did not reset the empty chat image');
+    }
 
     if (!archivedChatsRow || archivedChatsRow.get_subtitle() !== '2 archived chats')
         throw new Error('Chat settings did not show the Archived Chats entry and count');

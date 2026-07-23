@@ -92,6 +92,8 @@ Some smoke tests skip automatically when the current environment has no display 
 - [Setup](docs/implementation/setup.md)
 - [Chat Switching Performance](docs/implementation/chat-performance.md)
 - [User Getting Started](docs/user/getting-started.md)
+- [Lifecycle Hooks](docs/user/hooks.md)
+- [Lifecycle Hook Architecture](docs/implementation/hooks.md)
 - [Artifacts](docs/user/artifacts.md)
 - [Image Viewer and Editor](docs/user/image-editor.md)
 - [Artifact Architecture and Security](docs/implementation/artifacts.md)

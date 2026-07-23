@@ -7,6 +7,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Added reviewed local lifecycle hooks for prompts, tools, permissions, context compaction, and turn completion, with per-chat working directories and native trust controls.
+- Empty chats can now use a custom image selected from Chat settings, with an option to restore Cusco's default artwork.
+
+### Fixed
+
+- Text annotations in the image editor now edit directly on the canvas without a separate input bar.
+
 ## [0.5.17] - 2026-07-23
 
 ### Fixed

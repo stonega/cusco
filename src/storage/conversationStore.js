@@ -108,6 +108,7 @@ function normalizeConversationFields(conversation) {
         archived: Boolean(conversation?.archived),
         memoryEnabled: conversation?.memoryEnabled !== false,
         agentModeEnabled: Boolean(conversation?.agentModeEnabled),
+        workingDirectory: normalizeString(conversation?.workingDirectory),
         folderId: normalizeString(conversation?.folderId),
         tags: normalizeStringList(conversation?.tags),
         profileId: normalizeString(conversation?.profileId),

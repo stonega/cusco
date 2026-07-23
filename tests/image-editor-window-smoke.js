@@ -190,8 +190,12 @@ if (Gtk.init_check()) {
     viewer._activateTool('text');
     viewer._dragBegin(canvasX, canvasY, false, viewer._primaryDragGesture);
     assert(viewer._inlineTextState && viewer._document.inTransaction,
-        'Adding text did not open the in-canvas text editor');
+        'Adding text did not start direct editing on the canvas');
     const inlineEntry = viewer._inlineTextState.entry;
+    assert(inlineEntry instanceof Gtk.Text
+        && inlineEntry.has_css_class('cusco-image-inline-text-entry')
+        && inlineEntry.get_attributes()?.to_string().includes('absolute-size'),
+    'Direct text editing fell back to a separate entry bar or lost annotation styling');
     inlineEntry.grab_focus();
     assert(viewer._handleKey(Gdk.KEY_minus, 0) === false,
         'The capture-phase shortcut handler stole in-canvas text punctuation');
@@ -203,7 +207,7 @@ if (Gtk.init_check()) {
         && textAnnotation.text === 'Edited on image'
         && viewer._tool === 'select'
         && viewer._toolButtons.get('select').get_active(),
-    'Finishing new in-canvas text did not commit it and return to Select');
+    'Finishing directly edited text did not commit it and return to Select');
     viewer._beginInlineTextEdit(textAnnotation);
     assert(!viewer._undoButton.get_sensitive(),
         'Undo remained enabled while an in-canvas text transaction was open');

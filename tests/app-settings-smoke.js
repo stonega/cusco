@@ -52,6 +52,7 @@ const settings = new MemorySettings({
         'send-with-enter': false,
         'auto-mode-enabled': true,
         'provider-fallback-enabled': true,
+        'hooks-enabled': false,
         'high-contrast-enabled': true,
         'reduced-motion-enabled': false,
         'computer-use-enabled': true,
@@ -66,6 +67,7 @@ const settings = new MemorySettings({
     strings: {
         'thinking-level': 'high',
         'code-theme': initialCodeTheme,
+        'empty-chat-image-path': '/tmp/custom-empty-chat.png',
     },
 });
 const appSettings = new AppSettingsStore({ settings });
@@ -82,11 +84,17 @@ if (appSettings.responseTimeoutSeconds !== 90)
 if (appSettings.providerFallbackEnabled !== true)
     throw new Error('Provider fallback preference was not loaded');
 
+if (appSettings.hooksEnabled !== false)
+    throw new Error('Hooks preference was not loaded');
+
 if (appSettings.thinkingLevel !== 'high')
     throw new Error(`Thinking level preference was not loaded: ${appSettings.thinkingLevel}`);
 
 if (appSettings.codeTheme !== initialCodeTheme)
     throw new Error(`Code theme preference was not loaded: ${appSettings.codeTheme}`);
+
+if (appSettings.emptyChatImagePath !== '/tmp/custom-empty-chat.png')
+    throw new Error('Empty chat image preference was not loaded');
 
 if (appSettings.highContrastEnabled !== true || appSettings.reducedMotionEnabled !== false)
     throw new Error('Accessibility preferences were not loaded');
@@ -102,8 +110,10 @@ appSettings.setSendWithEnter(true);
 appSettings.setAutoModeEnabled(false);
 appSettings.setResponseTimeoutSeconds(2);
 appSettings.setProviderFallbackEnabled(false);
+appSettings.setHooksEnabled(true);
 appSettings.setThinkingLevel('low');
 appSettings.setCodeTheme(nextCodeTheme);
+appSettings.setEmptyChatImagePath('/tmp/next-empty-chat.webp');
 appSettings.setHighContrastEnabled(false);
 appSettings.setReducedMotionEnabled(true);
 appSettings.setComputerUseEnabled(false);
@@ -124,11 +134,17 @@ if (settings.get_uint('response-timeout-seconds') !== 5)
 if (settings.get_boolean('provider-fallback-enabled') !== false)
     throw new Error('Provider fallback preference was not persisted');
 
+if (settings.get_boolean('hooks-enabled') !== true)
+    throw new Error('Hooks preference was not persisted');
+
 if (settings.get_string('thinking-level') !== 'low')
     throw new Error('Thinking level preference was not persisted');
 
 if (settings.get_string('code-theme') !== nextCodeTheme)
     throw new Error('Code theme preference was not persisted');
+
+if (settings.get_string('empty-chat-image-path') !== '/tmp/next-empty-chat.webp')
+    throw new Error('Empty chat image preference was not persisted');
 
 if (settings.get_boolean('high-contrast-enabled') !== false || settings.get_boolean('reduced-motion-enabled') !== true)
     throw new Error('Accessibility preferences were not persisted');
@@ -181,6 +197,7 @@ try {
 
     staleSchemaAppSettings.setResponseTimeoutSeconds(240);
     staleSchemaAppSettings.setCodeTheme(nextCodeTheme);
+    staleSchemaAppSettings.setEmptyChatImagePath('/tmp/fallback-empty-chat.jpg');
     staleSchemaAppSettings.setHighContrastEnabled(true);
 
     const reloadedStaleSchemaAppSettings = new AppSettingsStore({
@@ -194,6 +211,9 @@ try {
 
     if (reloadedStaleSchemaAppSettings.codeTheme !== nextCodeTheme)
         throw new Error(`Fallback code theme preference was not reloaded: ${reloadedStaleSchemaAppSettings.codeTheme}`);
+
+    if (reloadedStaleSchemaAppSettings.emptyChatImagePath !== '/tmp/fallback-empty-chat.jpg')
+        throw new Error('Fallback empty chat image preference was not reloaded');
 
     if (reloadedStaleSchemaAppSettings.highContrastEnabled !== true)
         throw new Error('Fallback boolean preference was not reloaded');

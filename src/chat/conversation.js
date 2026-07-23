@@ -152,6 +152,7 @@ export class ConversationManager {
             archived: false,
             memoryEnabled: options.memoryEnabled !== false,
             agentModeEnabled: Boolean(options.agentModeEnabled),
+            workingDirectory: String(options.workingDirectory ?? ''),
             folderId: options.folderId ?? '',
             tags: normalizeList(options.tags),
             profileId: options.profileId ?? '',
@@ -253,6 +254,7 @@ export class ConversationManager {
             modelId: conversation.modelId,
             memoryEnabled: conversation.memoryEnabled !== false,
             agentModeEnabled: Boolean(conversation.agentModeEnabled),
+            workingDirectory: String(conversation.workingDirectory ?? ''),
             thinkingLevel: normalizeThinkingLevel(conversation.thinkingLevel),
             folderId: conversation.folderId,
             tags: conversation.tags,
@@ -451,6 +453,18 @@ export class ConversationManager {
             throw new Error(`Conversation does not exist: ${conversationId}`);
 
         conversation.agentModeEnabled = Boolean(enabled);
+        conversation.updatedAt = now();
+        this._persist(conversation);
+        return conversation;
+    }
+
+    setWorkingDirectory(conversationId, workingDirectory) {
+        const conversation = this.getConversation(conversationId);
+
+        if (!conversation)
+            throw new Error(`Conversation does not exist: ${conversationId}`);
+
+        conversation.workingDirectory = String(workingDirectory ?? '').trim();
         conversation.updatedAt = now();
         this._persist(conversation);
         return conversation;

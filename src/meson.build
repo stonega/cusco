@@ -90,11 +90,21 @@ cron_sources = files(
   'cron/manager.js',
 )
 
+hook_sources = files(
+  'hooks/auditStore.js',
+  'hooks/config.js',
+  'hooks/manager.js',
+  'hooks/protocol.js',
+  'hooks/runner.js',
+  'hooks/trustStore.js',
+)
+
 settings_sources = files(
   'settings/archivedChats.js',
   'settings/appInfoSettings.js',
   'settings/appSettings.js',
   'settings/computerUseSettings.js',
+  'settings/hooksSettings.js',
   'settings/memorySettings.js',
   'settings/mcpSettings.js',
   'settings/providerSettings.js',
@@ -193,6 +203,11 @@ install_data(
 install_data(
   cron_sources,
   install_dir: pkgdatadir / 'cron',
+)
+
+install_data(
+  hook_sources,
+  install_dir: pkgdatadir / 'hooks',
 )
 
 install_data(

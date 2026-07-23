@@ -32,6 +32,8 @@ gjs -m tests/markdown-smoke.js
 gjs -m tests/message-view-smoke.js
 gjs -m tests/usage-smoke.js
 gjs -m tests/compaction-smoke.js
+gjs -m tests/hooks-smoke.js
+gjs -m tests/hooks-settings-smoke.js
 gjs -m tests/memory-smoke.js
 gjs -m tests/image-generation-smoke.js
 gjs -m tests/image-editor-smoke.js

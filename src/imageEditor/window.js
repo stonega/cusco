@@ -6,6 +6,7 @@ import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 import GObject from 'gi://GObject?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
+import Pango from 'gi://Pango';
 
 import { createBundledIcon } from '../bundledIcons.js';
 import * as DocumentModel from './document.js';
@@ -119,6 +120,31 @@ function rgbaFromString(value, fallback = '#e01b24') {
         rgba.parse(fallback);
 
     return rgba;
+}
+
+function inlineTextAttributes(annotation, fontSize) {
+    const rgba = rgbaFromString(annotation?.color ?? annotation?.strokeColor);
+    const opacity = clamp(annotation?.opacity ?? 1, 0, 1);
+    const requestedWeight = Number(annotation?.fontWeight);
+    const weight = Number.isFinite(requestedWeight)
+        ? clamp(Math.round(requestedWeight), Pango.Weight.THIN, Pango.Weight.ULTRAHEAVY)
+        : Pango.Weight.NORMAL;
+    const attributes = new Pango.AttrList();
+
+    attributes.insert(Pango.attr_family_new(String(annotation?.fontFamily ?? 'Sans')));
+    attributes.insert(Pango.attr_weight_new(weight));
+    attributes.insert(Pango.attr_size_new_absolute(
+        Math.max(1, Math.round(fontSize * Pango.SCALE)),
+    ));
+    attributes.insert(Pango.attr_foreground_new(
+        Math.round(clamp(rgba.red, 0, 1) * 65535),
+        Math.round(clamp(rgba.green, 0, 1) * 65535),
+        Math.round(clamp(rgba.blue, 0, 1) * 65535),
+    ));
+    attributes.insert(Pango.attr_foreground_alpha_new(
+        Math.round(clamp(rgba.alpha * opacity, 0, 1) * 65535),
+    ));
+    return attributes;
 }
 
 function colorComponents(value, fallback = [0.88, 0.11, 0.14, 1]) {
@@ -1194,9 +1220,18 @@ export const ImageViewerWindow = GObject.registerClass({
         this._surfaceDirty = false;
 
         try {
+            const editingAnnotationId = this._inlineTextState?.annotationId;
+            const previewDocument = editingAnnotationId
+                ? {
+                    transforms: this._document.transforms,
+                    annotations: this._document.annotations.filter(
+                        annotation => annotation.id !== editingAnnotationId,
+                    ),
+                }
+                : this._document;
             this._renderSurface = ImageRenderer.renderDocumentToSurface(
                 this._previewPixbuf ?? this._source.pixbuf,
-                this._document,
+                previewDocument,
             );
             this._renderError = null;
         } catch (error) {
@@ -1703,9 +1738,12 @@ export const ImageViewerWindow = GObject.registerClass({
         }
         this._syncUndoRedo();
 
-        const entry = new Gtk.Entry({
+        const entry = new Gtk.Text({
             text: String(annotation.text ?? ''),
             placeholder_text: 'Type text',
+            propagate_text_width: false,
+            truncate_multiline: true,
+            xalign: 0,
             halign: Gtk.Align.START,
             valign: Gtk.Align.START,
         });
@@ -1723,6 +1761,7 @@ export const ImageViewerWindow = GObject.registerClass({
         };
         this._inlineTextState = state;
         this._canvasOverlay.add_overlay(entry);
+        this._surfaceDirty = true;
 
         entry.connect('changed', () => {
             if (this._inlineTextState !== state)
@@ -1820,22 +1859,24 @@ export const ImageViewerWindow = GObject.registerClass({
         const geometry = this._viewGeometry();
         const canvasWidth = Math.max(1, this._drawingArea.get_width());
         const canvasHeight = Math.max(1, this._drawingArea.get_height());
-        const desiredWidth = Math.max(
-            120,
-            annotation.rect.width * geometry.width * geometry.scale,
-        );
+        const desiredWidth = annotation.rect.width * geometry.width * geometry.scale;
+        const fontSize = Math.max(
+            1,
+            annotation.fontSize * Math.min(geometry.width, geometry.height),
+        ) * geometry.scale;
         const x = clamp(
             geometry.x + annotation.rect.x * geometry.width * geometry.scale,
             0,
-            Math.max(0, canvasWidth - 80),
+            Math.max(0, canvasWidth - 1),
         );
         const y = clamp(
             geometry.y + annotation.rect.y * geometry.height * geometry.scale,
             0,
-            Math.max(0, canvasHeight - 36),
+            Math.max(0, canvasHeight - 1),
         );
-        const width = Math.max(80, Math.min(desiredWidth, canvasWidth - x));
+        const width = Math.max(1, Math.min(desiredWidth, canvasWidth - x));
 
+        state.entry.set_attributes(inlineTextAttributes(annotation, fontSize));
         state.entry.set_margin_start(Math.round(x));
         state.entry.set_margin_top(Math.round(y));
         state.entry.set_size_request(Math.round(width), -1);
