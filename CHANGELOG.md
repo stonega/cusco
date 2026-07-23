@@ -7,6 +7,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- Expanded reasoning content now has a subtle left border for clearer visual separation.
+
+### Fixed
+
+- Tool call subtitles are now limited to one line.
+
 ## [0.5.18] - 2026-07-23
 
 ### Added

@@ -7757,6 +7757,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
 
         container.add_css_class('cusco-reasoning');
+        revealer.add_css_class('cusco-reasoning-body');
         headerButton.add_css_class('flat');
         headerButton.add_css_class('cusco-reasoning-header');
         chevron.add_css_class('cusco-reasoning-toggle-icon');
@@ -7956,7 +7957,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
             valign: Gtk.Align.CENTER,
             ellipsize: Pango.EllipsizeMode.END,
             hexpand: true,
+            lines: 1,
             max_width_chars: 76,
+            single_line_mode: true,
         });
         const detailLabel = new Gtk.Label({
             xalign: 0,
