@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.17] - 2026-07-23
+
 ### Fixed
 
 - Absolute local file links, including generated images, now open through valid file URIs.
@@ -67,7 +69,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.16...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.17...HEAD
+[0.5.17]: https://github.com/stonega/cusco/compare/v0.5.16...v0.5.17
 [0.5.16]: https://github.com/stonega/cusco/compare/v0.5.15...v0.5.16
 [0.5.15]: https://github.com/stonega/cusco/compare/v0.5.14...v0.5.15
 [0.5.14]: https://github.com/stonega/cusco/compare/v0.5.13...v0.5.14
