@@ -1,5 +1,6 @@
 import {
     applyReferenceTextStyles,
+    initializeCodeBufferTheme,
     setLoadedPicturePaintable,
 } from '../src/chat/messageView.js';
 
@@ -56,6 +57,23 @@ setLoadedPicturePaintable(parentlessPicture, cachedPaintable);
 assert(
     assignedPaintable === cachedPaintable,
     'A cached image paintable was not assigned before its picture received a parent',
+);
+
+let appliedCodeStyleScheme = null;
+const codeStyleScheme = initializeCodeBufferTheme({
+    set_style_scheme(styleScheme) {
+        appliedCodeStyleScheme = styleScheme;
+    },
+}, 'Adwaita-dark');
+
+assert(codeStyleScheme, 'Code block theme was not initialized synchronously');
+assert(
+    codeStyleScheme.get_id() === 'Adwaita-dark',
+    `Code block used the wrong initial theme: ${codeStyleScheme.get_id()}`,
+);
+assert(
+    appliedCodeStyleScheme === codeStyleScheme,
+    'Code block theme was not applied during synchronous initialization',
 );
 
 print('Cusco message view smoke passed');

@@ -7,6 +7,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Hovering over the chat header message count now shows message, tool, and token totals.
+- Very long text pasted into the composer is now added as a private `.txt` article attachment.
+
+### Changed
+
+- Chat loading states now show the empty-chat artwork without a spinner or loading text.
+
+### Fixed
+
+- Streaming code blocks now keep a stable themed background while their content updates.
+
 ## [0.5.19] - 2026-07-23
 
 ### Changed

@@ -27,9 +27,11 @@ import {
 } from './chat/artifacts.js';
 import {
     createFileAttachment,
+    createPastedTextAttachment,
     fileAttachmentSummary,
     hideBinaryAttachmentData,
     savePastedImageTexture,
+    shouldAttachPastedText,
 } from './chat/attachments.js';
 import {
     AUTO_COMPACTION_MAX_SUMMARY_OUTPUT_TOKENS,
@@ -46,7 +48,10 @@ import {
     createMessageContent,
     setLoadedPicturePaintable,
 } from './chat/messageView.js';
-import { estimateConversationUsage } from './chat/usage.js';
+import {
+    estimateConversationUsage,
+    summarizeConversationStatistics,
+} from './chat/usage.js';
 import {
     filterComposerSuggestions,
     findComposerTrigger,
@@ -137,6 +142,10 @@ const IMAGE_CLIPBOARD_MIME_TYPES = [
     'image/webp',
     'image/bmp',
     'image/tiff',
+];
+const TEXT_CLIPBOARD_MIME_TYPES = [
+    'text/plain',
+    'text/plain;charset=utf-8',
 ];
 const MAX_ATTACHMENT_TEXT_CHARS = 20000;
 const MAX_REFERENCED_ARTIFACT_TEXT_CHARS = 30000;
@@ -274,6 +283,14 @@ function formatContextUsagePercent(tokens, contextWindowTokens) {
         return `${trimFixedNumber(percentage, 1)}%`;
 
     return `${Math.round(percentage)}%`;
+}
+
+function formatStatisticCount(value) {
+    return Math.max(0, Math.round(Number(value) || 0)).toLocaleString('en-US');
+}
+
+function formatStatisticNoun(count, singular, plural = `${singular}s`) {
+    return `${formatStatisticCount(count)} ${count === 1 ? singular : plural}`;
 }
 
 function drawContextUsageChart(cr, width, height, fraction, color) {
@@ -687,6 +704,19 @@ export function clipboardFormatsContainImage(formats) {
         && IMAGE_CLIPBOARD_MIME_TYPES.some((mimeType) => formats.contain_mime_type(mimeType));
 }
 
+export function clipboardFormatsContainText(formats) {
+    if (!formats)
+        return false;
+
+    if (typeof formats.contain_gtype === 'function'
+        && formats.contain_gtype(GObject.TYPE_STRING)) {
+        return true;
+    }
+
+    return typeof formats.contain_mime_type === 'function'
+        && TEXT_CLIPBOARD_MIME_TYPES.some((mimeType) => formats.contain_mime_type(mimeType));
+}
+
 function imageAttachmentSummaryLine(attachment) {
     return `Image attachment: ${attachment.name}`;
 }
@@ -958,7 +988,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._cron = new CronJobManager();
         this._mcp = new McpManager({ workspaceManager: this._workspace });
         this._pendingAttachments = [];
-        this._clipboardImagePasteCancellables = new Set();
+        this._clipboardPasteCancellables = new Set();
         this._imageViewer = null;
         this._composerReferences = [];
         this._userMessageReferenceContents = new Set();
@@ -1051,9 +1081,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._stopCronLogSync();
             this._homeFileIndex.stop();
 
-            for (const cancellable of this._clipboardImagePasteCancellables)
+            for (const cancellable of this._clipboardPasteCancellables)
                 cancellable.cancel();
-            this._clipboardImagePasteCancellables.clear();
+            this._clipboardPasteCancellables.clear();
 
             if (this._composerSuggestionRefreshSourceId) {
                 GLib.Source.remove(this._composerSuggestionRefreshSourceId);
@@ -1070,6 +1100,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (this._composerStyleManagerSignalId) {
                 Adw.StyleManager.get_default().disconnect(this._composerStyleManagerSignalId);
                 this._composerStyleManagerSignalId = 0;
+            }
+
+            if (this._chatStatisticsPopover) {
+                this._chatStatisticsPopover.popdown();
+                this._chatStatisticsPopover.unparent();
+                this._chatStatisticsPopover = null;
             }
 
             this._mcp.shutdown();
@@ -1102,6 +1138,18 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         this._windowTitle = title;
         headerBar.set_title_widget(title);
+        this._chatStatisticsPopover = this._createChatStatisticsPopover();
+        this._chatStatisticsPopover.set_parent(title);
+        const chatStatisticsMotionController = new Gtk.EventControllerMotion();
+        chatStatisticsMotionController.connect(
+            'enter',
+            () => this._chatStatisticsPopover?.popup(),
+        );
+        chatStatisticsMotionController.connect(
+            'leave',
+            () => this._chatStatisticsPopover?.popdown(),
+        );
+        title.add_controller(chatStatisticsMotionController);
         this._artifactWorkspaceButton = new Gtk.Button({
             icon_name: 'view-grid-symbolic',
             tooltip_text: 'Artifacts',
@@ -1447,23 +1495,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         this._conversationStack.add_child(this._messages);
 
-        const loadingSpinner = new Gtk.Spinner({
-            spinning: true,
-        });
-        const loadingLabel = new Gtk.Label({
-            label: 'Loading chat…',
-        });
-        loadingLabel.add_css_class('dim-label');
         this._conversationLoadingView = new Gtk.Box({
-            orientation: Gtk.Orientation.VERTICAL,
-            spacing: 8,
-            halign: Gtk.Align.CENTER,
-            valign: Gtk.Align.CENTER,
             hexpand: true,
             vexpand: true,
         });
-        this._conversationLoadingView.append(loadingSpinner);
-        this._conversationLoadingView.append(loadingLabel);
         this._conversationStack.add_child(this._conversationLoadingView);
         this._conversationStack.set_visible_child(this._messages);
 
@@ -1583,7 +1618,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         this._composer.add_css_class('cusco-composer-text');
         this._composer.connect('paste-clipboard', () => {
-            if (!this._pasteClipboardImageIfAvailable())
+            if (!this._pasteClipboardContentIfAvailable())
                 return;
 
             GObject.signal_stop_emission_by_name(this._composer, 'paste-clipboard');
@@ -2605,6 +2640,111 @@ class CuscoWindow extends Adw.ApplicationWindow {
         content.append(this._composerUsageDetailLabel);
         popover.set_child(content);
         return popover;
+    }
+
+    _createChatStatisticsPopover() {
+        const popover = new Gtk.Popover({
+            position: Gtk.PositionType.BOTTOM,
+            autohide: false,
+        });
+        popover.add_css_class('cusco-chat-statistics-popover');
+        const content = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 12,
+            margin_top: 10,
+            margin_bottom: 10,
+            margin_start: 14,
+            margin_end: 14,
+        });
+        const labels = {};
+        const createSection = (heading, rows) => {
+            const section = new Gtk.Box({
+                orientation: Gtk.Orientation.VERTICAL,
+                spacing: 5,
+            });
+            const headingLabel = new Gtk.Label({
+                label: heading,
+                xalign: 0,
+            });
+            headingLabel.add_css_class('heading');
+            section.append(headingLabel);
+            const grid = new Gtk.Grid({
+                row_spacing: 3,
+                column_spacing: 24,
+            });
+
+            rows.forEach(([key, label, indent], row) => {
+                const nameLabel = new Gtk.Label({
+                    label,
+                    xalign: 0,
+                    hexpand: true,
+                    margin_start: indent ? 12 : 0,
+                });
+                const valueLabel = new Gtk.Label({
+                    label: '0',
+                    xalign: 1,
+                    halign: Gtk.Align.END,
+                });
+                valueLabel.add_css_class('cusco-chat-statistics-value');
+                grid.attach(nameLabel, 0, row, 1, 1);
+                grid.attach(valueLabel, 1, row, 1, 1);
+                labels[key] = valueLabel;
+            });
+
+            section.append(grid);
+            content.append(section);
+        };
+
+        createSection('Messages', [
+            ['totalMessages', 'Total'],
+            ['userMessages', 'User'],
+            ['assistantMessages', 'Assistant'],
+            ['tools', 'Tools'],
+        ]);
+        content.append(new Gtk.Separator({
+            orientation: Gtk.Orientation.VERTICAL,
+        }));
+        createSection('Tokens', [
+            ['inputTokens', 'Input'],
+            ['cachedInputTokens', 'Cached', true],
+            ['uncachedInputTokens', 'Uncached', true],
+            ['outputTokens', 'Output'],
+            ['totalTokens', 'Total'],
+        ]);
+
+        this._chatStatisticsLabels = labels;
+        popover.set_child(content);
+        return popover;
+    }
+
+    _syncChatStatisticsPopover(conversation) {
+        if (!this._chatStatisticsLabels)
+            return;
+
+        const statistics = summarizeConversationStatistics(conversation?.messages);
+        const cachedPercentage = statistics.inputTokens > 0
+            ? (statistics.cachedInputTokens / statistics.inputTokens) * 100
+            : 0;
+        const labels = this._chatStatisticsLabels;
+
+        labels.totalMessages.set_label(formatStatisticCount(statistics.totalMessages));
+        labels.userMessages.set_label(formatStatisticCount(statistics.userMessages));
+        labels.assistantMessages.set_label(formatStatisticCount(statistics.assistantMessages));
+        labels.tools.set_label([
+            formatStatisticNoun(statistics.toolCalls, 'call'),
+            formatStatisticNoun(statistics.toolResults, 'result'),
+        ].join(', '));
+        labels.inputTokens.set_label(formatStatisticCount(statistics.inputTokens));
+        labels.cachedInputTokens.set_label(
+            `${formatStatisticCount(statistics.cachedInputTokens)} (${
+                cachedPercentage.toFixed(1)
+            }%)`,
+        );
+        labels.uncachedInputTokens.set_label(
+            formatStatisticCount(statistics.uncachedInputTokens),
+        );
+        labels.outputTokens.set_label(formatStatisticCount(statistics.outputTokens));
+        labels.totalTokens.set_label(formatStatisticCount(statistics.totalTokens));
     }
 
     _syncComposerUsageChart(baseUsage = null, conversation = this._conversations.activeConversation) {
@@ -4121,6 +4261,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return `${name} does not support image attachments.`;
     }
 
+    _pasteClipboardContentIfAvailable() {
+        return this._pasteClipboardImageIfAvailable()
+            || this._pasteClipboardTextIfAvailable();
+    }
+
     _pasteClipboardImageIfAvailable() {
         const clipboard = this._composer?.get_clipboard?.();
 
@@ -4135,9 +4280,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         }
 
         const cancellable = new Gio.Cancellable();
-        this._clipboardImagePasteCancellables.add(cancellable);
+        this._clipboardPasteCancellables.add(cancellable);
         clipboard.read_texture_async(cancellable, (source, result) => {
-            this._clipboardImagePasteCancellables.delete(cancellable);
+            this._clipboardPasteCancellables.delete(cancellable);
 
             try {
                 const texture = source.read_texture_finish(result);
@@ -4158,6 +4303,64 @@ class CuscoWindow extends Adw.ApplicationWindow {
             }
         });
         return true;
+    }
+
+    _pasteClipboardTextIfAvailable() {
+        const clipboard = this._composer?.get_clipboard?.();
+
+        if (!clipboardFormatsContainText(clipboard?.get_formats?.()))
+            return false;
+
+        const cancellable = new Gio.Cancellable();
+        this._clipboardPasteCancellables.add(cancellable);
+        clipboard.read_text_async(cancellable, (source, result) => {
+            this._clipboardPasteCancellables.delete(cancellable);
+
+            try {
+                const text = source.read_text_finish(result);
+
+                if (text)
+                    this._handlePastedText(text);
+            } catch (error) {
+                if (wasOperationCancelled(error, cancellable))
+                    return;
+
+                logError(error, 'Failed to paste clipboard text');
+                this._showToast('The clipboard text could not be pasted.');
+            }
+        });
+        return true;
+    }
+
+    _handlePastedText(text) {
+        if (!shouldAttachPastedText(text)) {
+            this._insertPastedComposerText(text);
+            return false;
+        }
+
+        try {
+            const attachment = createPastedTextAttachment(text, {
+                maxTextCharacters: MAX_ATTACHMENT_TEXT_CHARS,
+            });
+            this._pendingAttachments.push(attachment);
+            this._updateAttachmentLabel();
+            this.focusComposer();
+            this._showToast('Long pasted text added as an article attachment.');
+            return true;
+        } catch (error) {
+            logError(error, 'Failed to create an attachment from pasted text');
+            this._insertPastedComposerText(text);
+            this._showToast('The article attachment could not be created, so the text was pasted instead.');
+            return false;
+        }
+    }
+
+    _insertPastedComposerText(text) {
+        this._composerBuffer.begin_user_action();
+        this._composerBuffer.delete_selection(true, true);
+        this._composerBuffer.insert_at_cursor(String(text ?? ''), -1);
+        this._composerBuffer.end_user_action();
+        this.focusComposer();
     }
 
     _attachFileContext() {
@@ -7061,7 +7264,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             );
 
             this._conversationMessageStartIndexes.set(conversation.id, nextStartIndex);
-            this._conversationStack.set_visible_child(this._conversationLoadingView);
+            this._showConversationLoadingState();
             this._renderActiveConversation({
                 forceRebuild: true,
                 incremental: true,
@@ -7148,8 +7351,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _scheduleActiveConversationRender(conversation) {
         this._cancelScheduledConversationRender();
-        this._hideEmptyConversationState();
-        this._conversationStack.set_visible_child(this._conversationLoadingView);
+        this._showConversationLoadingState();
         const conversationId = conversation?.id ?? null;
 
         this._conversationRenderSourceId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
@@ -7172,6 +7374,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         }
 
         this._conversationStack.set_visible_child(entry.messages);
+        this._syncEmptyConversationState(conversation);
 
         if (staleEntry && staleEntry !== entry)
             this._removeConversationView(staleEntry);
@@ -7255,16 +7458,21 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._cancelScheduledConversationRender();
         this._captureCurrentConversationView();
         this._syncProviderControls(conversation);
-        this._syncEmptyConversationState(conversation);
         this._renderPendingUserMessages(conversation);
 
         if (cachedEntry) {
+            this._syncEmptyConversationState(conversation);
             this._touchConversationView(cachedEntry);
             this._activateConversationView(cachedEntry);
             this._updateUsageDisplay(conversation);
             this._scrollToBottom();
             return;
         }
+
+        if (options.incremental)
+            this._showConversationLoadingState();
+        else
+            this._syncEmptyConversationState(conversation);
 
         const staleEntry = conversation?.id
             ? this._conversationViewCache.get(conversation.id)
@@ -7312,6 +7520,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         }));
 
         this._windowTitle.set_subtitle(`${usage.messages} messages`);
+        this._syncChatStatisticsPopover(conversation);
         this._syncComposerUsageChart(usage, conversation);
         this._syncComposerHint(Boolean(this._activeChatCancellable));
     }
@@ -7450,6 +7659,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._showEmptyConversationState();
         else
             this._hideEmptyConversationState();
+    }
+
+    _showConversationLoadingState() {
+        this._conversationStack?.set_visible_child(this._conversationLoadingView);
+        this._showEmptyConversationState();
     }
 
     _showEmptyConversationState() {
@@ -8641,7 +8855,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _appendMessageWidget(widget) {
-        this._hideEmptyConversationState();
+        if (!this._isBatchRenderingConversation)
+            this._hideEmptyConversationState();
 
         if (this._messageBottomSpacer?.get_parent?.() === this._messages)
             this._messages.remove(this._messageBottomSpacer);

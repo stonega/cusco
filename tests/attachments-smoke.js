@@ -3,10 +3,13 @@ import Gdk from 'gi://Gdk?version=4.0';
 
 import {
     createFileAttachment,
+    createPastedTextAttachment,
     fileAttachmentSummary,
     hideBinaryAttachmentData,
     isTextAttachmentContentType,
+    PASTED_TEXT_ATTACHMENT_THRESHOLD,
     savePastedImageTexture,
+    shouldAttachPastedText,
 } from '../src/chat/attachments.js';
 
 function assert(condition, message) {
@@ -42,6 +45,43 @@ assert(
     'PDF attachment summary was not user friendly',
 );
 assert(!fileAttachmentSummary(pdfAttachment).includes('%PDF'), 'PDF summary exposed raw bytes');
+
+const thresholdText = 'a'.repeat(PASTED_TEXT_ATTACHMENT_THRESHOLD);
+assert(
+    !shouldAttachPastedText(thresholdText)
+        && shouldAttachPastedText(`${thresholdText}a`),
+    'Long pasted text did not respect the article attachment threshold',
+);
+assert(
+    shouldAttachPastedText('界'.repeat(PASTED_TEXT_ATTACHMENT_THRESHOLD + 1)),
+    'Long pasted Unicode text was not counted by character',
+);
+
+const pastedTextDirectory = GLib.build_filenamev([tempRoot, 'pasted-text']);
+const pastedArticleContent = [
+    'A pasted article',
+    '',
+    'This content should remain intact in its durable text attachment.',
+].join('\n');
+const pastedArticle = createPastedTextAttachment(pastedArticleContent, {
+    directory: pastedTextDirectory,
+});
+const [, pastedArticleBytes] = GLib.file_get_contents(pastedArticle.path);
+
+assert(
+    GLib.file_test(pastedArticle.path, GLib.FileTest.IS_REGULAR),
+    'Pasted article text was not persisted as an attachment',
+);
+assert(
+    pastedArticle.name.startsWith('pasted-article-') && pastedArticle.name.endsWith('.txt'),
+    'Pasted article did not receive a descriptive text filename',
+);
+assert(
+    !pastedArticle.binary
+        && new TextDecoder().decode(pastedArticleBytes) === pastedArticleContent
+        && pastedArticle.content === pastedArticleContent,
+    'Pasted article attachment did not preserve its text content',
+);
 
 const legacyPdfAttachment = {
     kind: 'file',

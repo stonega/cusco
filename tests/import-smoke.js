@@ -80,6 +80,7 @@ import { WorkspaceManager } from '../src/workspace/workspace.js';
 import {
     buildShimmerMarkup,
     clipboardFormatsContainImage,
+    clipboardFormatsContainText,
     composerHintPresentation,
     conversationListPageTarget,
     CuscoWindow,
@@ -109,11 +110,45 @@ const textClipboardFormats = {
     contain_gtype: () => false,
     contain_mime_type: () => false,
 };
+const plainTextClipboardFormats = {
+    contain_gtype: () => false,
+    contain_mime_type: (mimeType) => mimeType === 'text/plain;charset=utf-8',
+};
 
 if (!clipboardFormatsContainImage(pngClipboardFormats)
     || clipboardFormatsContainImage(textClipboardFormats)
     || clipboardFormatsContainImage(null)) {
     throw new Error('Clipboard image formats were not detected safely');
+}
+
+if (!clipboardFormatsContainText(plainTextClipboardFormats)
+    || clipboardFormatsContainText(textClipboardFormats)
+    || clipboardFormatsContainText(null)) {
+    throw new Error('Clipboard text formats were not detected safely');
+}
+
+let pastedClipboardText = '';
+const fakeTextClipboard = {
+    get_formats: () => plainTextClipboardFormats,
+    read_text_async(cancellable, callback) {
+        callback(this, { cancellable });
+    },
+    read_text_finish: () => 'Clipboard text',
+};
+const fakeClipboardPasteWindow = {
+    _composer: {
+        get_clipboard: () => fakeTextClipboard,
+    },
+    _clipboardPasteCancellables: new Set(),
+    _handlePastedText(text) {
+        pastedClipboardText = text;
+    },
+};
+
+if (!CuscoWindow.prototype._pasteClipboardTextIfAvailable.call(fakeClipboardPasteWindow)
+    || pastedClipboardText !== 'Clipboard text'
+    || fakeClipboardPasteWindow._clipboardPasteCancellables.size !== 0) {
+    throw new Error('Composer text paste was not routed through the long-text handler');
 }
 
 if (conversationListPageTarget(0, 50) !== 0

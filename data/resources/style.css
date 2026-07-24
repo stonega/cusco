@@ -172,6 +172,14 @@
     padding: 0;
 }
 
+.cusco-chat-statistics-popover {
+    padding: 0;
+}
+
+.cusco-chat-statistics-value {
+    font-feature-settings: "tnum";
+}
+
 .cusco-composer-input textview,
 .cusco-composer-input text {
     background-color: transparent;

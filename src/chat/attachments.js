@@ -16,6 +16,7 @@ const TEXT_APPLICATION_TYPES = new Set([
     'application/yaml',
     'image/svg+xml',
 ]);
+export const PASTED_TEXT_ATTACHMENT_THRESHOLD = 8000;
 
 export function defaultPastedImageDirectory() {
     return GLib.build_filenamev([
@@ -23,6 +24,31 @@ export function defaultPastedImageDirectory() {
         APP_ID,
         'pasted-images',
     ]);
+}
+
+export function defaultPastedTextDirectory() {
+    return GLib.build_filenamev([
+        GLib.get_user_data_dir(),
+        APP_ID,
+        'pasted-text',
+    ]);
+}
+
+export function shouldAttachPastedText(
+    text,
+    threshold = PASTED_TEXT_ATTACHMENT_THRESHOLD,
+) {
+    const minimumCharacters = Math.max(0, Number(threshold) || 0);
+    let characterCount = 0;
+
+    for (const _character of String(text ?? '')) {
+        characterCount += 1;
+
+        if (characterCount > minimumCharacters)
+            return true;
+    }
+
+    return false;
 }
 
 /**
@@ -66,6 +92,57 @@ export function savePastedImageTexture(texture, options = {}) {
 
         if (GLib.chmod(path, 0o600) !== 0)
             throw new Error('Could not secure the pasted image.');
+    } finally {
+        if (GLib.file_test(temporaryPath, GLib.FileTest.EXISTS))
+            GLib.unlink(temporaryPath);
+    }
+
+    return path;
+}
+
+/**
+ * Persist long clipboard text as a private, durable article for conversation history.
+ */
+export function savePastedText(text, options = {}) {
+    const content = String(text ?? '');
+
+    if (!content)
+        throw new Error('The clipboard did not provide usable text.');
+
+    const directory = String(options.directory ?? defaultPastedTextDirectory()).trim();
+
+    if (!directory)
+        throw new Error('The pasted-text directory is not available.');
+
+    if (GLib.mkdir_with_parents(directory, 0o700) !== 0)
+        throw new Error('Could not create the pasted-text directory.');
+    if (GLib.chmod(directory, 0o700) !== 0)
+        throw new Error('Could not secure the pasted-text directory.');
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const uuid = GLib.uuid_string_random();
+    const name = `pasted-article-${timestamp}-${uuid}.txt`;
+    const path = GLib.build_filenamev([directory, name]);
+    const temporaryPath = GLib.build_filenamev([
+        directory,
+        `.${name}.${GLib.uuid_string_random()}.tmp`,
+    ]);
+
+    try {
+        if (GLib.file_set_contents(temporaryPath, content) === false)
+            throw new Error('Could not write the pasted text.');
+        if (GLib.chmod(temporaryPath, 0o600) !== 0)
+            throw new Error('Could not secure the temporary pasted text.');
+
+        Gio.File.new_for_path(temporaryPath).move(
+            Gio.File.new_for_path(path),
+            Gio.FileCopyFlags.NONE,
+            null,
+            null,
+        );
+
+        if (GLib.chmod(path, 0o600) !== 0)
+            throw new Error('Could not secure the pasted text.');
     } finally {
         if (GLib.file_test(temporaryPath, GLib.FileTest.EXISTS))
             GLib.unlink(temporaryPath);
@@ -138,6 +215,14 @@ export function createFileAttachment(path, { maxTextCharacters = 20000 } = {}) {
         content: text.slice(0, maxCharacters),
         truncated: text.length > maxCharacters,
     };
+}
+
+export function createPastedTextAttachment(text, options = {}) {
+    const path = savePastedText(text, options);
+
+    return createFileAttachment(path, {
+        maxTextCharacters: options.maxTextCharacters,
+    });
 }
 
 export function fileAttachmentSummary(attachment) {

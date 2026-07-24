@@ -153,12 +153,11 @@ function loadArtifactPreviewAsync(path, onLoaded) {
     });
 }
 
-function scheduleSyntaxHighlight(buffer, owner, languageId, codeTheme) {
+function scheduleSyntaxHighlight(buffer, owner, languageId) {
     PENDING_SYNTAX_HIGHLIGHTS.push({
         buffer,
         owner,
         languageId,
-        codeTheme,
     });
 
     if (syntaxHighlightSourceId)
@@ -172,13 +171,9 @@ function scheduleSyntaxHighlight(buffer, owner, languageId, codeTheme) {
 
             if (pending?.owner.get_root()) {
                 const language = getLanguage(pending.languageId);
-                const styleScheme = getCodeThemeStyleScheme(pending.codeTheme);
 
                 if (language)
                     pending.buffer.set_language(language);
-
-                if (styleScheme)
-                    pending.buffer.set_style_scheme(styleScheme);
 
                 pending.buffer.set_highlight_syntax(Boolean(language));
             }
@@ -190,6 +185,15 @@ function scheduleSyntaxHighlight(buffer, owner, languageId, codeTheme) {
             return GLib.SOURCE_REMOVE;
         },
     );
+}
+
+export function initializeCodeBufferTheme(buffer, codeTheme) {
+    const styleScheme = getCodeThemeStyleScheme(codeTheme);
+
+    if (styleScheme)
+        buffer.set_style_scheme(styleScheme);
+
+    return styleScheme;
 }
 
 function tableAlignmentXalign(alignment) {
@@ -710,6 +714,7 @@ function createCodeBlock(block, options) {
     const buffer = new GtkSource.Buffer();
 
     buffer.set_highlight_syntax(false);
+    initializeCodeBufferTheme(buffer, options.codeTheme);
     buffer.set_text(block.content, -1);
 
     const view = new GtkSource.View({
@@ -734,7 +739,7 @@ function createCodeBlock(block, options) {
     });
     outer.append(scroller);
 
-    scheduleSyntaxHighlight(buffer, outer, block.language, options.codeTheme);
+    scheduleSyntaxHighlight(buffer, outer, block.language);
 
     return outer;
 }
