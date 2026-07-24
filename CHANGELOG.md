@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- RPM release packages now use Zstandard compression for smaller downloads.
+
 ## [0.5.20] - 2026-07-24
 
 ### Added
