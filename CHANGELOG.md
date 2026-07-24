@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.20] - 2026-07-24
+
 ### Added
 
 - Hovering over the chat header message count now shows message, tool, and token totals.
@@ -103,7 +105,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.19...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.20...HEAD
+[0.5.20]: https://github.com/stonega/cusco/compare/v0.5.19...v0.5.20
 [0.5.19]: https://github.com/stonega/cusco/compare/v0.5.18...v0.5.19
 [0.5.18]: https://github.com/stonega/cusco/compare/v0.5.17...v0.5.18
 [0.5.17]: https://github.com/stonega/cusco/compare/v0.5.16...v0.5.17
