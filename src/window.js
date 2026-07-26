@@ -58,6 +58,7 @@ import {
     isWelcomeMessage,
     welcomeStreamFrame,
     WELCOME_CONVERSATION_TITLE,
+    WELCOME_MESSAGE_CONTENT,
 } from './chat/welcome.js';
 import {
     filterComposerSuggestions,
@@ -680,6 +681,19 @@ export function normalizeConversationMessageStartIndex(
     return startIndex;
 }
 
+export function defaultConversationOptions(enabledSkills = [], overrides = {}) {
+    const skillIds = [...new Set((Array.isArray(enabledSkills) ? enabledSkills : [])
+        .map((skill) => String(skill?.id ?? skill ?? '').trim())
+        .filter(Boolean))];
+
+    return {
+        memoryEnabled: false,
+        agentModeEnabled: true,
+        skillIds,
+        ...overrides,
+    };
+}
+
 export function conversationListPageTarget(
     totalCount,
     requestedCount,
@@ -1070,7 +1084,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._syncComputerUseTools();
 
         if (this._conversations.conversations.length === 0) {
-            this._conversations.createConversation({
+            this._createConversationWithDefaults({
                 title: WELCOME_CONVERSATION_TITLE,
                 thinkingLevel: this._appSettings.thinkingLevel,
                 messages: [createWelcomeMessage()],
@@ -1839,22 +1853,23 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return main;
     }
 
+    _createConversationWithDefaults(options = {}) {
+        return this._conversations.createConversation(defaultConversationOptions(
+            this._workspace.enabledSkills,
+            options,
+        ));
+    }
+
     _createNewConversation() {
         const activeConversation = this._conversations.activeConversation;
         const providerId = activeConversation?.providerId;
         const modelId = activeConversation?.modelId;
-        const memoryEnabled = activeConversation?.memoryEnabled !== false;
-        const agentModeEnabled = Boolean(activeConversation?.agentModeEnabled);
-        const skillIds = activeConversation?.skillIds ?? [];
         const thinkingLevel = activeConversation?.thinkingLevel ?? this._appSettings.thinkingLevel;
 
         this._conversationSelectionSerial += 1;
-        this._conversations.createConversation({
+        this._createConversationWithDefaults({
             providerId,
             modelId,
-            memoryEnabled,
-            agentModeEnabled,
-            skillIds,
             thinkingLevel,
         });
         this._refreshConversationList();
@@ -2721,9 +2736,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
             orientation: Gtk.Orientation.VERTICAL,
         }));
         createSection('Tokens', [
-            ['inputTokens', 'Input'],
-            ['cachedInputTokens', 'Cached', true],
-            ['uncachedInputTokens', 'Uncached', true],
+            ['cachedInputTokens', 'Cached'],
+            ['uncachedInputTokens', 'Uncached'],
             ['outputTokens', 'Output'],
             ['totalTokens', 'Total'],
         ]);
@@ -2750,7 +2764,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
             formatStatisticNoun(statistics.toolCalls, 'call'),
             formatStatisticNoun(statistics.toolResults, 'result'),
         ].join(', '));
-        labels.inputTokens.set_label(formatStatisticCount(statistics.inputTokens));
         labels.cachedInputTokens.set_label(
             `${formatStatisticCount(statistics.cachedInputTokens)} (${
                 cachedPercentage.toFixed(1)
@@ -3069,7 +3082,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
     _showArchivedChatsWindow(parent = this, onCountChanged = () => {}) {
         presentArchivedChatsWindow(parent, this._conversations, () => {
             if (this._conversations.conversations.length === 0)
-                this._conversations.createConversation();
+                this._createConversationWithDefaults();
 
             this._refreshConversationList();
             this._renderActiveConversation();
@@ -3315,7 +3328,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._conversations.deleteConversation(conversation.id);
 
         if (this._conversations.conversations.length === 0)
-            this._conversations.createConversation();
+            this._createConversationWithDefaults();
 
         this._refreshConversationList();
         this._renderActiveConversation();
@@ -3564,7 +3577,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     async _sendMessage(text, references = []) {
-        const conversation = this._conversations.activeConversation ?? this._conversations.createConversation();
+        const conversation = this._conversations.activeConversation
+            ?? this._createConversationWithDefaults();
 
         if (!this._ensureConversationProviderAvailable(conversation))
             return;
@@ -4854,7 +4868,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 throw error;
             }
         } finally {
-            (assistantViewState?.view ?? assistantView)?.finish_working?.();
+            const finalAssistantView = assistantViewState?.view ?? assistantView;
+            finalAssistantView?.finish_stream?.();
+            finalAssistantView?.finish_working?.();
             this._stopLongResponseNotification();
             this._setFollowLatestMessage(false);
 
@@ -5711,14 +5727,24 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._conversations.persist();
     }
 
-    _migrateLegacyWelcomeConversation(conversation = this._conversations.activeConversation) {
+    _migrateWelcomeConversation(conversation = this._conversations.activeConversation) {
         if (!conversation
-            || !isLegacyWelcomeConversation(conversation)
             || !this._conversations.isConversationHydrated(conversation.id)) {
             return;
         }
 
+        const hasOutdatedTaggedWelcome = conversation.messages.length === 1
+            && isWelcomeMessage(conversation.messages[0])
+            && conversation.messages[0].content !== WELCOME_MESSAGE_CONTENT;
+
+        if (!isLegacyWelcomeConversation(conversation) && !hasOutdatedTaggedWelcome)
+            return;
+
+        const defaults = defaultConversationOptions(this._workspace.enabledSkills);
         this._conversations.replaceMessages(conversation.id, [createWelcomeMessage()]);
+        this._conversations.setMemoryEnabled(conversation.id, defaults.memoryEnabled);
+        this._conversations.setAgentModeEnabled(conversation.id, defaults.agentModeEnabled);
+        this._conversations.setSkillIds(conversation.id, defaults.skillIds);
     }
 
     _materializeAssistantArtifacts(text, conversationId = '') {
@@ -5865,6 +5891,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             set_status: (text) => ensureView()?.set_status(text),
             clear_status: () => view?.clear_loading?.(),
             finish_working: () => view?.finish_working?.(),
+            finish_stream: () => view?.finish_stream?.(),
             persist: () => this._conversations.persist(),
             remove: () => view?.remove?.(),
             hasContent: () => currentText.length > 0 || currentReasoning.length > 0 || Boolean(currentUsage),
@@ -7078,7 +7105,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._conversations.archiveConversation(conversationId);
 
         if (this._conversations.conversations.length === 0)
-            this._conversations.createConversation();
+            this._createConversationWithDefaults();
 
         this._refreshConversationList();
         this._renderActiveConversation();
@@ -7191,7 +7218,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._conversations.deleteConversation(conversationId);
 
             if (this._conversations.conversations.length === 0)
-                this._conversations.createConversation();
+                this._createConversationWithDefaults();
 
             this._refreshConversationList();
             this._renderActiveConversation();
@@ -7472,7 +7499,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _renderActiveConversation(options = {}) {
         const conversation = this._conversations.activeConversation;
-        this._migrateLegacyWelcomeConversation(conversation);
+        this._migrateWelcomeConversation(conversation);
         this._migrateLegacyArtifacts(conversation);
         this._artifactWorkspace?.setConversation(conversation?.id ?? '');
         this._syncArtifactWorkspaceButton();
@@ -8478,6 +8505,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (visibleCharacters < characterCount)
                 return GLib.SOURCE_CONTINUE;
 
+            messageView.finish_stream?.();
             this._welcomeStreamSourceIds.delete(sourceId);
             return GLib.SOURCE_REMOVE;
         };
@@ -8532,6 +8560,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     role: 'assistant',
                     hexpand: true,
                     codeMinWidth: 380,
+                    selectable: !isStreamingAssistant,
                 }));
                 reasoningContent.add_css_class('cusco-message-bubble');
                 reasoningContent.add_css_class('cusco-message-assistant');
@@ -8573,6 +8602,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             parentWindow: this,
             references: messageReferences,
             referenceStyles: this._composerReferenceStyles(),
+            selectable: !isStreamingAssistant && !animateWelcomeMessage,
         }));
 
         if (messageReferences.length > 0)
@@ -8694,6 +8724,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
             clear_loading: clearLoading,
             start_working: startWorking,
             finish_working: finishWorking,
+            finish_stream: () => {
+                bodyContent.setSelectable(true);
+                reasoningContent?.setSelectable(true);
+            },
             set_reasoning: (text) => {
                 if (!reasoningExpander)
                     return;

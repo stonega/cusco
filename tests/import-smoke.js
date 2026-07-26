@@ -92,6 +92,7 @@ import {
     composerHintPresentation,
     conversationListPageTarget,
     CuscoWindow,
+    defaultConversationOptions,
     formatConversationUpdatedAt,
     formatRunningTime,
     messageRunDurationLabel,
@@ -116,8 +117,12 @@ const welcomeMessage = createWelcomeMessage();
 if (welcomeMessage.role !== 'assistant'
     || welcomeMessage.content !== WELCOME_MESSAGE_CONTENT
     || !isWelcomeMessage(welcomeMessage)
-    || !welcomeMessage.content.includes('Quick start:')) {
-    throw new Error('Welcome chat did not create one tagged quick-start message');
+    || !welcomeMessage.content.includes('# Welcome to Cusco')
+    || !welcomeMessage.content.includes('## What you can do')
+    || !welcomeMessage.content.includes('## Quick start')
+    || !welcomeMessage.content.includes('- **Ask and explore.**')
+    || !markdownToPangoMarkup(welcomeMessage.content).includes('size="xx-large"')) {
+    throw new Error('Welcome chat did not create one tagged, formatted quick-start message');
 }
 
 if (welcomeStreamFrame('Cusco 🦙', 7) !== 'Cusco 🦙'
@@ -139,6 +144,17 @@ if (!isLegacyWelcomeConversation({
     ],
 })) {
     throw new Error('Legacy two-message welcome chats were not recognized for migration');
+}
+
+const conversationDefaults = defaultConversationOptions([
+    { id: 'review' },
+    { id: 'writing' },
+]);
+
+if (conversationDefaults.memoryEnabled !== false
+    || conversationDefaults.agentModeEnabled !== true
+    || conversationDefaults.skillIds.join(',') !== 'review,writing') {
+    throw new Error('New chats did not default to Memory off with Agent and enabled Skills on');
 }
 
 const pngClipboardFormats = {
@@ -310,8 +326,8 @@ if (!didReplaceComposerAttachment
 
 const [, queuedIconBytes] = GLib.file_get_contents('data/resources/queued-symbolic.svg');
 const queuedIcon = new TextDecoder().decode(queuedIconBytes);
-if (!queuedIcon.includes('fill="currentColor"') || queuedIcon.includes('fill="#000000"'))
-    throw new Error('Queued-message icon is not theme-aware');
+if (!queuedIcon.includes('fill="#2e3436"') || queuedIcon.includes('currentColor'))
+    throw new Error('Queued-message icon does not use GTK-compatible symbolic coloring');
 
 if (formatRunningTime(0) !== '0s'
     || formatRunningTime(65) !== '1m 05s'

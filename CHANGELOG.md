@@ -7,6 +7,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- Release tarballs and Debian packages now use Zstandard level 19 compression, matching RPM packages.
+- The welcome chat now provides a richer formatted guide, and new chats start with Memory off and Agent plus enabled Skills on.
+- Token usage details now show Cached and Uncached directly without a redundant Input row.
+
+### Fixed
+
+- Providers can now be enabled immediately after saving an API key through Secret Service.
+- Bundled symbolic SVG icons now render with the correct theme color on Ubuntu.
+- Assistant and welcome text no longer appears selected while it is streaming.
+
 ## [0.5.22] - 2026-07-26
 
 ### Added

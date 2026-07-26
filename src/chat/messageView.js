@@ -302,7 +302,7 @@ function getLanguage(languageId) {
 function createMarkdownLabel(content, options = {}) {
     const label = new Gtk.Label({
         wrap: true,
-        selectable: true,
+        selectable: options.selectable !== false,
         xalign: 0,
         max_width_chars: options.role === 'user' ? 36 : 82,
     });
@@ -322,7 +322,7 @@ function createTableCell(content, options = {}) {
         : Math.max(16, Math.min(36, Math.floor(82 / columnCount) + 8));
     const label = new Gtk.Label({
         wrap: true,
-        selectable: true,
+        selectable: options.selectable !== false,
         xalign: tableAlignmentXalign(options.alignment),
         max_width_chars: maxWidthChars,
         hexpand: true,
@@ -837,6 +837,16 @@ export function createMessageContent(body, options = {}) {
     };
     container.updateReferenceStyles = (referenceStyles) => {
         renderingOptions.referenceStyles = referenceStyles;
+        cancelQueuedRender();
+        render(true);
+    };
+    container.setSelectable = (selectable) => {
+        const normalizedSelectable = Boolean(selectable);
+
+        if (renderingOptions.selectable === normalizedSelectable)
+            return;
+
+        renderingOptions.selectable = normalizedSelectable;
         cancelQueuedRender();
         render(true);
     };

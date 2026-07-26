@@ -49,7 +49,7 @@ jobs:
 
       - name: Install package build dependencies
         if: startsWith(github.ref, 'refs/tags/')
-        run: sudo apt-get install -y rpm
+        run: sudo apt-get install -y rpm zstd
 
       - name: Package release assets
         if: startsWith(github.ref, 'refs/tags/')
@@ -58,6 +58,7 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           version="${tag#v}"
           rpm_version="${version//-/_}"
+          compression_level=19
 
           dist_dir="$PWD/dist"
           install_root="$dist_dir/install-root"
@@ -74,7 +75,11 @@ jobs:
 
           mkdir -p "$tar_root"
           cp -a "$install_root/." "$tar_root/"
-          tar -C "$dist_dir" -czf "$dist_dir/cusco-${tag}.tar.gz" "cusco-${tag}"
+          tar \
+            -C "$dist_dir" \
+            --use-compress-program="zstd -${compression_level} -T0" \
+            -cf "$dist_dir/cusco-${tag}.tar.zst" \
+            "cusco-${tag}"
 
           mkdir -p "$package_root"
           cp -a "$install_root/." "$package_root/"
@@ -121,10 +126,18 @@ jobs:
           POSTRM
           sed -i 's/^          //' "$package_root/DEBIAN/postrm"
           chmod 755 "$package_root/DEBIAN/postinst" "$package_root/DEBIAN/postrm"
-          dpkg-deb --root-owner-group --build "$package_root" "$dist_dir/cusco_${version}_all.deb"
+          dpkg-deb \
+            -Zzstd \
+            -z"$compression_level" \
+            --root-owner-group \
+            --build "$package_root" "$dist_dir/cusco_${version}_all.deb"
 
           mkdir -p "$rpm_topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS,TMP}
-          tar -C "$install_root" -czf "$rpm_topdir/SOURCES/cusco-${rpm_version}.tar.gz" .
+          tar \
+            -C "$install_root" \
+            --use-compress-program="zstd -${compression_level} -T0" \
+            -cf "$rpm_topdir/SOURCES/cusco-${rpm_version}.tar.zst" \
+            .
           cat > "$rpm_topdir/SPECS/cusco.spec" <<SPEC
           Name: cusco
           Version: ${rpm_version}
@@ -132,7 +145,7 @@ jobs:
           Summary: Native GNOME AI chat application
           License: GPL-3.0-or-later
           URL: https://github.com/stonega/cusco
-          Source0: cusco-${rpm_version}.tar.gz
+          Source0: cusco-${rpm_version}.tar.zst
           BuildArch: noarch
 
           Requires: gjs
@@ -149,7 +162,7 @@ jobs:
 
           %prep
           %setup -q -c -T
-          tar -xzf %{SOURCE0}
+          tar --zstd -xf %{SOURCE0}
 
           %build
 
@@ -174,11 +187,11 @@ jobs:
           rpmbuild -bb \
             --define "_topdir $rpm_topdir" \
             --define "_tmppath $rpm_topdir/TMP" \
-            --define "_binary_payload w19.zstdio" \
+            --define "_binary_payload w${compression_level}.zstdio" \
             "$rpm_topdir/SPECS/cusco.spec"
           find "$rpm_topdir/RPMS" -name '*.rpm' -exec cp {} "$dist_dir/" \;
 
-          ls -lh "$dist_dir"/cusco-"$tag".tar.gz "$dist_dir"/*.deb "$dist_dir"/*.rpm
+          ls -lh "$dist_dir"/cusco-"$tag".tar.zst "$dist_dir"/*.deb "$dist_dir"/*.rpm
 
       - name: Upload release assets
         if: startsWith(github.ref, 'refs/tags/')
@@ -186,7 +199,7 @@ jobs:
         with:
           name: release-assets
           path: |
-            dist/cusco-${{ github.ref_name }}.tar.gz
+            dist/cusco-${{ github.ref_name }}.tar.zst
             dist/*.deb
             dist/*.rpm
           if-no-files-found: error

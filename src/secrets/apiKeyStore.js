@@ -9,22 +9,47 @@ const API_KEY_SCHEMA = new Secret.Schema(
 );
 
 export class SecretServiceApiKeyStore {
+    constructor() {
+        this._cache = new Map();
+    }
+
     lookup(providerId) {
-        return Secret.password_lookup_sync(API_KEY_SCHEMA, { provider: providerId }, null) ?? '';
+        const normalizedProviderId = String(providerId);
+
+        if (this._cache.has(normalizedProviderId))
+            return this._cache.get(normalizedProviderId);
+
+        const apiKey = Secret.password_lookup_sync(
+            API_KEY_SCHEMA,
+            { provider: normalizedProviderId },
+            null,
+        ) ?? '';
+
+        if (apiKey)
+            this._cache.set(normalizedProviderId, apiKey);
+
+        return apiKey;
     }
 
     store(providerId, providerName, apiKey) {
+        const normalizedProviderId = String(providerId);
+
         return new Promise((resolve, reject) => {
             Secret.password_store(
                 API_KEY_SCHEMA,
-                { provider: providerId },
+                { provider: normalizedProviderId },
                 Secret.COLLECTION_DEFAULT,
                 `Cusco ${providerName} API key`,
                 apiKey,
                 null,
                 (_source, result) => {
                     try {
-                        resolve(Secret.password_store_finish(result));
+                        const stored = Secret.password_store_finish(result);
+
+                        if (stored)
+                            this._cache.set(normalizedProviderId, apiKey);
+
+                        resolve(stored);
                     } catch (error) {
                         reject(error);
                     }
@@ -34,14 +59,18 @@ export class SecretServiceApiKeyStore {
     }
 
     clear(providerId) {
+        const normalizedProviderId = String(providerId);
+
         return new Promise((resolve, reject) => {
             Secret.password_clear(
                 API_KEY_SCHEMA,
-                { provider: providerId },
+                { provider: normalizedProviderId },
                 null,
                 (_source, result) => {
                     try {
-                        resolve(Secret.password_clear_finish(result));
+                        const cleared = Secret.password_clear_finish(result);
+                        this._cache.delete(normalizedProviderId);
+                        resolve(cleared);
                     } catch (error) {
                         reject(error);
                     }

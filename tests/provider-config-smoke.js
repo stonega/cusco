@@ -31,6 +31,20 @@ class MemorySettings {
     }
 }
 
+class DelayedLookupApiKeyStore {
+    lookup() {
+        return '';
+    }
+
+    store() {
+        return true;
+    }
+
+    clear() {
+        return false;
+    }
+}
+
 const configs = [
     {
         id: 'test-remote',
@@ -714,6 +728,18 @@ await credentialStore.setApiKey('secure-remote', 'sk-secret');
 
 if (credentialStore.getApiKeyStatus('secure-remote').source !== 'secret')
     throw new Error('Stored API key status did not come from Secret Service store');
+
+const delayedLookupCredentialStore = new ProviderConfigStore(credentialConfigs, {
+    settings: null,
+    apiKeyStore: new DelayedLookupApiKeyStore(),
+    envLookup: () => '',
+});
+await delayedLookupCredentialStore.setApiKey('secure-remote', 'sk-secret');
+
+if (delayedLookupCredentialStore.getApiKeyStatus('secure-remote').source !== 'secret'
+    || !delayedLookupCredentialStore.canEnableProvider('secure-remote')) {
+    throw new Error('A successful API key save remained disabled while Secret Service lookup lagged');
+}
 
 credentialStore.setProviderEnabled('secure-remote', true);
 

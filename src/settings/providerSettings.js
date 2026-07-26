@@ -402,6 +402,11 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows, 
                 apiKeyRow.set_text('');
                 onChanged();
             } catch (error) {
+                showProviderMessage(
+                    row.get_root() ?? row,
+                    'Could Not Save API Key',
+                    error.userMessage ?? error.message,
+                );
                 logError(error, 'Failed to store provider API key');
             } finally {
                 apiKeyRow.set_sensitive(true);
@@ -722,6 +727,11 @@ function createWebSearchSettingsGroup(providerConfigs, onChanged, syncAllRows) {
             apiKeyRow.set_text('');
             onChanged();
         } catch (error) {
+            showProviderMessage(
+                apiKeyRow.get_root() ?? apiKeyRow,
+                'Could Not Save API Key',
+                error.userMessage ?? error.message,
+            );
             logError(error, 'Failed to store Brave Search API key');
         } finally {
             apiKeyRow.set_sensitive(true);
@@ -994,7 +1004,6 @@ export function createProviderSettingsPage(providerConfigs, onChanged) {
     let webSearchSettings = null;
     let syncCustomProviderRows = () => {};
     const syncAllRows = () => {
-        providerConfigs.refreshApiKeyStatus();
         syncCustomProviderRows();
         imageGenerationSettings?.sync();
         webSearchSettings?.sync();

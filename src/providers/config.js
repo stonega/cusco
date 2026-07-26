@@ -1179,8 +1179,7 @@ export class ProviderConfigStore {
         for (const config of this._configs) {
             const environmentApiKey = this._getEnvironmentApiKey(config);
             const status = this._resolveApiKeyStatus(config, environmentApiKey);
-            this._apiKeyStatuses.set(config.id, status);
-            config.apiKeyConfigured = status.configured;
+            this._setApiKeyStatus(config, status);
 
             if (autoEnableEnvironmentProviders
                 && environmentApiKey
@@ -1191,8 +1190,10 @@ export class ProviderConfigStore {
             }
         }
 
-        this._webSearchApiKeyStatus = this._resolveApiKeyStatus(this._webSearchConfig);
-        this._webSearchConfig.apiKeyConfigured = this._webSearchApiKeyStatus.configured;
+        this._setApiKeyStatus(
+            this._webSearchConfig,
+            this._resolveApiKeyStatus(this._webSearchConfig),
+        );
 
         if (enabledProvidersChanged)
             this._persistEnabledProviders();
@@ -1253,19 +1254,28 @@ export class ProviderConfigStore {
         if (!normalizedApiKey)
             return this.clearWebSearchApiKey();
 
-        await this._apiKeyStore.store(
+        const stored = await this._apiKeyStore.store(
             this._webSearchConfig.id,
             this._webSearchConfig.name,
             normalizedApiKey,
         );
-        this.refreshApiKeyStatus();
-        return this.getWebSearchApiKeyStatus();
+
+        if (stored === false)
+            throw new Error('Secret Service did not store the Brave Search API key');
+
+        return this._setApiKeyStatus(this._webSearchConfig, {
+            configured: true,
+            source: 'secret',
+            error: null,
+        });
     }
 
     async clearWebSearchApiKey() {
         await this._apiKeyStore.clear(this._webSearchConfig.id);
-        this.refreshApiKeyStatus();
-        return this.getWebSearchApiKeyStatus();
+        return this._setApiKeyStatus(
+            this._webSearchConfig,
+            this._environmentApiKeyStatus(this._webSearchConfig),
+        );
     }
 
     createWebSearchFallbackConfig() {
@@ -1379,9 +1389,16 @@ export class ProviderConfigStore {
         if (!normalizedApiKey)
             return this.clearApiKey(providerId);
 
-        await this._apiKeyStore.store(provider.id, provider.name, normalizedApiKey);
-        this.refreshApiKeyStatus();
-        return this.getApiKeyStatus(provider.id);
+        const stored = await this._apiKeyStore.store(provider.id, provider.name, normalizedApiKey);
+
+        if (stored === false)
+            throw new Error(`Secret Service did not store the ${provider.name} API key`);
+
+        return this._setApiKeyStatus(provider, {
+            configured: true,
+            source: 'secret',
+            error: null,
+        });
     }
 
     async clearApiKey(providerId) {
@@ -1391,8 +1408,7 @@ export class ProviderConfigStore {
             throw new Error(`Provider does not exist: ${providerId}`);
 
         await this._apiKeyStore.clear(provider.id);
-        this.refreshApiKeyStatus();
-        return this.getApiKeyStatus(provider.id);
+        return this._setApiKeyStatus(provider, this._environmentApiKeyStatus(provider));
     }
 
     async addCustomProvider({ name, baseUrl, models = [], apiKey = '' } = {}) {
@@ -1410,11 +1426,24 @@ export class ProviderConfigStore {
         });
         const normalizedApiKey = String(apiKey ?? '').trim();
 
-        if (normalizedApiKey)
-            await this._apiKeyStore.store(provider.id, provider.name, normalizedApiKey);
+        if (normalizedApiKey) {
+            const stored = await this._apiKeyStore.store(provider.id, provider.name, normalizedApiKey);
+
+            if (stored === false)
+                throw new Error(`Secret Service did not store the ${provider.name} API key`);
+        }
 
         this._configs.push(provider);
-        this.refreshApiKeyStatus();
+        this._setApiKeyStatus(
+            provider,
+            normalizedApiKey
+                ? {
+                    configured: true,
+                    source: 'secret',
+                    error: null,
+                }
+                : this._resolveApiKeyStatus(provider),
+        );
         this._persistCustomProviders();
         this._persistDefaultModels();
         return this.listProviders().find((item) => item.id === provider.id);
@@ -1938,6 +1967,32 @@ export class ProviderConfigStore {
             return '';
 
         return this._envLookup(provider.apiKeyEnvVar) ?? '';
+    }
+
+    _setApiKeyStatus(provider, status) {
+        const normalizedStatus = {
+            configured: Boolean(status?.configured),
+            source: status?.source ?? null,
+            error: status?.error ?? null,
+        };
+
+        this._apiKeyStatuses.set(provider.id, normalizedStatus);
+        provider.apiKeyConfigured = normalizedStatus.configured;
+
+        if (provider.id === this._webSearchConfig.id)
+            this._webSearchApiKeyStatus = normalizedStatus;
+
+        return { ...normalizedStatus };
+    }
+
+    _environmentApiKeyStatus(provider) {
+        const environmentApiKey = this._getEnvironmentApiKey(provider);
+
+        return {
+            configured: Boolean(environmentApiKey),
+            source: environmentApiKey ? 'environment' : null,
+            error: null,
+        };
     }
 
     _resolveApiKeyStatus(provider, environmentApiKey = this._getEnvironmentApiKey(provider)) {
