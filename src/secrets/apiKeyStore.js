@@ -9,7 +9,8 @@ const API_KEY_SCHEMA = new Secret.Schema(
 );
 
 export class SecretServiceApiKeyStore {
-    constructor() {
+    constructor(secretService = Secret) {
+        this._secretService = secretService;
         this._cache = new Map();
     }
 
@@ -19,7 +20,7 @@ export class SecretServiceApiKeyStore {
         if (this._cache.has(normalizedProviderId))
             return this._cache.get(normalizedProviderId);
 
-        const apiKey = Secret.password_lookup_sync(
+        const apiKey = this._secretService.password_lookup_sync(
             API_KEY_SCHEMA,
             { provider: normalizedProviderId },
             null,
@@ -35,21 +36,24 @@ export class SecretServiceApiKeyStore {
         const normalizedProviderId = String(providerId);
 
         return new Promise((resolve, reject) => {
-            Secret.password_store(
+            this._secretService.password_store(
                 API_KEY_SCHEMA,
                 { provider: normalizedProviderId },
-                Secret.COLLECTION_DEFAULT,
+                this._secretService.COLLECTION_DEFAULT,
                 `Cusco ${providerName} API key`,
                 apiKey,
                 null,
                 (_source, result) => {
                     try {
-                        const stored = Secret.password_store_finish(result);
+                        const stored = this._secretService.password_store_finish(result);
 
-                        if (stored)
-                            this._cache.set(normalizedProviderId, apiKey);
+                        if (stored === false) {
+                            resolve(false);
+                            return;
+                        }
 
-                        resolve(stored);
+                        this._cache.set(normalizedProviderId, apiKey);
+                        resolve(true);
                     } catch (error) {
                         reject(error);
                     }
@@ -62,13 +66,13 @@ export class SecretServiceApiKeyStore {
         const normalizedProviderId = String(providerId);
 
         return new Promise((resolve, reject) => {
-            Secret.password_clear(
+            this._secretService.password_clear(
                 API_KEY_SCHEMA,
                 { provider: normalizedProviderId },
                 null,
                 (_source, result) => {
                     try {
-                        const cleared = Secret.password_clear_finish(result);
+                        const cleared = this._secretService.password_clear_finish(result);
                         this._cache.delete(normalizedProviderId);
                         resolve(cleared);
                     } catch (error) {

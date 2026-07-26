@@ -22,6 +22,7 @@ if [ -n "$missing_sources" ]; then
 fi
 
 gjs -m tests/import-smoke.js
+gjs -m tests/application-icon-smoke.js
 gjs -m tests/bundled-icons-smoke.js
 gjs -m tests/artifacts-smoke.js
 gjs -m tests/artifact-manager-smoke.js

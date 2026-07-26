@@ -37,11 +37,6 @@ foreach icon_size : ['64x64', '128x128', '256x256', '512x512']
   )
 endforeach
 
-install_data(
-  'icons' / 'hicolor' / 'scalable' / 'apps' / (application_id + '.svg'),
-  install_dir: datadir / 'icons' / 'hicolor' / 'scalable' / 'apps',
-)
-
 install_subdir(
   'resources',
   install_dir: pkgdatadir,

@@ -7,6 +7,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Ubuntu now uses Cusco's stone-texture application icon instead of the obsolete chat-bubble artwork.
+- Saving an API key now immediately enables its provider on Ubuntu and keeps the key available after Secret Service completes.
+
 ## [0.5.23] - 2026-07-26
 
 ### Changed

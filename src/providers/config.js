@@ -1394,11 +1394,16 @@ export class ProviderConfigStore {
         if (stored === false)
             throw new Error(`Secret Service did not store the ${provider.name} API key`);
 
-        return this._setApiKeyStatus(provider, {
+        const status = this._setApiKeyStatus(provider, {
             configured: true,
             source: 'secret',
             error: null,
         });
+
+        if (!provider.enabled && this.canEnableProvider(provider.id))
+            this.setProviderEnabled(provider.id, true);
+
+        return status;
     }
 
     async clearApiKey(providerId) {
@@ -1408,7 +1413,12 @@ export class ProviderConfigStore {
             throw new Error(`Provider does not exist: ${providerId}`);
 
         await this._apiKeyStore.clear(provider.id);
-        return this._setApiKeyStatus(provider, this._environmentApiKeyStatus(provider));
+        const status = this._setApiKeyStatus(provider, this._environmentApiKeyStatus(provider));
+
+        if (provider.enabled && !status.configured)
+            this.setProviderEnabled(provider.id, false);
+
+        return status;
     }
 
     async addCustomProvider({ name, baseUrl, models = [], apiKey = '' } = {}) {

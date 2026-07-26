@@ -1,7 +1,7 @@
 import GLib from 'gi://GLib?version=2.0';
 
 import { ProviderConfigStore } from '../src/providers/config.js';
-import { MemoryApiKeyStore } from '../src/secrets/apiKeyStore.js';
+import { MemoryApiKeyStore, SecretServiceApiKeyStore } from '../src/secrets/apiKeyStore.js';
 
 class MemorySettings {
     constructor({ strings = {}, strv = {} } = {}) {
@@ -43,6 +43,36 @@ class DelayedLookupApiKeyStore {
     clear() {
         return false;
     }
+}
+
+const voidFinishSecretService = {
+    COLLECTION_DEFAULT: 'default',
+    lookupCalls: 0,
+    password_lookup_sync() {
+        this.lookupCalls++;
+        return '';
+    },
+    password_store(_schema, _attributes, _collection, _label, _password, _cancellable, callback) {
+        callback(this, {});
+    },
+    password_store_finish() {
+        return undefined;
+    },
+    password_clear(_schema, _attributes, _cancellable, callback) {
+        callback(this, {});
+    },
+    password_clear_finish() {
+        return undefined;
+    },
+};
+const voidFinishApiKeyStore = new SecretServiceApiKeyStore(voidFinishSecretService);
+
+if (await voidFinishApiKeyStore.store('ubuntu-provider', 'Ubuntu Provider', 'sk-ubuntu') !== true)
+    throw new Error('A void Secret Service finish result was not treated as a successful save');
+
+if (voidFinishApiKeyStore.lookup('ubuntu-provider') !== 'sk-ubuntu'
+    || voidFinishSecretService.lookupCalls !== 0) {
+    throw new Error('A successful Secret Service save did not populate the session key cache');
 }
 
 const configs = [
@@ -729,6 +759,9 @@ await credentialStore.setApiKey('secure-remote', 'sk-secret');
 if (credentialStore.getApiKeyStatus('secure-remote').source !== 'secret')
     throw new Error('Stored API key status did not come from Secret Service store');
 
+if (!credentialStore.isProviderAvailable('secure-remote'))
+    throw new Error('Saving an API key did not enable its provider');
+
 const delayedLookupCredentialStore = new ProviderConfigStore(credentialConfigs, {
     settings: null,
     apiKeyStore: new DelayedLookupApiKeyStore(),
@@ -737,11 +770,10 @@ const delayedLookupCredentialStore = new ProviderConfigStore(credentialConfigs, 
 await delayedLookupCredentialStore.setApiKey('secure-remote', 'sk-secret');
 
 if (delayedLookupCredentialStore.getApiKeyStatus('secure-remote').source !== 'secret'
-    || !delayedLookupCredentialStore.canEnableProvider('secure-remote')) {
+    || !delayedLookupCredentialStore.canEnableProvider('secure-remote')
+    || !delayedLookupCredentialStore.isProviderAvailable('secure-remote')) {
     throw new Error('A successful API key save remained disabled while Secret Service lookup lagged');
 }
-
-credentialStore.setProviderEnabled('secure-remote', true);
 
 if (!credentialStore.isProviderAvailable('secure-remote'))
     throw new Error('Provider with stored credentials was not available');
@@ -754,8 +786,10 @@ if (credentialStore.createProvider('secure-remote').name !== 'Secure Remote')
 
 await credentialStore.clearApiKey('secure-remote');
 
-if (credentialStore.isProviderAvailable('secure-remote'))
-    throw new Error('Provider stayed available after clearing credentials');
+if (credentialStore.isProviderAvailable('secure-remote')
+    || credentialStore.isProviderEnabled('secure-remote')) {
+    throw new Error('Provider stayed enabled after clearing its only credentials');
+}
 
 try {
     credentialStore.createProvider('secure-remote');
