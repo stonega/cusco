@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.23] - 2026-07-26
+
 ### Changed
 
 - Release tarballs and Debian packages now use Zstandard level 19 compression, matching RPM packages.
@@ -146,7 +148,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.22...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.23...HEAD
+[0.5.23]: https://github.com/stonega/cusco/compare/v0.5.22...v0.5.23
 [0.5.22]: https://github.com/stonega/cusco/compare/v0.5.21...v0.5.22
 [0.5.21]: https://github.com/stonega/cusco/compare/v0.5.20...v0.5.21
 [0.5.20]: https://github.com/stonega/cusco/compare/v0.5.19...v0.5.20
