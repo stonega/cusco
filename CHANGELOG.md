@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.24] - 2026-07-27
+
 ### Fixed
 
 - Ubuntu now uses Cusco's stone-texture application icon instead of the obsolete chat-bubble artwork.
@@ -153,7 +155,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.23...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.24...HEAD
+[0.5.24]: https://github.com/stonega/cusco/compare/v0.5.23...v0.5.24
 [0.5.23]: https://github.com/stonega/cusco/compare/v0.5.22...v0.5.23
 [0.5.22]: https://github.com/stonega/cusco/compare/v0.5.21...v0.5.22
 [0.5.21]: https://github.com/stonega/cusco/compare/v0.5.20...v0.5.21
