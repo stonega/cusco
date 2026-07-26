@@ -138,13 +138,13 @@ if (Gtk.init_check()) {
         apiKeyStore: new MemoryApiKeyStore(),
         envLookup: () => '',
     });
-    const firstCustomProvider = providerConfigs.addCustomProvider({
+    const firstCustomProvider = await providerConfigs.addCustomProvider({
         name: 'Local Models',
         baseUrl: 'http://127.0.0.1:1234/v1',
         models: ['local-small'],
         apiKey: 'local-key',
     });
-    providerConfigs.addCustomProvider({
+    await providerConfigs.addCustomProvider({
         name: 'Hosted Models',
         baseUrl: 'https://models.example/v1',
         models: ['hosted-large'],

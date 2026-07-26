@@ -5,6 +5,7 @@ import GLib from 'gi://GLib?version=2.0';
 import { EmergencyStopController } from '../data/gnome-shell/extensions/cusco-computer-use@stonega/emergencyStop.js';
 import { clutterKeySuffix } from '../data/gnome-shell/extensions/cusco-computer-use@stonega/keyNames.js';
 import {
+    buildIndicatorShimmerMarkup,
     describeComputerUseOperation,
     ellipsizeIndicatorStatus,
     MAX_INDICATOR_STATUS_CHARACTERS,
@@ -38,6 +39,18 @@ if (!extensionSource.includes("addToStatusArea(this.uuid, this._indicator, 0, 'c
     || !extensionSource.includes('new EmergencyStopController')
     || !extensionSource.includes('CaptureWindowPassive')) {
     throw new Error('Computer-use emergency stop was not installed in the panel center');
+}
+if (!extensionSource.includes('new TextShimmerController(this._statusLabel)')
+    || !extensionSource.includes("'changed::enable-animations'")
+    || !extensionSource.includes('lookup_app(CUSCO_DESKTOP_ID)?.activate()')
+    || !extensionSource.includes("this._indicator.connect('button-press-event'")) {
+    throw new Error('Computer-use indicator shimmer or click-to-return behavior was not installed');
+}
+if (!extensionSource.includes('async _focusForCapture(window, generation)')
+    || !extensionSource.includes('Main.overview.hide()')
+    || !extensionSource.includes('global.display.focus_window === window')
+    || !extensionSource.includes("case 'move_to_new_workspace'")) {
+    throw new Error('Computer-use focus-safe capture or atomic workspace movement was not installed');
 }
 
 const extensionProtocolVersion = Number(
@@ -207,8 +220,18 @@ if (longWindowStatus.length > MAX_INDICATOR_STATUS_CHARACTERS
     || describeComputerUseOperation('type', { windowTitle: 'Terminal' }) !== 'Typing in Terminal'
     || describeComputerUseOperation('paste_text', { windowTitle: 'Browser' }) !== 'Pasting in Browser'
     || describeComputerUseOperation('switch_workspace', { workspaceIndex: 1 }) !== 'Switching to workspace 2'
+    || describeComputerUseOperation('move_to_new_workspace', {
+        windowTitle: 'Browser',
+    }) !== 'Moving Browser to a new workspace'
     || ellipsizeIndicatorStatus('  Checking   desktop  ') !== 'Checking desktop') {
     throw new Error('Computer-use indicator descriptions were not normalized or ellipsized');
+}
+
+const indicatorShimmerMarkup = buildIndicatorShimmerMarkup('Using <Terminal>', 3);
+if (!indicatorShimmerMarkup.includes('alpha="100%"')
+    || !indicatorShimmerMarkup.includes('&lt;')
+    || indicatorShimmerMarkup.includes('<Terminal>')) {
+    throw new Error('Computer-use indicator shimmer markup was unsafe or lacked a highlight');
 }
 
 const calls = [];
@@ -246,6 +269,10 @@ const service = {
         calls.push(['act', action, options]);
         return { performed: action.action };
     },
+    async exitTurn(cancellable) {
+        calls.push(['exit', cancellable]);
+        return true;
+    },
     async step(actions, options) {
         calls.push(['step', actions, options]);
         return {
@@ -277,22 +304,26 @@ const service = {
 const tools = createComputerUseTools(service);
 const byName = new Map(tools.map(tool => [tool.name, tool]));
 
-if (tools.length !== 5
+if (tools.length !== 6
     || !byName.has('computer_list')
     || !byName.has('computer_observe')
     || !byName.has('computer_observe_region')
     || !byName.has('computer_step')
-    || !byName.has('computer_act'))
+    || !byName.has('computer_act')
+    || !byName.has('computer_exit'))
     throw new Error('Computer-use tools were not created');
+
+if (byName.get('computer_exit').permissionPolicy !== 'allow')
+    throw new Error('Exiting computer use unexpectedly requires approval');
 
 const desktopActionNames = byName.get('computer_act').inputSchema.properties.action.enum;
 const stepActionNames = byName.get('computer_step')
     .inputSchema.properties.actions.items.properties.action.enum;
 const stepActionProperties = byName.get('computer_step')
     .inputSchema.properties.actions.items.properties;
-if (!['create_workspace', 'move_to_workspace', 'maximize'].every(actionName => (
+if (!['create_workspace', 'move_to_workspace', 'move_to_new_workspace', 'maximize'].every(actionName => (
     desktopActionNames.includes(actionName)
-)) || !['move_to_workspace', 'maximize', 'paste_text'].every(actionName => stepActionNames.includes(actionName))
+)) || !['move_to_workspace', 'move_to_new_workspace', 'maximize', 'paste_text'].every(actionName => stepActionNames.includes(actionName))
     || !desktopActionNames.includes('paste_text')
     || stepActionNames.includes('create_workspace')
     || stepActionProperties.replace.type !== 'boolean') {
@@ -338,9 +369,18 @@ const action = await byName.get('computer_act').run(
 if (!action.output.includes('switch_workspace'))
     throw new Error('Computer action was not formatted');
 
+const exit = await byName.get('computer_exit').run('{}', { cancellable: 'turn' });
+if (!exit.exited
+    || !exit.output.includes('top-bar indicator')
+    || calls.at(-1)?.[0] !== 'exit'
+    || calls.at(-1)?.[1] !== 'turn') {
+    throw new Error('Computer exit did not release the active turn');
+}
+
 for (const input of [
     { action: 'create_workspace' },
     { action: 'move_to_workspace', windowId: '42', workspaceIndex: 1 },
+    { action: 'move_to_new_workspace', windowId: '42' },
     { action: 'maximize', windowId: '42' },
 ]) {
     const result = await byName.get('computer_act').run(
@@ -547,7 +587,7 @@ try {
 if (!rejectedInvalidInput)
     throw new Error('Invalid computer-use input was not rejected');
 
-if (calls.length !== 14)
+if (calls.length !== 16)
     throw new Error(`Unexpected computer-use call count: ${calls.length}`);
 
 function solidPng(red, green, blue) {
@@ -799,7 +839,8 @@ if (regionView.width !== 1200
     || regionView.height !== 720
     || regionView.view?.type !== 'region'
     || regionView.parentObservationId !== captured.observationId
-    || !regionView.grid?.enabled) {
+    || !regionView.grid?.enabled
+    || regionView.grid?.minorStep !== 100) {
     throw new Error(`Computer-use region view was incorrect: ${JSON.stringify(regionView)}`);
 }
 const nestedRegionView = await computerUse.observeRegion('42', regionView.observationId, {
@@ -1067,12 +1108,19 @@ if (!staleKeyboardActionRejected)
     throw new Error('Stale keyboard submission was not rejected');
 
 computerUseSettings.computerUseWorkspaceSwitchingEnabled = false;
-for (const actionName of ['create_workspace', 'move_to_workspace', 'switch_workspace']) {
+for (const actionName of [
+    'create_workspace',
+    'move_to_workspace',
+    'move_to_new_workspace',
+    'switch_workspace',
+]) {
     let workspaceActionRejected = false;
     try {
         await computerUse.act({
             action: actionName,
-            windowId: actionName === 'move_to_workspace' ? '42' : undefined,
+            windowId: ['move_to_workspace', 'move_to_new_workspace'].includes(actionName)
+                ? '42'
+                : undefined,
             workspaceIndex: 1,
         });
     } catch (error) {
@@ -1192,12 +1240,17 @@ if (!partialToolResult.failed
 const popupClosedPng = popupPng(false);
 const popupOpenPng = popupPng(true);
 let popupOpen = false;
+let popupClickChangesState = true;
 capturePng = popupClosedPng;
 passivePng = popupClosedPng;
 const popupClosedObservation = await computerUse.observe('42');
 performActionEffect = (request) => {
     if (request.action !== 'click')
         return;
+    if (!popupClickChangesState) {
+        popupClickChangesState = true;
+        return;
+    }
 
     popupOpen = !popupOpen;
     capturePng = popupOpen ? popupOpenPng : popupClosedPng;
@@ -1222,9 +1275,32 @@ if (!popupOpenedStep.autoZoom?.applied
     );
 }
 
-const popupClosedAgainStep = await realTools.get('computer_step').run(JSON.stringify({
+popupClickChangesState = false;
+const popupMissedOptionStep = await realTools.get('computer_step').run(JSON.stringify({
     windowId: '42',
     observationId: popupOpenedStep.observationId,
+    actions: [{ action: 'click', x: 850, y: 720 }],
+    settleMs: 0,
+}));
+if (!popupMissedOptionStep.retainedRegion?.applied
+    || popupMissedOptionStep.retainedRegion.reason !== 'unchanged_region_action'
+    || popupMissedOptionStep.view?.type !== 'region'
+    || popupMissedOptionStep.capture?.source !== 'retained_action_region'
+    || popupMissedOptionStep.grid?.minorStep !== 100
+    || popupMissedOptionStep.verification.likelyCoordinateMiss !== true
+    || popupMissedOptionStep.verification.coordinateMissCount !== 1
+    || !popupMissedOptionStep.output.includes('"outcome": "likely_miss"')
+    || !popupMissedOptionStep.output.includes('retains the same enlarged region')
+    || popupMissedOptionStep.output.includes('sourceBytes')
+    || popupMissedOptionStep.output.includes('"imagePath"')) {
+    throw new Error(
+        `An unchanged popup option miss did not retain concise region guidance: ${JSON.stringify(popupMissedOptionStep)}`,
+    );
+}
+
+const popupClosedAgainStep = await realTools.get('computer_step').run(JSON.stringify({
+    windowId: '42',
+    observationId: popupMissedOptionStep.observationId,
     actions: [{ action: 'click', x: 500, y: 500 }],
     settleMs: 0,
 }));
@@ -1380,6 +1456,25 @@ if (!computerUse.finishTurn(turnCancellable) || computerUse.active)
 if (activeStates.length !== balancedActiveStateCount + 2 || activeStates.at(-1) !== false)
     throw new Error(`Computer-use turn state did not balance: ${activeStates.join(',')}`);
 assertBalancedStateTransitions(activeStates, 'Computer-use turn state');
+
+const exitedTurnStart = activeStates.length;
+const exitedTurnCancellable = new Gio.Cancellable();
+await computerUse.act(
+    { action: 'keypress', windowId: '42', keys: ['Escape'] },
+    { cancellable: exitedTurnCancellable },
+);
+const exitedTurn = await realTools.get('computer_exit').run(
+    '{}',
+    { cancellable: exitedTurnCancellable },
+);
+if (!exitedTurn.exited
+    || computerUse.active
+    || exitedTurnCancellable.is_cancelled()
+    || activeStates.length !== exitedTurnStart + 2
+    || activeStates.at(-1) !== false) {
+    throw new Error('Computer exit did not hide the active indicator without cancelling the turn');
+}
+assertBalancedStateTransitions(activeStates, 'Computer-use exited turn state');
 
 const stoppedTurnStart = activeStates.length;
 const stoppedTurnCancellable = new Gio.Cancellable();

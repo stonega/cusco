@@ -211,14 +211,14 @@ if (defaultStore.listProviders().some((provider) => provider.customizable))
 if (defaultStore.getProvider('grok').apiFormat !== 'openai-responses')
     throw new Error('Grok should use the Responses API for native Web and X search');
 
-defaultStore.setWebSearchApiKey('brave-test-key');
+await defaultStore.setWebSearchApiKey('brave-test-key');
 
 if (defaultStore.getWebSearchApiKeyStatus().source !== 'secret'
     || defaultStore.createWebSearchFallbackConfig().apiKey !== 'brave-test-key') {
     throw new Error('Brave Search fallback credentials were not stored in Secret Service');
 }
 
-defaultStore.clearWebSearchApiKey();
+await defaultStore.clearWebSearchApiKey();
 
 if (defaultStore.getThinkingLevels('grok', 'grok-4.5').join(',') !== 'low,medium,high')
     throw new Error('Grok 4.5 should expose low/medium/high reasoning levels');
@@ -710,7 +710,7 @@ const credentialStore = new ProviderConfigStore(credentialConfigs, {
 if (credentialStore.canEnableProvider('secure-remote'))
     throw new Error('Provider without credentials should not be enableable');
 
-credentialStore.setApiKey('secure-remote', 'sk-secret');
+await credentialStore.setApiKey('secure-remote', 'sk-secret');
 
 if (credentialStore.getApiKeyStatus('secure-remote').source !== 'secret')
     throw new Error('Stored API key status did not come from Secret Service store');
@@ -726,7 +726,7 @@ if (credentialStore.getFallbackSelection('secure-remote').provider.id !== 'test-
 if (credentialStore.createProvider('secure-remote').name !== 'Secure Remote')
     throw new Error('Credential-backed provider was not created');
 
-credentialStore.clearApiKey('secure-remote');
+await credentialStore.clearApiKey('secure-remote');
 
 if (credentialStore.isProviderAvailable('secure-remote'))
     throw new Error('Provider stayed available after clearing credentials');
@@ -802,12 +802,12 @@ const customStore = new ProviderConfigStore(undefined, {
     apiKeyStore: customApiKeys,
     envLookup: () => '',
 });
-const discoveredProvider = customStore.addCustomProvider({
+const discoveredProvider = await customStore.addCustomProvider({
     name: 'Discovered API',
     baseUrl: 'https://discovered.example/v1',
     apiKey: 'sk-discovered',
 });
-const manualProvider = customStore.addCustomProvider({
+const manualProvider = await customStore.addCustomProvider({
     name: 'Manual API',
     baseUrl: 'https://manual.example/v1',
     models: 'custom-small, custom-large, custom-small',
@@ -898,7 +898,7 @@ if (reloadedCustomStore.listProviders().filter((provider) => provider.customizab
 if (reloadedCustomStore.resolve(discoveredProvider.id, 'discovered-large').model.contextWindowTokens !== 131072)
     throw new Error('Reloaded custom provider lost discovered model metadata');
 
-reloadedCustomStore.removeCustomProvider(manualProvider.id);
+await reloadedCustomStore.removeCustomProvider(manualProvider.id);
 
 if (reloadedCustomStore.getProvider(manualProvider.id))
     throw new Error('Removed custom provider remained in the provider list');

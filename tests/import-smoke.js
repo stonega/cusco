@@ -17,6 +17,14 @@ import { ConversationManager } from '../src/chat/conversation.js';
 import { markdownToPangoMarkup, parseMarkdownBlocks } from '../src/chat/markdown.js';
 import { createMessageContent } from '../src/chat/messageView.js';
 import { estimateConversationUsage } from '../src/chat/usage.js';
+import {
+    createWelcomeMessage,
+    isLegacyWelcomeConversation,
+    isWelcomeMessage,
+    welcomeStreamFrame,
+    WELCOME_CONVERSATION_TITLE,
+    WELCOME_MESSAGE_CONTENT,
+} from '../src/chat/welcome.js';
 import { createCronCreateTool, CronJobManager } from '../src/cron/manager.js';
 import { ComputerUseService } from '../src/computerUse/service.js';
 import { createComputerUseTools } from '../src/computerUse/tools.js';
@@ -91,6 +99,7 @@ import {
     replacePendingAttachment,
     shouldAutoSendQueuedMessages,
     shouldSendLongResponseNotification,
+    shouldSendSudoPasswordNotification,
 } from '../src/window.js';
 
 if (APP_ID !== 'io.github.stonega.Cusco')
@@ -101,6 +110,36 @@ if (APPLICATION_APP_ID !== APP_ID)
 
 if (APP_NAME !== 'Cusco' || APP_VERSION.length === 0 || APP_AUTHOR.length === 0)
     throw new Error('App info metadata did not import correctly');
+
+const welcomeMessage = createWelcomeMessage();
+
+if (welcomeMessage.role !== 'assistant'
+    || welcomeMessage.content !== WELCOME_MESSAGE_CONTENT
+    || !isWelcomeMessage(welcomeMessage)
+    || !welcomeMessage.content.includes('Quick start:')) {
+    throw new Error('Welcome chat did not create one tagged quick-start message');
+}
+
+if (welcomeStreamFrame('Cusco 🦙', 7) !== 'Cusco 🦙'
+    || welcomeStreamFrame(WELCOME_MESSAGE_CONTENT, 12) === WELCOME_MESSAGE_CONTENT) {
+    throw new Error('Welcome message stream frames did not preserve Unicode or progressive reveal');
+}
+
+if (!isLegacyWelcomeConversation({
+    title: WELCOME_CONVERSATION_TITLE,
+    messages: [
+        {
+            role: 'assistant',
+            content: 'Ask a question, compare providers, or start building a reusable AI workflow.',
+        },
+        {
+            role: 'system',
+            content: 'Next steps: markdown rendering, memory controls, web search, and desktop integration.',
+        },
+    ],
+})) {
+    throw new Error('Legacy two-message welcome chats were not recognized for migration');
+}
 
 const pngClipboardFormats = {
     contain_gtype: () => false,
@@ -177,10 +216,16 @@ const fakeWindow = {
 if (shouldSendLongResponseNotification(fakeWindow))
     throw new Error('Active windows should not send long-response notifications');
 
+if (shouldSendSudoPasswordNotification(fakeWindow))
+    throw new Error('Active windows should not send sudo-password notifications');
+
 fakeWindow.is_active = false;
 
 if (!shouldSendLongResponseNotification(fakeWindow))
     throw new Error('Inactive windows should send long-response notifications');
+
+if (!shouldSendSudoPasswordNotification(fakeWindow))
+    throw new Error('Inactive windows should send sudo-password notifications');
 
 const computerUseHint = composerHintPresentation(false, true, true);
 if (!computerUseHint.markup?.includes('foreground="#42e6f5"')

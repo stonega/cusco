@@ -24,6 +24,7 @@ chat_sources = files(
   'chat/markdown.js',
   'chat/messageView.js',
   'chat/usage.js',
+  'chat/welcome.js',
 )
 
 artifact_sources = files(

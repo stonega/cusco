@@ -36,6 +36,116 @@ function formatted(value) {
     return JSON.stringify(value, null, 2);
 }
 
+function observationForTranscript(observation) {
+    if (!observation)
+        return null;
+
+    const window = observation.window ?? {};
+    const accessibility = observation.accessibility ?? {};
+
+    return {
+        window: {
+            id: window.id,
+            title: window.title,
+            appName: window.appName,
+            workspaceIndex: window.workspaceIndex,
+            focused: window.focused,
+            minimized: window.minimized,
+            maximized: window.maximized,
+        },
+        agentProtocolVersion: observation.agentProtocolVersion,
+        observationId: observation.observationId,
+        parentObservationId: observation.parentObservationId ?? null,
+        rootObservationId: observation.rootObservationId,
+        coordinateSpace: observation.coordinateSpace,
+        accessibility: {
+            available: accessibility.available,
+            source: accessibility.source,
+            reason: accessibility.reason,
+            application: accessibility.application,
+            elements: accessibility.elements ?? [],
+            truncated: accessibility.truncated,
+            geometryWarning: accessibility.geometryWarning,
+        },
+        grid: observation.grid,
+        view: observation.view,
+        capture: {
+            source: observation.capture?.source ?? 'window',
+            modelWidth: observation.capture?.modelWidth,
+            modelHeight: observation.capture?.modelHeight,
+        },
+    };
+}
+
+function actionResultForTranscript(result) {
+    const coordinates = result.coordinates
+        ? {
+            observationId: result.coordinates.observationId,
+            coordinateSpace: result.coordinates.coordinateSpace,
+            requested: result.coordinates.requested,
+            screenshot: result.coordinates.screenshot,
+            viewType: result.coordinates.view?.type,
+        }
+        : null;
+
+    return {
+        performed: result.performed,
+        dispatchStatus: result.dispatchStatus,
+        verified: result.verified,
+        verificationReason: result.verificationReason,
+        ...(result.clipboardChanged === true ? { clipboardChanged: true } : {}),
+        ...(coordinates ? { coordinates } : {}),
+    };
+}
+
+function stepForTranscript(stepResult, observation, instruction, normalization = null) {
+    const verification = stepResult.verification ?? {};
+    const coordinateOutcome = stepResult.failed
+        ? 'failed'
+        : verification.coordinateActionVerified === true
+            ? 'verified'
+            : verification.likelyCoordinateMiss === true
+                ? 'likely_miss'
+                : verification.visualConfirmationRequired === true
+                    ? 'changed_or_unverified'
+                    : 'completed';
+
+    return {
+        outcome: coordinateOutcome,
+        nextAction: instruction,
+        failed: stepResult.failed,
+        partial: stepResult.partial,
+        failure: stepResult.failure,
+        completedActionCount: stepResult.completedActionCount,
+        performed: stepResult.performed,
+        results: (stepResult.results ?? []).map(actionResultForTranscript),
+        observation: observationForTranscript(observation),
+        autoZoom: stepResult.autoZoom,
+        retainedRegion: stepResult.retainedRegion,
+        verification: {
+            screenChanged: verification.screenChanged,
+            focused: verification.focused,
+            likelyCoordinateMiss: verification.likelyCoordinateMiss,
+            coordinateActionVerified: verification.coordinateActionVerified,
+            visualConfirmationRequired: verification.visualConfirmationRequired,
+            unchangedCount: verification.unchangedCount,
+            stalled: verification.stalled,
+            coordinateMissCount: verification.coordinateMissCount,
+            coordinateRetryBlocked: verification.coordinateRetryBlocked,
+            coordinateRetryBlockReason: verification.coordinateRetryBlockReason,
+            visualStateCycleDetected: verification.visualStateCycleDetected,
+            visualStateCycleLength: verification.visualStateCycleLength,
+            semanticActionsVerified: verification.semanticActionsVerified,
+            inputVerified: verification.inputVerified,
+            preAction: verification.preAction,
+            expectationsMet: verification.expectationsMet,
+            expectations: verification.expectations,
+            visualChange: verification.visualChange,
+        },
+        ...(normalization ? { actionNormalization: normalization } : {}),
+    };
+}
+
 const OBJECT_SCHEMA = {
     type: 'object',
     additionalProperties: false,
@@ -169,9 +279,8 @@ export function createComputerUseTools(service) {
 
                 const observation = await service.observe(args.windowId, options);
                 const transcript = {
-                    ...observation,
-                    imagePath: observation.imagePath,
-                    instruction: 'The attached model image has a synthetic normalized coordinate grid. Grid labels and lines are not part of the application. Prefer accessibility refs and computer_step. Bounds are null when the application reports unreliable geometry; use the ref or keyboard navigation instead of inventing coordinates. For small visual targets, request computer_observe_region before clicking. Values run from 0 to 1000.',
+                    ...observationForTranscript(observation),
+                    instruction: 'The attached model image has a synthetic normalized coordinate grid. Grid labels and lines are not part of the application. Coordinates may be any value from 0 to 1000: click the visual center of a target and do not snap to a grid line or border. Prefer accessibility refs and computer_step. Bounds are null when the application reports unreliable geometry; use the ref or keyboard navigation instead of inventing coordinates. For small visual targets, request computer_observe_region before clicking.',
                 };
                 return {
                     ...observation,
@@ -220,8 +329,8 @@ export function createComputerUseTools(service) {
                     args.region,
                 );
                 const transcript = {
-                    ...observation,
-                    instruction: 'The attached image is an enlarged synthetic-grid view. Coordinates in the next computer_step are local to this region and normalized from 0 to 1000; Cusco maps them back to the full window. Do not manually add the region offset.',
+                    ...observationForTranscript(observation),
+                    instruction: 'The attached image is an enlarged synthetic-grid view. Coordinates in the next computer_step are local to this region and may be any value from 0 to 1000. Click the visual center of the target; do not snap to a grid line or border. Cusco maps the point back to the full window, so do not manually add the region offset.',
                 };
                 return {
                     ...observation,
@@ -232,8 +341,8 @@ export function createComputerUseTools(service) {
         {
             name: 'computer_step',
             label: 'Act and observe desktop window',
-            description: 'Perform one or more bounded actions on one observed window, wait briefly, and return the updated screenshot plus semantic, coordinate, change, and stall feedback. Before coordinate input, Cusco passively checks that the referenced UI is still visible and focused; stale UI is returned without dispatching the action. After a click produces a localized visual change such as a popup, Cusco may return one automatically enlarged region image; the returned observation ID and coordinates are local to that crop. Prefer accessibility refs when available. Visual coordinates are normalized 0..1000 in the attached full or region grid. Prefer paste_text for non-sensitive text because it copies the complete value to the clipboard and pastes it atomically; use type for sensitive values or fields that reject paste. Either text input action may include x and y to focus a visual field, with replace:true selecting its existing text first. Common click-then-input and click-then-Ctrl+A-then-input calls are normalized to those atomic forms. Other explicit coordinate click and keyboard batches remain unsafe. For small targets or a blocked retry, use computer_observe_region. Coordinate actions that navigate or enter input should include an expect entry when accessibility is available.',
-            inputDescription: 'JSON: {"windowId":"ID","observationId":"latest full or region observation ID","actions":[{"action":"click","x":480,"y":280}],"settleMs":250}. For an inaccessible visual text field, prefer exactly one atomic action: {"action":"paste_text","x":480,"y":280,"text":"value","replace":true}; omit replace for an empty field. Use type with the same fields for sensitive values or when paste is rejected. Semantic actions include click_element {ref} and set_text_element {ref,text}; other actions include keypress, maximize, move_to_workspace, scroll, and drag. Arbitrary explicit click and keyboard batches are rejected. All visual coordinates are normalized 0..1000. Maximum 8 actions.',
+            description: 'Perform one or more bounded actions on one observed window, wait briefly, and return the updated screenshot plus semantic, coordinate, change, and stall feedback. Before coordinate input, Cusco passively checks that the referenced UI is still visible and focused; stale UI is returned without dispatching the action. After a click produces a localized visual change such as a popup, Cusco may return one automatically enlarged region image; after an unchanged click inside a region it retains that same crop for a centered retry. Prefer accessibility refs when available. Visual coordinates may be any value from 0..1000 in the attached full or region grid; click target centers instead of snapping to grid lines or borders. Prefer paste_text for non-sensitive text because it copies the complete value to the clipboard and pastes it atomically; use type for sensitive values or fields that reject paste. Either text input action may include x and y to focus a visual field, with replace:true selecting its existing text first. Common click-then-input and click-then-Ctrl+A-then-input calls are normalized to those atomic forms. Other explicit coordinate click and keyboard batches remain unsafe. For small targets or a blocked retry, use computer_observe_region. Coordinate actions that navigate or enter input should include an expect entry when accessibility is available.',
+            inputDescription: 'JSON: {"windowId":"ID","observationId":"latest full or region observation ID","actions":[{"action":"click","x":480,"y":280}],"settleMs":250}. For an inaccessible visual text field, prefer exactly one atomic action: {"action":"paste_text","x":480,"y":280,"text":"value","replace":true}; omit replace for an empty field. Use type with the same fields for sensitive values or when paste is rejected. Semantic actions include click_element {ref} and set_text_element {ref,text}; other actions include keypress, maximize, move_to_workspace, move_to_new_workspace, scroll, and drag. A keypress keys array is one simultaneous chord; use separate keypress actions for a sequence such as Down then Return. Arbitrary explicit click and keyboard batches are rejected. All visual coordinates are normalized 0..1000. Maximum 8 actions.',
             inputSchema: {
                 type: 'object',
                 additionalProperties: false,
@@ -385,25 +494,26 @@ export function createComputerUseTools(service) {
                         ? 'The UI repeated an alternating visual-state cycle, so full-window coordinate retries are blocked. The attached image is an automatically enlarged view of the current localized state. Use its local coordinates and returned observationId to select a visible option; do not click the popup trigger again.'
                         : 'The UI repeated an alternating visual-state cycle, so coordinate retries are blocked. Do not repeat the same open/close actions; use accessibility, keyboard navigation, a fresh observation, or ask the user for help.';
                 } else if (stepResult.autoZoom?.applied) {
-                    instruction = 'A click produced a localized visual change, so the attached image is an automatically enlarged crop of the current state. Coordinates are local from 0 to 1000; use the returned observationId to select a visible option without clicking the trigger again.';
+                    instruction = 'A click produced a localized visual change, so the attached image is an automatically enlarged crop of the current state. Coordinates are local and may be any value from 0 to 1000. Select the visible option by clicking its visual center, not a grid line or border, and use the returned observationId without clicking the trigger again.';
                 } else if (stepResult.verification.stalled) {
                     instruction = stepResult.verification.coordinateRetryBlocked
                         ? 'The screen did not change after repeated coordinate steps, so full-window coordinate retries are blocked. Use computer_observe_region, accessibility, keyboard navigation, or ask the user for help.'
                         : 'The screen did not change after repeated steps. Do not retry the same target or coordinates; use a different strategy.';
+                } else if (stepResult.verification.likelyCoordinateMiss
+                    && stepResult.retainedRegion?.applied) {
+                    instruction = 'The coordinate action likely missed because the screen did not change. The attached image retains the same enlarged region from the current screen. Keep the current control state and retry once at the visual center of the intended target using this new observationId; do not snap to a grid line or target border.';
                 } else if (expectations.length > 0
                     && stepResult.verification.expectationsMet !== true) {
                     instruction = 'The post-action screenshot is attached, but the expected target state was not found. Do not treat the action as successful; inspect the screen and change strategy.';
                 } else if (hasCoordinateTarget && expectations.length === 0) {
                     instruction = 'The post-action screenshot is attached and visualConfirmationRequired is true because no semantic expectation was available. This does not mean the action failed. Inspect the new UI state; if the intended result is visibly present, continue from it.';
                 }
-                const transcript = {
-                    ...stepResult,
+                const transcript = stepForTranscript(
+                    stepResult,
                     observation,
-                    ...(normalizedInput.normalization
-                        ? { actionNormalization: normalizedInput.normalization }
-                        : {}),
                     instruction,
-                };
+                    normalizedInput.normalization,
+                );
                 return {
                     ...observation,
                     ...stepResult,
@@ -417,8 +527,8 @@ export function createComputerUseTools(service) {
         {
             name: 'computer_act',
             label: 'Control GNOME desktop',
-            description: 'Perform one bounded desktop action without returning a screenshot. Use create_workspace before launching an app, then maximize or move its window as needed. Global paste_text, type, and keypress actions may omit windowId so an app can be launched on the active empty workspace. Prefer paste_text for non-sensitive text and type for sensitive values or fields that reject paste. Prefer computer_step for subsequent window actions. Coordinate actions should specify screenshot_pixels or normalized_1000 explicitly.',
-            inputDescription: 'JSON with action. Supported: create_workspace; switch_workspace {workspaceIndex}; move_to_workspace {windowId,workspaceIndex}; maximize {windowId}; focus {windowId}; click/double_click/move {windowId,x,y,coordinateSpace,button?}; paste_text/type {text,windowId?,x?,y?,coordinateSpace?,replace?}; keypress {keys:["CTRL","L"],windowId?}; scroll {windowId,x,y,coordinateSpace,deltaX?,deltaY?}; drag {windowId,x,y,endX,endY,coordinateSpace}. replace:true requires a coordinate-targeted text input action.',
+            description: 'Perform one bounded desktop action without returning a screenshot. Reuse an existing suitable window on its current workspace. Use create_workspace only before launching a genuinely new app; use move_to_new_workspace to atomically isolate an existing window without relying on a transient GNOME workspace index. Global paste_text, type, and keypress actions may omit windowId so an app can be launched on the active empty workspace. Prefer paste_text for non-sensitive text and type for sensitive values or fields that reject paste. Prefer computer_step for subsequent window actions. Coordinate actions should specify screenshot_pixels or normalized_1000 explicitly.',
+            inputDescription: 'JSON with action. Supported: create_workspace; switch_workspace {workspaceIndex}; move_to_workspace {windowId,workspaceIndex}; move_to_new_workspace {windowId}; maximize {windowId}; focus {windowId}; click/double_click/move {windowId,x,y,coordinateSpace,button?}; paste_text/type {text,windowId?,x?,y?,coordinateSpace?,replace?}; keypress {keys:["CTRL","L"],windowId?}; scroll {windowId,x,y,coordinateSpace,deltaX?,deltaY?}; drag {windowId,x,y,endX,endY,coordinateSpace}. A keypress keys array is one simultaneous chord. replace:true requires a coordinate-targeted text input action.',
             inputSchema: {
                 type: 'object',
                 additionalProperties: true,
@@ -436,6 +546,23 @@ export function createComputerUseTools(service) {
                 validateComputerUseAction(args, { label: 'computer_act' });
                 const result = await service.act(args, options);
                 return { result, output: formatted(result) };
+            },
+        },
+        {
+            name: 'computer_exit',
+            label: 'Exit computer use',
+            description: 'End the current computer-use session and hide the GNOME top-bar activity indicator without cancelling the agent response. Use this after returning to Cusco when no more desktop actions are needed.',
+            inputDescription: 'An empty JSON object: {}.',
+            inputSchema: OBJECT_SCHEMA,
+            permissionPolicy: 'allow',
+            concurrencySafe: false,
+            async run(input, options) {
+                parseObject(input, 'computer_exit', { allowEmpty: true });
+                const exited = await service.exitTurn(options?.cancellable);
+                const status = exited
+                    ? 'Computer use exited. The GNOME top-bar indicator is hidden.'
+                    : 'Computer use was already inactive.';
+                return { exited, output: status };
             },
         },
     ];

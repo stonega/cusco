@@ -25,7 +25,7 @@ import {
 export const COMPUTER_USE_BUS_NAME = 'org.gnome.Shell';
 export const COMPUTER_USE_OBJECT_PATH = '/io/github/stonega/Cusco/ComputerUse';
 export const COMPUTER_USE_INTERFACE = 'io.github.stonega.Cusco.ComputerUse';
-export const COMPUTER_USE_PROTOCOL_VERSION = 6;
+export const COMPUTER_USE_PROTOCOL_VERSION = 7;
 export const COMPUTER_USE_AGENT_PROTOCOL_VERSION = 4;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -43,6 +43,7 @@ const AUTO_ZOOM_MINIMUM_EXTENSION = 55;
 const WORKSPACE_ACTIONS = new Set([
     'create_workspace',
     'move_to_workspace',
+    'move_to_new_workspace',
     'switch_workspace',
 ]);
 
@@ -237,11 +238,11 @@ function coordinateSpaceMetadata(width, height) {
     };
 }
 
-function modelGridFor(path) {
+function modelGridFor(path, options = {}) {
     const outputPath = derivedImagePath(path, '-grid');
 
     try {
-        const grid = createCoordinateGridOverlay(path, outputPath);
+        const grid = createCoordinateGridOverlay(path, outputPath, options);
         return {
             modelImagePath: outputPath,
             grid: {
@@ -361,6 +362,18 @@ function hasAlternatingVisualStateCycle(history) {
     return !visualStatesMatch(first, second)
         && visualStatesMatch(first, third)
         && visualStatesMatch(second, fourth);
+}
+
+function appendDistinctVisualState(history, state) {
+    if (!state)
+        return history;
+
+    const previous = history.at(-1);
+
+    if (!previous || !visualStatesMatch(previous, state))
+        history.push(state);
+
+    return history;
 }
 
 function normalizedRootPoint(coordinates) {
@@ -1080,7 +1093,12 @@ export class ComputerUseService {
             throw createUserError(`Could not create the requested screenshot region: ${error.message ?? error}`);
         }
 
-        const modelView = modelGridFor(cleanPath);
+        const modelView = modelGridFor(cleanPath, {
+            // A dense grid encourages models to snap small targets to a nearby
+            // line or border. Enlarged regions only need the labeled 100-unit
+            // grid because arbitrary coordinates remain valid.
+            minorStep: 100,
+        });
         const effectiveRegion = {
             x: (image.sourcePixels.x / root.imageWidth) * NORMALIZED_COORDINATE_SIZE,
             y: (image.sourcePixels.y / root.imageHeight) * NORMALIZED_COORDINATE_SIZE,
@@ -1130,14 +1148,11 @@ export class ComputerUseService {
         };
 
         this._observationViews.set(viewId, view);
-        if (options.unlockCoordinateRetry !== false) {
+        if (options.unlockCoordinateRetry !== false
+            && this._coordinateRetryBlockReasons.get(normalizedWindowId) !== 'visual_state_cycle') {
             this._unchangedCoordinateStepCounts.set(normalizedWindowId, 0);
             this._coordinateRetryBlocked.delete(normalizedWindowId);
             this._coordinateRetryBlockReasons.delete(normalizedWindowId);
-            this._visualStateHistories.set(
-                normalizedWindowId,
-                [observationVisualState(root)],
-            );
         }
         return this._observationPayload(view);
     }
@@ -1534,9 +1549,15 @@ export class ComputerUseService {
                 ];
 
                 if (history.length === 0 && previousObservation) {
-                    history.push(observationVisualState(previousObservation));
+                    appendDistinctVisualState(
+                        history,
+                        observationVisualState(previousObservation),
+                    );
                 }
-                history.push(observationVisualState(currentObservation));
+                appendDistinctVisualState(
+                    history,
+                    observationVisualState(currentObservation),
+                );
                 while (history.length > VISUAL_STATE_HISTORY_LIMIT)
                     history.shift();
 
@@ -1564,6 +1585,7 @@ export class ComputerUseService {
         }
 
         let autoZoom = null;
+        let retainedRegion = null;
 
         if (!failure
             && observation
@@ -1606,7 +1628,47 @@ export class ComputerUseService {
             }
         }
 
+        if (!failure
+            && observation
+            && currentObservation
+            && !autoZoom
+            && actionObservation?.view?.type === 'region') {
+            try {
+                const rootObservationId = currentObservation.observationId;
+                const reason = screenChanged === false
+                    ? 'unchanged_region_action'
+                    : 'continued_region_context';
+                observation = await this.observeRegion(
+                    windowId,
+                    rootObservationId,
+                    actionObservation.view.normalized,
+                    {
+                        source: 'retained_action_region',
+                        unlockCoordinateRetry: false,
+                    },
+                );
+                retainedRegion = {
+                    applied: true,
+                    reason,
+                    observationId: observation.observationId,
+                    rootObservationId,
+                    region: observation.view?.normalized
+                        ?? actionObservation.view.normalized,
+                };
+            } catch (error) {
+                logRecoverableComputerUseError(
+                    error,
+                    'Failed to retain the active computer-use region',
+                );
+            }
+        }
+
         const observationMilliseconds = elapsedMilliseconds(observationStartedAt);
+        const likelyCoordinateMiss = attemptedCoordinateAction
+            ? screenChanged === false
+                && semanticActionsVerified !== true
+                && (expectations.length === 0 || expectationResult.met !== true)
+            : null;
 
         return {
             failed: Boolean(failure),
@@ -1618,6 +1680,7 @@ export class ComputerUseService {
             results,
             observation,
             autoZoom,
+            retainedRegion,
             verification: {
                 screenChanged,
                 visualChange,
@@ -1629,6 +1692,7 @@ export class ComputerUseService {
                 coordinateRetryBlockReason: this._coordinateRetryBlockReasons.get(windowId) ?? null,
                 visualStateCycleDetected,
                 visualStateCycleLength: visualStateCycleDetected ? 2 : null,
+                likelyCoordinateMiss,
                 semanticActionsVerified,
                 inputVerified,
                 preAction: preActionVerification,
@@ -1655,6 +1719,17 @@ export class ComputerUseService {
         this._activeTurnCancellable = null;
         if (wasActive && !this.active)
             this._setActivePresentation(false);
+        return true;
+    }
+
+    async exitTurn(cancellable) {
+        if (!cancellable || this._activeTurnCancellable !== cancellable)
+            return false;
+
+        const wasActive = this.active;
+        this._activeTurnCancellable = null;
+        if (wasActive && !this.active)
+            await this._setActivePresentation(false);
         return true;
     }
 

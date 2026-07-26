@@ -389,20 +389,23 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows, 
             title: `API key (${provider.apiKeyEnvVar})`,
         });
         apiKeyRow.set_show_apply_button(true);
-        apiKeyRow.connect('apply', () => {
+        apiKeyRow.connect('apply', async () => {
             const apiKey = apiKeyRow.get_text().trim();
 
             if (!apiKey)
                 return;
 
+            apiKeyRow.set_sensitive(false);
+
             try {
-                providerConfigs.setApiKey(providerId, apiKey);
+                await providerConfigs.setApiKey(providerId, apiKey);
                 apiKeyRow.set_text('');
-                syncAllRows();
                 onChanged();
             } catch (error) {
-                syncAllRows();
                 logError(error, 'Failed to store provider API key');
+            } finally {
+                apiKeyRow.set_sensitive(true);
+                syncAllRows();
             }
         });
 
@@ -412,15 +415,17 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows, 
             valign: Gtk.Align.CENTER,
         });
         clearKeyButton.add_css_class('flat');
-        clearKeyButton.connect('clicked', () => {
+        clearKeyButton.connect('clicked', async () => {
+            clearKeyButton.set_sensitive(false);
+
             try {
-                providerConfigs.clearApiKey(providerId);
+                await providerConfigs.clearApiKey(providerId);
                 apiKeyRow.set_text('');
-                syncAllRows();
                 onChanged();
             } catch (error) {
-                syncAllRows();
                 logError(error, 'Failed to clear provider API key');
+            } finally {
+                syncAllRows();
             }
         });
         apiKeyRow.add_suffix(clearKeyButton);
@@ -704,32 +709,37 @@ function createWebSearchSettingsGroup(providerConfigs, onChanged, syncAllRows) {
     clearKeyButton.add_css_class('flat');
     apiKeyRow.add_suffix(clearKeyButton);
 
-    apiKeyRow.connect('apply', () => {
+    apiKeyRow.connect('apply', async () => {
         const apiKey = apiKeyRow.get_text().trim();
 
         if (!apiKey)
             return;
 
+        apiKeyRow.set_sensitive(false);
+
         try {
-            providerConfigs.setWebSearchApiKey(apiKey);
+            await providerConfigs.setWebSearchApiKey(apiKey);
             apiKeyRow.set_text('');
-            syncAllRows();
             onChanged();
         } catch (error) {
-            syncAllRows();
             logError(error, 'Failed to store Brave Search API key');
+        } finally {
+            apiKeyRow.set_sensitive(true);
+            syncAllRows();
         }
     });
 
-    clearKeyButton.connect('clicked', () => {
+    clearKeyButton.connect('clicked', async () => {
+        clearKeyButton.set_sensitive(false);
+
         try {
-            providerConfigs.clearWebSearchApiKey();
+            await providerConfigs.clearWebSearchApiKey();
             apiKeyRow.set_text('');
-            syncAllRows();
             onChanged();
         } catch (error) {
-            syncAllRows();
             logError(error, 'Failed to clear Brave Search API key');
+        } finally {
+            syncAllRows();
         }
     });
 
@@ -894,7 +904,7 @@ function presentAddCustomProviderDialog(parent, providerConfigs, onChanged, sync
         let provider = null;
 
         try {
-            provider = providerConfigs.addCustomProvider({
+            provider = await providerConfigs.addCustomProvider({
                 name: nameEntry.get_text(),
                 baseUrl: endpointEntry.get_text(),
                 apiKey: apiKeyEntry.get_text(),
@@ -934,12 +944,12 @@ function presentRemoveCustomProviderDialog(parent, providerConfigs, providerId, 
     dialog.set_default_response('cancel');
     dialog.set_close_response('cancel');
     dialog.set_response_appearance('remove', Adw.ResponseAppearance.DESTRUCTIVE);
-    dialog.choose(parent, null, (_dialog, result) => {
+    dialog.choose(parent, null, async (_dialog, result) => {
         if (dialog.choose_finish(result) !== 'remove')
             return;
 
         try {
-            providerConfigs.removeCustomProvider(providerId);
+            await providerConfigs.removeCustomProvider(providerId);
             syncAllRows();
             onChanged();
         } catch (error) {

@@ -1,9 +1,6 @@
-import Gdk from 'gi://Gdk?version=4.0';
 import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
-
-let bundledIconThemePathsInstalled = false;
 
 function getModuleDir() {
     const modulePath = Gio.File.new_for_uri(import.meta.url).get_path();
@@ -23,30 +20,6 @@ function getBundledResourceDirs() {
     ];
 }
 
-function bundledIconName(filename) {
-    return String(filename ?? '').replace(/\.svg$/i, '');
-}
-
-function installBundledIconThemePaths() {
-    const display = Gdk.Display.get_default();
-
-    if (!display)
-        return null;
-
-    const iconTheme = Gtk.IconTheme.get_for_display(display);
-
-    if (bundledIconThemePathsInstalled)
-        return iconTheme;
-
-    for (const directory of getBundledResourceDirs()) {
-        if (GLib.file_test(directory, GLib.FileTest.IS_DIR))
-            iconTheme.add_search_path(directory);
-    }
-
-    bundledIconThemePathsInstalled = true;
-    return iconTheme;
-}
-
 export function getBundledImagePath(filename) {
     const moduleDir = getModuleDir();
 
@@ -62,10 +35,11 @@ export function getBundledImagePath(filename) {
 }
 
 export function createBundledIcon(filename, fallbackIconName, { pixelSize = 16 } = {}) {
-    const iconTheme = installBundledIconThemePaths();
-    const iconName = bundledIconName(filename);
-    const image = iconTheme?.has_icon(iconName)
-        ? new Gtk.Image({ icon_name: iconName })
+    const iconPath = getBundledImagePath(filename);
+    const image = iconPath
+        ? new Gtk.Image({
+            gicon: new Gio.FileIcon({ file: Gio.File.new_for_path(iconPath) }),
+        })
         : new Gtk.Image({ icon_name: fallbackIconName });
 
     image.set_pixel_size(pixelSize);

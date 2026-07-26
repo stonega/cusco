@@ -53,6 +53,13 @@ import {
     summarizeConversationStatistics,
 } from './chat/usage.js';
 import {
+    createWelcomeMessage,
+    isLegacyWelcomeConversation,
+    isWelcomeMessage,
+    welcomeStreamFrame,
+    WELCOME_CONVERSATION_TITLE,
+} from './chat/welcome.js';
+import {
     filterComposerSuggestions,
     findComposerTrigger,
     HomeFileIndex,
@@ -126,6 +133,8 @@ const COMPUTER_USE_ACCENT_COLOR = '#42e6f5';
 const SCROLL_TO_BOTTOM_ANIMATION_MS = 180;
 const SCROLL_TO_BOTTOM_ANIMATION_INTERVAL_MS = 16;
 const STREAMING_USAGE_UPDATE_INTERVAL_MS = 100;
+const WELCOME_STREAM_INTERVAL_MS = 24;
+const WELCOME_STREAM_CHARACTERS_PER_TICK = 4;
 const CONVERSATION_RENDER_BATCH_BUDGET_US = 8000;
 const CONVERSATION_MESSAGE_PAGE_SIZE = 32;
 const CONVERSATION_PAGE_CONTEXT_LIMIT = 6;
@@ -467,6 +476,10 @@ function getProviderErrorMessage(error) {
 }
 
 export function shouldSendLongResponseNotification(window) {
+    return !Boolean(window.is_active);
+}
+
+export function shouldSendSudoPasswordNotification(window) {
     return !Boolean(window.is_active);
 }
 
@@ -1024,6 +1037,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._conversationListHasMore = false;
         this._conversationListQuery = '';
         this._isLoadingConversationListPage = false;
+        this._animatedWelcomeMessageIds = new Set();
+        this._welcomeStreamSourceIds = new Set();
         this._legacyArtifactMigrationIds = new Set();
         this._conversationLoadErrorToastIds = new Set();
         this._usageDisplaySourceId = 0;
@@ -1056,12 +1071,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         if (this._conversations.conversations.length === 0) {
             this._conversations.createConversation({
-                title: 'Welcome to Cusco',
+                title: WELCOME_CONVERSATION_TITLE,
                 thinkingLevel: this._appSettings.thinkingLevel,
-                messages: [
-                    createMessage('assistant', 'Ask a question, compare providers, or start building a reusable AI workflow.'),
-                    createMessage('system', 'Next steps: markdown rendering, memory controls, web search, and desktop integration.'),
-                ],
+                messages: [createWelcomeMessage()],
             });
         }
 
@@ -1089,6 +1101,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 GLib.Source.remove(this._composerSuggestionRefreshSourceId);
                 this._composerSuggestionRefreshSourceId = 0;
             }
+
+            for (const sourceId of this._welcomeStreamSourceIds)
+                GLib.Source.remove(sourceId);
+            this._welcomeStreamSourceIds.clear();
 
             this._cancelScheduledConversationRender();
 
@@ -4103,6 +4119,18 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 return;
             }
 
+            const application = this.get_application();
+            const notificationId = shouldSendSudoPasswordNotification(this)
+                ? `sudo-password-${GLib.uuid_string_random()}`
+                : null;
+
+            if (notificationId) {
+                const notification = new Gio.Notification();
+                notification.set_title('Sudo password required');
+                notification.set_body('Return to Cusco to continue the command.');
+                application?.send_notification(notificationId, notification);
+            }
+
             const entry = new Gtk.PasswordEntry({
                 placeholder_text: 'Password',
                 show_peek_icon: true,
@@ -4135,6 +4163,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
             dialog.set_close_response('cancel');
             dialog.set_response_appearance('run', Adw.ResponseAppearance.SUGGESTED);
             dialog.choose(this, cancellable, (_dialog, result) => {
+                if (notificationId)
+                    application?.withdraw_notification(notificationId);
+
                 try {
                     const response = dialog.choose_finish(result);
                     const password = entry.get_text();
@@ -5678,6 +5709,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         if (changed)
             this._conversations.persist();
+    }
+
+    _migrateLegacyWelcomeConversation(conversation = this._conversations.activeConversation) {
+        if (!conversation
+            || !isLegacyWelcomeConversation(conversation)
+            || !this._conversations.isConversationHydrated(conversation.id)) {
+            return;
+        }
+
+        this._conversations.replaceMessages(conversation.id, [createWelcomeMessage()]);
     }
 
     _materializeAssistantArtifacts(text, conversationId = '') {
@@ -7431,6 +7472,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _renderActiveConversation(options = {}) {
         const conversation = this._conversations.activeConversation;
+        this._migrateLegacyWelcomeConversation(conversation);
         this._migrateLegacyArtifacts(conversation);
         this._artifactWorkspace?.setConversation(conversation?.id ?? '');
         this._syncArtifactWorkspaceButton();
@@ -8402,6 +8444,57 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return this._createAttachmentPreviewCard(attachment);
     }
 
+    _shouldAnimateWelcomeMessage(message) {
+        if (!isWelcomeMessage(message)
+            || !message?.id
+            || this._animatedWelcomeMessageIds.has(message.id)) {
+            return false;
+        }
+
+        const settings = Gtk.Settings.get_default();
+
+        try {
+            return settings?.get_property('gtk-enable-animations') !== false;
+        } catch (_error) {
+            return true;
+        }
+    }
+
+    _startWelcomeMessageStream(messageView, content) {
+        const characterCount = [...String(content ?? '')].length;
+
+        if (characterCount === 0)
+            return;
+
+        let visibleCharacters = 0;
+        let sourceId = 0;
+        const revealNextFrame = () => {
+            visibleCharacters = Math.min(
+                characterCount,
+                visibleCharacters + WELCOME_STREAM_CHARACTERS_PER_TICK,
+            );
+            messageView.set_label(welcomeStreamFrame(content, visibleCharacters));
+
+            if (visibleCharacters < characterCount)
+                return GLib.SOURCE_CONTINUE;
+
+            this._welcomeStreamSourceIds.delete(sourceId);
+            return GLib.SOURCE_REMOVE;
+        };
+
+        revealNextFrame();
+
+        if (visibleCharacters >= characterCount)
+            return;
+
+        sourceId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT,
+            WELCOME_STREAM_INTERVAL_MS,
+            revealNextFrame,
+        );
+        this._welcomeStreamSourceIds.add(sourceId);
+    }
+
     _addMessage(body, kind, message = null) {
         if (isAgentReasoningMessage(message) && this._lastAssistantMessageView?.append_reasoning_segment) {
             const reasoningView = this._lastAssistantMessageView.append_reasoning_segment(message);
@@ -8465,10 +8558,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
             displayBodyWithoutImageAttachmentLines(body, message),
             message?.attachments,
         );
+        const animateWelcomeMessage = this._shouldAnimateWelcomeMessage(message);
+
+        if (animateWelcomeMessage)
+            this._animatedWelcomeMessageIds.add(message.id);
+
+        const initialDisplayBody = animateWelcomeMessage ? '' : displayBody;
         const messageReferences = kind === 'user'
             ? normalizeComposerReferences(message?.metadata?.composerReferences)
             : [];
-        const bodyContent = createMessageContent(displayBody || ' ', this._messageContentOptions({
+        const bodyContent = createMessageContent(initialDisplayBody || ' ', this._messageContentOptions({
             role: kind,
             artifacts: message?.artifacts ?? [],
             parentWindow: this,
@@ -8478,7 +8577,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         if (messageReferences.length > 0)
             this._userMessageReferenceContents.add(bodyContent);
-        let currentBodyText = String(displayBody ?? '');
+        let currentBodyText = String(initialDisplayBody ?? '');
         let loadingRow = null;
         let workingRow = null;
         let hasToolResults = false;
@@ -8515,7 +8614,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
             currentBodyText = nextText;
             clearLoading();
             bodyContent.set_visible(true);
-            bodyContent.updateContent(nextText, { defer: isStreamingAssistant });
+            bodyContent.updateContent(nextText, {
+                defer: isStreamingAssistant || animateWelcomeMessage,
+            });
         };
         const startWorking = (startedAt) => {
             if (!isStreamingAssistant || workingRow)
@@ -8627,6 +8728,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         else
             this._lastAssistantMessageView = null;
 
+        if (animateWelcomeMessage)
+            this._startWelcomeMessageStream(messageView, displayBody);
+
         return messageView;
     }
 
@@ -8666,7 +8770,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             actions.append(this._createMessageActionButton('view-refresh-symbolic', 'Retry from message', () => {
                 this._retryFromMessage(message);
             }));
-        } else if (message.role === 'assistant') {
+        } else if (message.role === 'assistant' && !isWelcomeMessage(message)) {
             actions.append(this._createMessageActionButton('view-refresh-symbolic', 'Regenerate response', () => {
                 this._regenerateFromMessage(message);
             }));

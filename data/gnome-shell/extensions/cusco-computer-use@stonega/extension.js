@@ -12,14 +12,22 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 
 import {EmergencyStopController} from './emergencyStop.js';
 import {clutterKeySuffix} from './keyNames.js';
-import {describeComputerUseOperation, ellipsizeIndicatorStatus} from './indicatorStatus.js';
+import {
+    buildIndicatorShimmerMarkup,
+    describeComputerUseOperation,
+    ellipsizeIndicatorStatus,
+} from './indicatorStatus.js';
 import {activateWindowIfNeeded} from './windowFocus.js';
 
 const OBJECT_PATH = '/io/github/stonega/Cusco/ComputerUse';
-const PROTOCOL_VERSION = 6;
+const PROTOCOL_VERSION = 7;
+const CUSCO_DESKTOP_ID = 'io.github.stonega.Cusco.desktop';
 const MAX_TYPE_CHARACTERS = 10_000;
 const TEXT_FIELD_FOCUS_SETTLE_MS = 80;
 const CLIPBOARD_SETTLE_MS = 20;
+const SHIMMER_INTERVAL_MS = 90;
+const WINDOW_FOCUS_TIMEOUT_MS = 1_200;
+const WINDOW_FOCUS_POLL_MS = 40;
 
 const INTERFACE_XML = `
 <node>
@@ -184,16 +192,88 @@ function namedKeysym(name) {
     throw new Error(`Unsupported key: ${name}`);
 }
 
+class TextShimmerController {
+    constructor(label) {
+        this._label = label;
+        this._text = label.text ?? '';
+        this._active = false;
+        this._phase = 0;
+        this._sourceId = 0;
+        this._interfaceSettings = new Gio.Settings({
+            schema_id: 'org.gnome.desktop.interface',
+        });
+        this._settingsChangedId = this._interfaceSettings.connect(
+            'changed::enable-animations',
+            () => this._restart(),
+        );
+    }
+
+    _stopSource() {
+        if (!this._sourceId)
+            return;
+
+        GLib.Source.remove(this._sourceId);
+        this._sourceId = 0;
+    }
+
+    _render() {
+        this._label.clutter_text.set_markup(
+            buildIndicatorShimmerMarkup(this._text, this._phase),
+        );
+        this._phase += 1;
+    }
+
+    _restart() {
+        this._stopSource();
+        this._phase = 0;
+
+        if (!this._active
+            || !this._text
+            || !this._interfaceSettings.get_boolean('enable-animations')) {
+            this._label.text = this._text;
+            return;
+        }
+
+        this._render();
+        this._sourceId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT,
+            SHIMMER_INTERVAL_MS,
+            () => {
+                this._render();
+                return GLib.SOURCE_CONTINUE;
+            },
+        );
+    }
+
+    set(text, active = false) {
+        this._text = String(text ?? '');
+        this._active = Boolean(active);
+        this._restart();
+    }
+
+    destroy() {
+        this._stopSource();
+        if (this._settingsChangedId)
+            this._interfaceSettings.disconnect(this._settingsChangedId);
+        this._settingsChangedId = 0;
+        this._label.text = this._text;
+        this._label = null;
+        this._interfaceSettings = null;
+    }
+}
+
 class ComputerUseBridge {
-    constructor(indicator, statusLabel, setEmergencyStopActive) {
+    constructor(indicator, statusLabel, statusShimmer, setEmergencyStopActive) {
         this._indicator = indicator;
         this._statusLabel = statusLabel;
+        this._statusShimmer = statusShimmer;
         this._setEmergencyStopActive = setEmergencyStopActive;
         this._tracker = Shell.WindowTracker.get_default();
         this._clientSender = '';
         this._clientPid = 0;
         this._generation = 0;
         this._active = false;
+        this._status = statusLabel.text ?? '';
         const seat = Clutter.get_default_backend().get_default_seat();
         this._pointer = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
         this._keyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
@@ -202,7 +282,8 @@ class ComputerUseBridge {
     _setStatus(description) {
         const status = ellipsizeIndicatorStatus(description);
 
-        this._statusLabel.text = status;
+        this._status = status;
+        this._statusShimmer.set(status, this._active);
         this._indicator.accessible_name = `${status}. Click to stop computer use and return to Cusco.`;
     }
 
@@ -269,6 +350,27 @@ class ComputerUseBridge {
         );
     }
 
+    async _focusForCapture(window, generation) {
+        if (Main.overview?.visible)
+            Main.overview.hide();
+
+        this._activate(window);
+        const startedAt = GLib.get_monotonic_time();
+
+        while ((GLib.get_monotonic_time() - startedAt) / 1_000 < WINDOW_FOCUS_TIMEOUT_MS) {
+            if (generation !== this._generation)
+                throw new Error('Computer use was stopped.');
+            if (global.display.focus_window === window && !Main.overview?.visible)
+                return;
+
+            await delay(WINDOW_FOCUS_POLL_MS);
+        }
+
+        throw new Error(
+            `Could not focus ${window.get_title() ?? 'the target window'} for capture.`,
+        );
+    }
+
     _cancel() {
         this._generation += 1;
         this._active = false;
@@ -288,9 +390,15 @@ class ComputerUseBridge {
         this._cancel();
         this._exported?.emit_signal('StopRequested', null);
         const target = this._windows().find(window => window.get_pid() === this._clientPid)
-            ?? this._windows().find(window => this._tracker.get_window_app(window)?.get_id() === 'io.github.stonega.Cusco.desktop');
-        if (target)
+            ?? this._windows().find(
+                window => this._tracker.get_window_app(window)?.get_id() === CUSCO_DESKTOP_ID,
+            );
+        if (target) {
             this._activate(target);
+            return;
+        }
+
+        Shell.AppSystem.get_default().lookup_app(CUSCO_DESKTOP_ID)?.activate();
     }
 
     RegisterAsync([pid], invocation) {
@@ -333,6 +441,7 @@ class ComputerUseBridge {
                 workspaceSwitching: true,
                 workspaceCreation: true,
                 windowWorkspaceMovement: true,
+                atomicWindowWorkspaceCreation: true,
                 windowMaximizing: true,
             }));
         } catch (error) {
@@ -343,9 +452,12 @@ class ComputerUseBridge {
     SetActiveAsync([active], invocation) {
         try {
             this._requireClient(invocation);
-            if (active && !this._active)
-                this._setStatus(describeComputerUseOperation('active'));
+            const wasActive = this._active;
             this._active = Boolean(active);
+            if (this._active && !wasActive)
+                this._setStatus(describeComputerUseOperation('active'));
+            else if (!this._active)
+                this._statusShimmer.set(this._status, false);
             this._setEmergencyStopActive(this._active);
             if (!active)
                 this._generation += 1;
@@ -387,10 +499,8 @@ class ComputerUseBridge {
             this._setStatus(describeComputerUseOperation('capture', {
                 windowTitle: window.get_title(),
             }));
-            if (activate) {
-                this._activate(window);
-                await delay(180);
-            }
+            if (activate)
+                await this._focusForCapture(window, generation);
             if (generation !== this._generation)
                 throw new Error('Computer use was stopped.');
             const rect = window.get_frame_rect();
@@ -568,7 +678,7 @@ class ComputerUseBridge {
             const isGlobalKeyboardAction = !hasWindowId
                 && (action === 'keypress' || action === 'paste_text' || action === 'type');
             const window = isGlobalKeyboardAction ? null : this._window(request.windowId);
-            const targetWorkspace = action === 'move_to_workspace'
+            let targetWorkspace = action === 'move_to_workspace'
                 ? this._workspace(request.workspaceIndex)
                 : null;
 
@@ -577,7 +687,9 @@ class ComputerUseBridge {
                 windowTitle: window?.get_title(),
             }));
 
-            if (window && action !== 'move_to_workspace') {
+            if (window
+                && action !== 'move_to_workspace'
+                && action !== 'move_to_new_workspace') {
                 const activated = this._activate(window);
 
                 if (activated)
@@ -597,6 +709,15 @@ class ComputerUseBridge {
                 targetWorkspace.activate(eventTime());
                 this._activate(window);
                 break;
+            case 'move_to_new_workspace': {
+                const manager = global.workspace_manager;
+                targetWorkspace = manager.append_new_workspace(false, eventTime())
+                    ?? manager.get_active_workspace();
+                window.change_workspace(targetWorkspace);
+                targetWorkspace.activate(eventTime());
+                this._activate(window);
+                break;
+            }
             case 'move':
                 coordinates = this._point(window, request);
                 this._move(coordinates);
@@ -666,8 +787,11 @@ class ComputerUseBridge {
                 throw new Error(`Unsupported action: ${action}`);
             }
 
-            if (action === 'maximize' || action === 'move_to_workspace')
+            if (action === 'maximize'
+                || action === 'move_to_workspace'
+                || action === 'move_to_new_workspace') {
                 await delay(120);
+            }
             if (generation !== this._generation)
                 throw new Error('Computer use was stopped.');
 
@@ -687,7 +811,8 @@ class ComputerUseBridge {
                     : (record.canMaximize
                         ? 'The maximize request was dispatched but the window is not maximized.'
                         : 'This window does not support maximizing.');
-            } else if (action === 'move_to_workspace') {
+            } else if (action === 'move_to_workspace'
+                || action === 'move_to_new_workspace') {
                 verified = record.workspaceIndex === targetWorkspace.index();
                 verificationReason = verified
                     ? `The window is on workspace ${targetWorkspace.index()}.`
@@ -746,6 +871,7 @@ export default class CuscoComputerUseExtension extends Extension {
         this._indicator.add_child(content);
         this._indicator.visible = false;
         Main.panel.addToStatusArea(this.uuid, this._indicator, 0, 'center');
+        this._statusShimmer = new TextShimmerController(this._statusLabel);
 
         this._emergencyStop = new EmergencyStopController(this._indicator, {
             display: global.display,
@@ -758,6 +884,7 @@ export default class CuscoComputerUseExtension extends Extension {
         this._bridge = new ComputerUseBridge(
             this._indicator,
             this._statusLabel,
+            this._statusShimmer,
             active => this._emergencyStop?.setActive(active),
         );
         this._bridge._exported = Gio.DBusExportedObject.wrapJSObject(INTERFACE_XML, this._bridge);
@@ -790,9 +917,11 @@ export default class CuscoComputerUseExtension extends Extension {
         this._nameOwnerSignal = 0;
         this._bridge?._exported?.unexport();
         this._emergencyStop?.destroy();
+        this._statusShimmer?.destroy();
         this._indicator?.destroy();
         this._bridge = null;
         this._emergencyStop = null;
+        this._statusShimmer = null;
         this._indicator = null;
         this._statusLabel = null;
     }

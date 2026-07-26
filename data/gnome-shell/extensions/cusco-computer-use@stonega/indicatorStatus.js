@@ -1,4 +1,7 @@
+import GLib from 'gi://GLib';
+
 export const MAX_INDICATOR_STATUS_CHARACTERS = 36;
+const SHIMMER_EDGE_PADDING = 3;
 
 function normalizedText(value) {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -15,6 +18,32 @@ export function ellipsizeIndicatorStatus(value, maximum = MAX_INDICATOR_STATUS_C
         return '…';
 
     return `${characters.slice(0, limit - 1).join('').trimEnd()}…`;
+}
+
+export function buildIndicatorShimmerMarkup(value, phase = 0) {
+    const characters = [...String(value ?? '')];
+
+    if (characters.length === 0)
+        return '';
+
+    const cycleLength = characters.length + SHIMMER_EDGE_PADDING * 2;
+    const normalizedPhase = ((Math.floor(Number(phase) || 0) % cycleLength) + cycleLength)
+        % cycleLength;
+    const highlightPosition = normalizedPhase - SHIMMER_EDGE_PADDING;
+
+    return characters.map((character, index) => {
+        const distance = Math.abs(index - highlightPosition);
+        let alpha = 68;
+
+        if (distance < 0.5)
+            alpha = 100;
+        else if (distance < 1.5)
+            alpha = 90;
+        else if (distance < 2.5)
+            alpha = 78;
+
+        return `<span alpha="${alpha}%">${GLib.markup_escape_text(character, -1)}</span>`;
+    }).join('');
 }
 
 export function describeComputerUseOperation(operation, details = {}) {
@@ -43,6 +72,9 @@ export function describeComputerUseOperation(operation, details = {}) {
         description = workspaceNumber
             ? `Moving ${target} to workspace ${workspaceNumber}`
             : `Moving ${target} to workspace`;
+        break;
+    case 'move_to_new_workspace':
+        description = `Moving ${target} to a new workspace`;
         break;
     case 'focus':
         description = `Focusing ${target}`;

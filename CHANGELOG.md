@@ -7,6 +7,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Sudo password prompts now send a desktop notification when Cusco is not active.
+- Active computer-use job descriptions now shimmer in the GNOME panel, and clicking the indicator returns to Cusco.
+
+### Changed
+
+- Agents now automatically exit computer use and hide its GNOME top-bar indicator once desktop control is no longer needed.
+- Computer use now reuses suitable existing windows and can move one to a fresh workspace atomically, avoiding GNOME dynamic-workspace index churn.
+- Enlarged computer-use screenshots now use a clearer grid and concise center-targeting guidance.
+- The welcome chat now opens with one concise, gently streamed quick-start message without a regenerate button.
+
+### Fixed
+
+- API-key saves and removals no longer freeze the window while Secret Service is working.
+- Composer provider and model labels now remain readable on light themes.
+- Bundled symbolic toolbar icons and the scalable application icon now load correctly from release packages.
+- Missed clicks inside an enlarged region now keep that crop visible for one centered retry instead of falling back to the full window.
+- Popup loop detection now survives unchanged option misses and manual region observations.
+- Active window capture now waits for verified focus and hides GNOME Overview instead of returning unrelated desktop pixels.
+
 ## [0.5.21] - 2026-07-24
 
 ### Changed

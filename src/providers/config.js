@@ -1247,13 +1247,13 @@ export class ProviderConfigStore {
         return { ...this._webSearchApiKeyStatus };
     }
 
-    setWebSearchApiKey(apiKey) {
+    async setWebSearchApiKey(apiKey) {
         const normalizedApiKey = String(apiKey ?? '').trim();
 
         if (!normalizedApiKey)
             return this.clearWebSearchApiKey();
 
-        this._apiKeyStore.store(
+        await this._apiKeyStore.store(
             this._webSearchConfig.id,
             this._webSearchConfig.name,
             normalizedApiKey,
@@ -1262,8 +1262,8 @@ export class ProviderConfigStore {
         return this.getWebSearchApiKeyStatus();
     }
 
-    clearWebSearchApiKey() {
-        this._apiKeyStore.clear(this._webSearchConfig.id);
+    async clearWebSearchApiKey() {
+        await this._apiKeyStore.clear(this._webSearchConfig.id);
         this.refreshApiKeyStatus();
         return this.getWebSearchApiKeyStatus();
     }
@@ -1365,7 +1365,7 @@ export class ProviderConfigStore {
         return { ...status };
     }
 
-    setApiKey(providerId, apiKey) {
+    async setApiKey(providerId, apiKey) {
         const provider = this.getProvider(providerId);
 
         if (!provider)
@@ -1379,23 +1379,23 @@ export class ProviderConfigStore {
         if (!normalizedApiKey)
             return this.clearApiKey(providerId);
 
-        this._apiKeyStore.store(provider.id, provider.name, normalizedApiKey);
+        await this._apiKeyStore.store(provider.id, provider.name, normalizedApiKey);
         this.refreshApiKeyStatus();
         return this.getApiKeyStatus(provider.id);
     }
 
-    clearApiKey(providerId) {
+    async clearApiKey(providerId) {
         const provider = this.getProvider(providerId);
 
         if (!provider)
             throw new Error(`Provider does not exist: ${providerId}`);
 
-        this._apiKeyStore.clear(provider.id);
+        await this._apiKeyStore.clear(provider.id);
         this.refreshApiKeyStatus();
         return this.getApiKeyStatus(provider.id);
     }
 
-    addCustomProvider({ name, baseUrl, models = [], apiKey = '' } = {}) {
+    async addCustomProvider({ name, baseUrl, models = [], apiKey = '' } = {}) {
         let providerId;
 
         do {
@@ -1411,7 +1411,7 @@ export class ProviderConfigStore {
         const normalizedApiKey = String(apiKey ?? '').trim();
 
         if (normalizedApiKey)
-            this._apiKeyStore.store(provider.id, provider.name, normalizedApiKey);
+            await this._apiKeyStore.store(provider.id, provider.name, normalizedApiKey);
 
         this._configs.push(provider);
         this.refreshApiKeyStatus();
@@ -1420,7 +1420,7 @@ export class ProviderConfigStore {
         return this.listProviders().find((item) => item.id === provider.id);
     }
 
-    removeCustomProvider(providerId) {
+    async removeCustomProvider(providerId) {
         const providerIndex = this._configs.findIndex((provider) => provider.id === providerId);
         const provider = this._configs[providerIndex];
 
@@ -1430,7 +1430,7 @@ export class ProviderConfigStore {
         if (!provider.customizable)
             throw new Error(`Provider is not customizable: ${providerId}`);
 
-        this._apiKeyStore.clear(provider.id);
+        await this._apiKeyStore.clear(provider.id);
         this._configs.splice(providerIndex, 1);
         this._apiKeyStatuses.delete(provider.id);
 

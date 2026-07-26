@@ -39,6 +39,11 @@ const nativeToolPrompt = buildAgentModeSystemPrompt([
         label: 'Zoom into desktop window region',
         permissionPolicy: 'ask',
     },
+    {
+        name: 'computer_exit',
+        label: 'Exit computer use',
+        permissionPolicy: 'allow',
+    },
 ], { nativeToolCalling: true });
 
 if (DEFAULT_AGENT_MAX_ITERATIONS < 100
@@ -63,8 +68,9 @@ if (!nativeSearchPrompt.includes('Provider-managed tools are enabled: google_sea
 if (!nativeToolPrompt.includes('native function-calling interface')
     || !nativeToolPrompt.includes('call ask_user instead of asking in ordinary assistant text')
     || !nativeToolPrompt.includes('prefer computer_step')
-    || !nativeToolPrompt.includes('first call computer_act with create_workspace')
-    || !nativeToolPrompt.includes('maximize it when canMaximize is true')
+    || !nativeToolPrompt.includes('reuse a suitable existing window on its current workspace')
+    || !nativeToolPrompt.includes('move_to_new_workspace')
+    || !nativeToolPrompt.includes('Maximize the target when canMaximize is true')
     || !nativeToolPrompt.includes('prefer keypress Down followed by Return')
     || !nativeToolPrompt.includes('include an expect entry')
     || !nativeToolPrompt.includes('coordinate click without a matching expectation as unverified')
@@ -74,6 +80,9 @@ if (!nativeToolPrompt.includes('native function-calling interface')
     || !nativeToolPrompt.includes('autoZoom.applied')
     || !nativeToolPrompt.includes('visualStateCycleDetected')
     || !nativeToolPrompt.includes('single automatically enlarged view')
+    || !nativeToolPrompt.includes('retainedRegion.applied')
+    || !nativeToolPrompt.includes('click the visual center')
+    || !nativeToolPrompt.includes('simultaneous chord, not a sequence')
     || !nativeToolPrompt.includes('prefer native paste_text over direct simulated typing')
     || !nativeToolPrompt.includes('copies the complete value to the clipboard')
     || !nativeToolPrompt.includes('sensitive values that should not enter clipboard history')
@@ -95,7 +104,10 @@ if (!nativeToolPrompt.includes('native function-calling interface')
     || !nativeToolPrompt.includes('whether the task succeeded or failed')
     || !nativeToolPrompt.includes('Cusco window and its workspaceIndex')
     || !nativeToolPrompt.includes('computer_act with switch_workspace for that workspace')
-    || !nativeToolPrompt.includes('last computer-use action computer_act with focus for the Cusco window')
+    || !nativeToolPrompt.includes('last desktop-control action computer_act with focus for the Cusco window')
+    || !nativeToolPrompt.includes('call computer_exit automatically')
+    || !nativeToolPrompt.includes('Do not ask the user whether to exit')
+    || !nativeToolPrompt.includes('final computer-use tool')
     || nativeToolPrompt.includes('<cusco_tool_call>')) {
     throw new Error('Native Agent Mode prompt mixed native and XML tool protocols');
 }

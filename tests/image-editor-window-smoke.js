@@ -13,6 +13,14 @@ function assert(condition, message) {
         throw new Error(message);
 }
 
+function imageUsesIcon(image, iconName) {
+    if (image?.get_icon_name() === iconName)
+        return true;
+
+    const iconFile = image?.get_gicon?.()?.get_file?.();
+    return iconFile?.get_basename() === `${iconName}.svg`;
+}
+
 function removeTree(path) {
     const file = Gio.File.new_for_path(path);
     const type = file.query_file_type(Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
@@ -104,7 +112,7 @@ if (Gtk.init_check()) {
     assert(viewer._drawButton.get_icon_name() === 'document-edit-symbolic'
         && !viewer._drawButton.get_label(),
     'Draw is not an icon-only header button');
-    assert(viewer._cropButton.get_child()?.get_icon_name() === 'crop-symbolic'
+    assert(imageUsesIcon(viewer._cropButton.get_child(), 'crop-symbolic')
         && !viewer._cropButton.get_label(),
     'Crop is not an icon-only header button');
     assert(viewer.get_transient_for() === parent,
@@ -153,8 +161,9 @@ if (Gtk.init_check()) {
     ]);
     for (const [tool, expectedIcon] of expectedToolIcons) {
         const toolButton = viewer._toolButtons.get(tool);
-        const iconName = toolButton.get_icon_name() ?? toolButton.get_child()?.get_icon_name();
-        assert(iconName === expectedIcon && !toolButton.get_label(),
+        assert((imageUsesIcon(toolButton, expectedIcon)
+            || imageUsesIcon(toolButton.get_child(), expectedIcon))
+            && !toolButton.get_label(),
             `${tool} is not an icon-only annotation tool button`);
     }
     assert(viewer._colorButtons.length === 12

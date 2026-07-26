@@ -99,9 +99,17 @@
 }
 
 .cusco-floating-composer .cusco-composer-meta button {
+    color: @window_fg_color;
     background-color: @view_bg_color;
     background-image: none;
     box-shadow: 0 1px 3px alpha(@window_fg_color, 0.14);
+}
+
+.cusco-floating-composer .cusco-composer-meta button label,
+.cusco-floating-composer .cusco-composer-meta combobox,
+.cusco-floating-composer .cusco-composer-meta combobox button,
+.cusco-floating-composer .cusco-composer-meta combobox cellview {
+    color: @window_fg_color;
 }
 
 .cusco-floating-composer .cusco-composer-meta button:hover,

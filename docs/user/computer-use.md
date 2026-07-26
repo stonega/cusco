@@ -118,18 +118,22 @@ Behind the scenes the agent follows this tool workflow:
 4. `computer_step` performs one or more safe actions and returns the updated
    screenshot in the same tool call. When a click opens a small popup or other
    localized surface, the returned model image is automatically enlarged so
-   its options are easier to target. It also reports unchanged screens and
+   its options are easier to target. When a click inside an enlarged region
+   misses, Cusco retains that same crop and asks for one centered retry instead
+   of falling back to the full window. It also reports unchanged screens and
    repeated open/close cycles so the agent can stop retrying a missed target.
 5. `computer_act` creates and switches workspaces, launches through global
    keyboard input, and performs individual actions that do not need an
    immediate screenshot.
+6. `computer_exit` ends desktop control and hides the top-panel indicator after
+   the agent has returned to Cusco.
 
-When the agent launches an application, its Computer Use rule first creates
-and activates a new workspace. After the new window appears, the agent checks
-that it is on that workspace, moves it there if necessary, and maximizes it
-when the window supports maximizing. If workspace creation is unavailable, the
-agent should report that constraint instead of silently launching on an
-occupied workspace.
+Before launching an application, the agent lists the desktop and reuses a
+suitable existing window on its current workspace. It creates a workspace only
+when a genuinely new application must be launched. If an existing window must
+be isolated, `move_to_new_workspace` creates the workspace and moves the window
+in one Shell action so GNOME's dynamic workspace indices cannot change between
+the two operations. The agent maximizes the target when supported.
 
 Before using Google Chrome or Chromium, the agent checks the visible profile
 picker or profile menu when the request did not name a profile. If more than
@@ -149,11 +153,15 @@ The agent receives a fresh screenshot and observation ID and replans from the
 new state.
 
 Grid lines and labels are targeting aids added by Cusco; they are not part of
-the application. Region observations use their own local `0`–`1000` space and
+the application. Coordinates may be any value from `0` to `1000`; the agent
+targets the visual center of a control instead of snapping to a grid line or
+border. Full-window observations include minor lines every 50 units, while
+enlarged regions use only the labeled 100-unit grid so small control boundaries
+remain clear. Region observations use their own local coordinate space and
 Cusco maps the point back to the full window automatically. After two visual
 actions leave the screen meaningfully unchanged, further full-window
-coordinate targeting is blocked until the agent changes strategy. Small
-cursor or caret changes are ignored by this check.
+coordinate targeting is blocked until the agent changes strategy. Small cursor
+or caret changes are ignored by this check.
 
 After a click, Cusco also measures where meaningful pixels changed. If the
 change is compact and anchored near the click, it keeps the full clean
@@ -162,7 +170,15 @@ The returned observation ID belongs to that crop, so the next click uses its
 local `0`–`1000` coordinates. Cusco does not send both full and enlarged model
 images. If the UI alternates through the same two visual states, such as a
 popup repeatedly opening and closing, full-window retries are blocked and the
-agent must use the current crop or a different strategy.
+agent must use the current crop or a different strategy. Consecutive unchanged
+states are collapsed, so a missed option click between opening and closing the
+popup does not hide the loop.
+
+An unchanged coordinate action is reported as a likely miss. If it came from a
+region, the post-action screenshot retains that region with a new observation
+ID. The agent gets one centered retry without reopening the trigger. A changed
+screen without a matching semantic expectation remains changed but unverified;
+closing the wrong popup is not treated as confirmed progress.
 
 An arbitrary explicit `click` cannot be batched with later text input or key
 presses. When accessibility is unavailable, the agent can instead send one
@@ -215,12 +231,13 @@ so Cusco always keeps the application-independent visual fallback available.
 | `focus` | Focuses and unminimizes a window. |
 | `maximize` | Maximizes a window when the application supports it. |
 | `move_to_workspace` | Moves a window to a workspace by zero-based index. |
+| `move_to_new_workspace` | Atomically creates a workspace and moves an existing window into it. |
 | `move` | Moves the pointer to a window-relative position. |
 | `click` | Clicks the left, middle, or right pointer button. |
 | `double_click` | Double-clicks at a position. |
 | `paste_text` | Copies a complete non-sensitive value to the clipboard and pastes it into the current focus, or atomically clicks `x`,`y` first. Use `replace: true` to select all existing field text. |
 | `type` | Types into the current focus, or atomically clicks `x`,`y` and types when it is the only `computer_step` action. Use `replace: true` to select all existing field text first. |
-| `keypress` | Sends a key or shortcut such as `CTRL` + `L`. |
+| `keypress` | Sends one key or simultaneous shortcut such as `CTRL` + `L`; sequential navigation uses separate actions. |
 | `scroll` | Scrolls horizontally or vertically at a position. |
 | `drag` | Drags from one window-relative position to another. |
 | `switch_workspace` | Activates a GNOME workspace by its zero-based index. |
@@ -253,7 +270,7 @@ action, so the key does not continue into Chrome or another controlled app.
 
 | Setting | Effect |
 |---|---|
-| Enable computer use | Registers the five `computer_*` tools for Agent mode. |
+| Enable computer use | Registers the six `computer_*` tools for Agent mode. |
 | Allow window capture | Allows a selected window to be focused and captured. |
 | Allow pointer and keyboard input | Allows focus, clicks, typing, shortcuts, scrolling, and dragging. |
 | Allow workspace switching | Allows workspace creation, activation, and window moves; input control must also be enabled. |

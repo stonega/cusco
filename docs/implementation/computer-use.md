@@ -24,7 +24,7 @@ or `wtype` layers. Attribution and the pinned upstream revision are in
 Chat with Agent enabled
         │
         ▼
-computer_list / computer_observe / computer_observe_region / computer_step / computer_act
+computer_list / computer_observe / computer_observe_region / computer_step / computer_act / computer_exit
         │
         ▼
 ComputerUseService (Cusco process)
@@ -56,7 +56,7 @@ The extension exports this interface on the user's session bus:
 Bus name:   org.gnome.Shell
 Object:     /io/github/stonega/Cusco/ComputerUse
 Interface:  io.github.stonega.Cusco.ComputerUse
-Protocol:   4
+Protocol:   7
 ```
 
 The extension exports an object under GNOME Shell's existing bus name; it does
@@ -77,7 +77,7 @@ an `UnknownMethod` or “Object does not exist” error even while
 | `StopRequested` | Tells Cusco that the Shell stop control was clicked. |
 
 Payloads are JSON strings inside typed D-Bus parameters. App and extension
-both require protocol version `6`; a version mismatch is shown in settings
+both require protocol version `7`; a version mismatch is shown in settings
 instead of allowing actions against an incompatible bridge. The version covers
 the method set and input semantics, so either kind of compatibility change must
 bump both sides even when the JSON shape itself is unchanged.
@@ -116,10 +116,12 @@ Skip-taskbar windows are omitted.
 ### 2. Observe
 
 `computer_observe` requires capture permission and a window ID from the list.
-The extension unminimizes and focuses the window only when it is not already
-focused, waits briefly for it to settle, then captures its frame rectangle
-with `Shell.Screenshot`. Avoiding redundant activation preserves the focused
-child control in browsers and other multi-process applications.
+The extension hides GNOME Overview when necessary, unminimizes and activates
+the target, then polls until the window is focused before capturing its frame
+rectangle with `Shell.Screenshot`. Capture fails instead of returning unrelated
+desktop pixels when focus cannot be established within the bounded timeout.
+Avoiding redundant activation preserves the focused child control in browsers
+and other multi-process applications.
 
 The extension returns base64 PNG data over D-Bus. The service:
 
@@ -136,10 +138,13 @@ The extension returns base64 PNG data over D-Bus. The service:
 7. attaches the gridded copy to the next model turn while retaining the clean
    path for UI display, cropping, and verification.
 
-The grid uses `0`–`1000` independently on both axes, with major lines every
-100 units and minor lines every 50 units. It never changes image dimensions,
-adds padding, or participates in the screenshot fingerprint. If grid rendering
-fails, capture remains usable and the clean image is attached as a fallback.
+The grid uses `0`–`1000` independently on both axes. Full-window images have
+major lines every 100 units and minor lines every 50 units. Enlarged regions
+omit the minor lines so models are less likely to snap small targets to a
+border; arbitrary coordinate values remain valid. The grid never changes image
+dimensions, adds padding, or participates in the screenshot fingerprint. If
+grid rendering fails, capture remains usable and the clean image is attached
+as a fallback.
 
 When the target application exposes AT-SPI, the observation also contains a
 bounded list of visible interactive elements. Each element has an
@@ -176,6 +181,12 @@ observation remains registered as the root for stale-state checks and exact
 mapping, but only the enlarged region is attached to the next model turn. The
 result exposes `autoZoom.applied`, the root change bounds, trigger point, and
 effective region.
+
+When an action made from a region leaves the screen unchanged and no automatic
+change crop applies, `computer_step` derives the same effective region from the
+new full capture and returns it as `retained_action_region`. The response sets
+`retainedRegion.applied` and `verification.likelyCoordinateMiss`, allowing one
+new center-point attempt without losing popup context or reopening its trigger.
 
 ### 4. Step
 
@@ -214,13 +225,15 @@ unchanged coordinate steps, full-window coordinate targeting is blocked. A
 region observation, semantic action, keyboard strategy, fresh explicit
 observation, or user help provides a deliberate recovery path.
 
-Per-window visual-state history also detects a repeating two-state cycle once
-the last four post-click states form `A → B → A → B`. This catches popup
-open/close loops that ordinary stall detection misses because every transition
-changes pixels. The result reports `visualStateCycleDetected`, cycle length
-`2`, and block reason `visual_state_cycle`. Full-window coordinate retries are
-blocked, while the automatically returned region remains usable so the agent
-can select from the current enlarged popup state.
+Per-window visual-state history collapses consecutive equivalent states and
+detects a repeating two-state cycle once the distinct post-click states form
+`A → B → A → B`. This catches popup open/miss/close/reopen loops that ordinary
+stall detection misses because the meaningful transitions change pixels. A
+manual region observation preserves cycle history. The result reports
+`visualStateCycleDetected`, cycle length `2`, and block reason
+`visual_state_cycle`. Full-window coordinate retries are blocked, while the
+automatically returned region remains usable so the agent can select from the
+current enlarged popup state.
 
 The passive stale-state check narrows but cannot eliminate runtime races after
 the check, such as a window closing or the Shell rejecting an action after
@@ -262,7 +275,10 @@ a machine-readable value mismatch.
 Before attaching a step or observation image to the provider, Cusco removes
 older computer-use image attachments from the live Agent runtime. Textual tool
 history remains available, but only the latest desktop screenshot consumes
-image context.
+image context. Model-facing observation and step transcripts omit screenshot
+paths, byte counts, desktop coordinates, and timing details; they lead with an
+outcome and next-action instruction while the full structured result remains
+available inside Cusco.
 
 ### 5. Act
 
@@ -287,15 +303,19 @@ The Shell side uses Clutter virtual devices for pointer and keyboard events.
 Before capture or input it activates the target only when the window is not
 already focused; repeated activation must not replace a focused web control
 with browser chrome focus.
-Supported actions are `focus`, `move`, `click`, `double_click`, `paste_text`, `type`,
-`keypress`, `scroll`, `drag`, `create_workspace`, `switch_workspace`,
-`move_to_workspace`, and `maximize`. Global `paste_text`, `type`, and `keypress` actions may
-omit a window ID, allowing the GNOME overview to launch an app without
+Supported actions are `focus`, `move`, `click`, `double_click`, `paste_text`,
+`type`, `keypress`, `scroll`, `drag`, `create_workspace`, `switch_workspace`,
+`move_to_workspace`, `move_to_new_workspace`, and `maximize`. A `keypress`
+array is one simultaneous chord; sequential menu navigation uses separate
+actions in the same step. Global `paste_text`, `type`, and `keypress` actions
+may omit a window ID, allowing GNOME Overview to launch an app without
 reactivating a window on an older workspace.
 
-The Agent prompt treats app launch as a guarded sequence: create and activate
-a workspace, launch there, list the resulting windows, move the new window
-back if the application placed it elsewhere, and maximize it when supported.
+The Agent prompt lists first and reuses a suitable existing window on its
+current workspace. It creates a workspace only for a genuinely new app launch.
+`move_to_new_workspace` appends a dynamic workspace and moves an existing
+window before yielding back to the Shell main loop, avoiding index churn
+between separate create and move calls.
 
 ## Settings and permission layers
 
