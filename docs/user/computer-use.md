@@ -20,7 +20,7 @@ grant only the access needed for a task.
 
 Computer use does not support X11, KDE, Hyprland, macOS, or Windows.
 
-## Install and enable the GNOME extension
+## Install the GNOME extension
 
 The application and Shell extension must be installed under a prefix GNOME
 searches. For a per-user source install, use `$HOME/.local`:
@@ -51,10 +51,10 @@ On Wayland, **fully log out of GNOME and log back in** after the first install
 or after replacing the extension. Closing Cusco, opening a new terminal, or
 using Alt+F2 `r` does not restart GNOME Shell on Wayland.
 
-After logging back in, enable and verify the extension:
+After logging back in, turn on Computer Use in Cusco. Cusco automatically
+enables the extension for the current user. You can then verify it with:
 
 ```sh
-gnome-extensions enable cusco-computer-use@stonega
 gnome-extensions info cusco-computer-use@stonega
 ```
 
@@ -78,14 +78,15 @@ scripts/update-computer-use-extension.sh --build-only
 ```
 
 The bundle is written beneath `builddir/gnome-shell-extension/`. After an
-update, fully log out of GNOME and log back in, enable the extension, and
-restart Cusco as described above.
+update, fully log out of GNOME and log back in, then restart Cusco and turn
+Computer Use off and on again.
 
 ## Turn on computer use in Cusco
 
 1. Start the installed Cusco application.
 2. Open **Settings → Workspace → Computer Use**.
-3. Turn on **Enable computer use**.
+3. Turn on **Enable computer use**. Cusco enables its GNOME Shell extension
+   automatically for the current user.
 4. Turn on **Allow window capture** if the agent should see windows.
 5. Turn on **Allow pointer and keyboard input** if the agent should interact
    with windows.
@@ -287,11 +288,11 @@ First check that the extension file exists:
 ls "$HOME/.local/share/gnome-shell/extensions/cusco-computer-use@stonega/extension.js"
 ```
 
-If it exists, fully log out and log back in, then run:
+If it exists, fully log out and log back in, then turn Computer Use off and
+on again. Verify that GNOME Shell discovered the extension with:
 
 ```sh
 gnome-extensions list | grep '^cusco-computer-use@stonega$'
-gnome-extensions enable cusco-computer-use@stonega
 ```
 
 If the file does not exist, reinstall Cusco with the `$HOME/.local` prefix as
@@ -304,8 +305,8 @@ loaded the extension and therefore has not created
 `/io/github/stonega/Cusco/ComputerUse`.
 
 1. Fully log out and log back in.
-2. Enable the extension with `gnome-extensions enable`.
-3. Restart Cusco.
+2. Restart Cusco.
+3. Turn Computer Use off and on again so Cusco enables the extension.
 4. In **Settings → Workspace → Computer Use**, click the refresh button beside
    **GNOME Shell integration**.
 

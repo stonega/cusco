@@ -370,11 +370,9 @@ Meson installs the extension directory below:
 For a user build, `<prefix>` should normally be `$HOME/.local`. A running
 Wayland Shell does not necessarily rescan a directory copied there during the
 session. A full logout/login is required after the first raw install or an
-extension replacement, followed by:
-
-```sh
-gnome-extensions enable cusco-computer-use@stonega
-```
+extension replacement. When the user turns on Computer Use, the app runs
+`gnome-extensions enable cusco-computer-use@stonega` in the user's session
+before checking the D-Bus integration status.
 
 For extension-only development, `scripts/update-computer-use-extension.sh`
 packages this directory and updates the current user's installed extension
@@ -383,11 +381,15 @@ to create the bundle without installing it.
 
 Until the extension is loaded, GNOME Shell owns `org.gnome.Shell` but the
 Cusco object path does not exist. The app converts that D-Bus failure into an
-installation/enablement hint in the settings status row.
+installation/loading hint in the settings status row. Automatic enable
+failures, including a missing extension or `gnome-extensions` command, also
+appear in that row.
 
 ## Failure behavior
 
 - Unsupported desktop/session: rejected before contacting D-Bus.
+- Extension enable failure: reported in Settings without blocking the GTK
+  main loop.
 - Computer use disabled: all operations are rejected app-side.
 - Capability disabled: capture, input, or workspace switching is rejected
   independently.

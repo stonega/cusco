@@ -25,10 +25,12 @@ import {
 export const COMPUTER_USE_BUS_NAME = 'org.gnome.Shell';
 export const COMPUTER_USE_OBJECT_PATH = '/io/github/stonega/Cusco/ComputerUse';
 export const COMPUTER_USE_INTERFACE = 'io.github.stonega.Cusco.ComputerUse';
+export const COMPUTER_USE_EXTENSION_UUID = 'cusco-computer-use@stonega';
 export const COMPUTER_USE_PROTOCOL_VERSION = 7;
 export const COMPUTER_USE_AGENT_PROTOCOL_VERSION = 4;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const EXTENSION_ENABLE_TIMEOUT_SECONDS = 10;
 const MAX_SCREENSHOT_BYTES = 25 * 1024 * 1024;
 const MAX_MODEL_SCREENSHOT_DIMENSION = 1600;
 const MAX_STEP_SETTLE_MS = 2_000;
@@ -67,7 +69,7 @@ function integrationErrorMessage(error) {
     const message = details.rawMessage;
 
     if (/UnknownMethod|UnknownObject|Object does not exist|No such interface/i.test(message)) {
-        return 'GNOME Shell integration is not installed, enabled, or loaded. Install the current Cusco build, log out and back in, then enable cusco-computer-use@stonega.';
+        return 'GNOME Shell integration is not installed or loaded. Install the current Cusco build, then log out and back in so GNOME Shell can discover it.';
     }
 
     if (/ServiceUnknown|NameHasNoOwner/i.test(message))
@@ -129,6 +131,84 @@ function callProxy(proxy, method, parameters = null, cancellable = null, timeout
                 }
             },
         );
+    });
+}
+
+function enableComputerUseShellExtension() {
+    const program = GLib.find_program_in_path('gnome-extensions');
+
+    if (!program) {
+        return Promise.reject(createUserError(
+            'Could not automatically enable GNOME Shell integration because gnome-extensions was not found.',
+        ));
+    }
+
+    return new Promise((resolve, reject) => {
+        let subprocess;
+
+        try {
+            subprocess = Gio.Subprocess.new(
+                [program, 'enable', COMPUTER_USE_EXTENSION_UUID],
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+            );
+        } catch (error) {
+            reject(createUserError(
+                `Could not automatically enable GNOME Shell integration: ${error.message}`,
+                { cause: error },
+            ));
+            return;
+        }
+
+        let timedOut = false;
+        let timeoutId = GLib.timeout_add_seconds(
+            GLib.PRIORITY_DEFAULT,
+            EXTENSION_ENABLE_TIMEOUT_SECONDS,
+            () => {
+                timedOut = true;
+                timeoutId = 0;
+                subprocess.force_exit();
+                return GLib.SOURCE_REMOVE;
+            },
+        );
+
+        subprocess.communicate_utf8_async(null, null, (_process, result) => {
+            let stdout = '';
+            let stderr = '';
+
+            if (timeoutId)
+                GLib.source_remove(timeoutId);
+
+            try {
+                [, stdout, stderr] = subprocess.communicate_utf8_finish(result);
+            } catch (error) {
+                reject(createUserError(
+                    timedOut
+                        ? 'GNOME Shell integration did not enable before the operation timed out.'
+                        : `Could not automatically enable GNOME Shell integration: ${error.message}`,
+                    { cause: error },
+                ));
+                return;
+            }
+
+            if (timedOut) {
+                reject(createUserError(
+                    'GNOME Shell integration did not enable before the operation timed out.',
+                ));
+                return;
+            }
+
+            if (!subprocess.get_if_exited() || subprocess.get_exit_status() !== 0) {
+                const detail = String(stderr || stdout || '').trim();
+                reject(createUserError(
+                    detail
+                        ? `Could not automatically enable GNOME Shell integration: ${detail}`
+                        : 'Could not automatically enable GNOME Shell integration.',
+                ));
+                return;
+            }
+
+            resolve();
+        });
     });
 }
 
@@ -582,6 +662,7 @@ export class ComputerUseService {
     constructor(options = {}) {
         this._settings = options.settings;
         this._environmentStatus = options.environmentStatus ?? environmentStatus;
+        this._enableShellExtension = options.enableShellExtension ?? enableComputerUseShellExtension;
         this._onActiveChanged = options.onActiveChanged ?? (() => {});
         this._onStopRequested = options.onStopRequested ?? (() => {});
         this._accessibility = options.accessibility === undefined
@@ -608,6 +689,7 @@ export class ComputerUseService {
         ]);
         this._proxySignalId = 0;
         this._proxyOwnerSignalId = 0;
+        this._extensionEnableError = '';
     }
 
     get active() {
@@ -661,7 +743,8 @@ export class ComputerUseService {
                     supported: true,
                     available: false,
                     registered: false,
-                    reason: 'GNOME Shell integration is not installed or enabled.',
+                    reason: this._extensionEnableError
+                        || 'GNOME Shell integration is not installed or loaded.',
                 };
             }
 
@@ -681,7 +764,7 @@ export class ComputerUseService {
                 supported: true,
                 available: false,
                 registered: false,
-                reason: integrationErrorMessage(error),
+                reason: this._extensionEnableError || integrationErrorMessage(error),
             };
         }
     }
@@ -697,7 +780,7 @@ export class ComputerUseService {
         const proxy = this._getProxy();
 
         if (!proxy.get_name_owner())
-            throw createUserError('GNOME Shell integration is not installed or enabled.');
+            throw createUserError('GNOME Shell integration is not installed or loaded.');
 
         let result;
         try {
@@ -1749,9 +1832,31 @@ export class ComputerUseService {
     }
 
     async setEnabled(enabled) {
-        if (enabled)
-            return await this.status();
+        if (enabled) {
+            const environment = this._environmentStatus();
 
+            if (!environment.supported)
+                return { ...environment, available: false, registered: false };
+
+            try {
+                await this._enableShellExtension();
+                this._extensionEnableError = '';
+            } catch (error) {
+                this._extensionEnableError = error.userMessage
+                    ?? error.message
+                    ?? 'Could not automatically enable GNOME Shell integration.';
+                return {
+                    supported: true,
+                    available: false,
+                    registered: false,
+                    reason: this._extensionEnableError,
+                };
+            }
+
+            return await this.status();
+        }
+
+        this._extensionEnableError = '';
         this.stop();
         await this._setRemoteActive(false);
         return { available: false, reason: 'Computer use is disabled.' };

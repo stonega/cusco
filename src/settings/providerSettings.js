@@ -5,7 +5,6 @@ import Pango from 'gi://Pango?version=1.0';
 import { createProviderIcon } from '../providers/icons.js';
 import { createAppInfoSettingsPage } from './appInfoSettings.js';
 import { createApplicationSettingsPage } from './appSettings.js';
-import { createHooksSettingsPage } from './hooksSettings.js';
 import { createMemorySettingsPage } from './memorySettings.js';
 import { createSkillsSettingsPage, createWorkspaceSettingsPage } from './workspaceSettings.js';
 
@@ -1134,23 +1133,10 @@ export function presentProviderSettingsDialog(
             {
                 appSettings,
                 computerUse: options.computerUse ?? null,
+                hookManager: options.hookManager ?? null,
             },
         ));
         dialog.add(createSkillsSettingsPage(dialog, workspaceManager, onChanged));
-    }
-
-    if (options.hookManager && appSettings && options.conversation && options.conversationManager) {
-        dialog.add(createHooksSettingsPage(
-            dialog,
-            options.hookManager,
-            appSettings,
-            options.conversation,
-            options.conversationManager,
-            onChanged,
-            {
-                onWorkingDirectoryChanged: options.onWorkingDirectoryChanged,
-            },
-        ));
     }
 
     const page = createProviderSettingsPage(providerConfigs, onChanged);

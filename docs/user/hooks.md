@@ -2,7 +2,7 @@
 
 Cusco hooks run reviewed local commands at defined points in a chat turn. They can add provider context, reject a prompt, block or rewrite a tool call, decide a pending permission request, react to tool output, stop context compaction, or request another response pass.
 
-Hooks run with your user account. A command can read the prompt or tool data sent to it, access local files available to Cusco, and use the network. Cusco therefore skips every new or changed hook until you review and trust its exact definition in **Settings → Hooks**.
+Hooks run with your user account. A command can read the prompt or tool data sent to it, access local files available to Cusco, and use the network. Cusco skips definitions that do not have a stored trust decision.
 
 ## Configuration locations
 
@@ -11,7 +11,7 @@ Cusco discovers JSON hook files from:
 - `~/.config/io.github.stonega.Cusco/hooks.json`
 - `<chat working directory>/.cusco/hooks.json`
 
-Choose the active chat's working directory in **Settings → Hooks**. Cusco does not infer a project from the directory where the application happened to start, and it does not discover hooks from Codex configuration directories.
+The user file appears under **Settings → Workspace → Hooks Config File**, immediately after MCP. Use its refresh button after changing the file. Cusco does not infer a project from the directory where the application happened to start, and it does not discover hooks from Codex configuration directories.
 
 If both Cusco files exist, matching hooks from both files run. Hooks in one file do not replace hooks in the other.
 
@@ -51,7 +51,7 @@ If both Cusco files exist, matching hooks from both files run. Hooks in one file
 
 Each command receives one JSON object on standard input and runs with the chat working directory as its current directory. If no working directory is selected, user hooks run from Cusco's process directory and no workspace hook file is loaded.
 
-Only synchronous `command` handlers are executable. Unsupported handler types and invalid matchers remain visible in Settings but are skipped.
+Only synchronous `command` handlers are executable. Unsupported handler types and invalid matchers are skipped.
 
 ## Supported events
 
@@ -90,6 +90,6 @@ Cusco bounds command output before it reaches the model. Larger output is stored
 
 ## Trust and failure behavior
 
-The Hooks page shows every discovered definition, its source, matcher, command, timeout, trust state, and most recent result. Trust is tied to a fingerprint of the source path and executable definition. Changing the command, matcher, event, timeout, or status message creates an untrusted definition that is skipped until reviewed.
+Trust is tied to a fingerprint of the source path and executable definition. Changing the command, matcher, event, timeout, or status message creates an untrusted definition that is skipped.
 
-Hooks can be disabled individually or globally. A command timeout, non-special nonzero exit, malformed output, or unsupported output field is recorded as a hook failure and normally leaves the underlying Cusco operation unchanged. Stop continuations are limited to three passes per turn to prevent an accidental infinite loop.
+A command timeout, non-special nonzero exit, malformed output, or unsupported output field is recorded as a hook failure and normally leaves the underlying Cusco operation unchanged. Stop continuations are limited to three passes per turn to prevent an accidental infinite loop.

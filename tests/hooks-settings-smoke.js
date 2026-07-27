@@ -1,7 +1,8 @@
 import Adw from 'gi://Adw?version=1';
 import Gtk from 'gi://Gtk?version=4.0';
 
-import { createHooksSettingsPage } from '../src/settings/hooksSettings.js';
+import { createHooksConfigGroup } from '../src/settings/hooksSettings.js';
+import { createWorkspaceSettingsPage } from '../src/settings/workspaceSettings.js';
 
 function walkWidgets(widget, callback) {
     callback(widget);
@@ -23,76 +24,61 @@ function findByTitle(root, WidgetType, title) {
 
 if (Gtk.init_check()) {
     Adw.init();
-    const appSettings = {
-        hooksEnabled: true,
-        setHooksEnabled(value) {
-            this.hooksEnabled = Boolean(value);
-        },
-    };
-    const conversation = {
-        id: 'chat-1',
-        workingDirectory: '/tmp/cusco-hooks-workspace',
-    };
-    const conversationManager = {
-        setWorkingDirectory(_conversationId, path) {
-            conversation.workingDirectory = path;
-        },
-    };
     const hookManager = {
         listHooks() {
             return {
                 sources: [{
+                    scope: 'user',
                     label: 'User hooks',
                     path: '/tmp/cusco-user-hooks.json',
                     exists: true,
                     errors: [],
                 }],
-                definitions: [{
-                    sourceLabel: 'User hooks',
-                    sourcePath: '/tmp/cusco-user-hooks.json',
-                    eventName: 'PreToolUse',
-                    matcher: '^Bash$',
-                    command: 'check-command',
-                    timeout: 30,
-                    statusMessage: 'Checking command',
-                    fingerprint: 'fingerprint',
-                    trusted: false,
-                    disabled: false,
-                    supported: true,
-                    errors: [],
-                    lastRun: null,
-                }],
+                definitions: [],
             };
         },
-        trust() {},
-        revoke() {},
-        setDisabled() {},
-        resetAllSessions() {},
-        resetSession() {},
     };
-    const page = createHooksSettingsPage(
+    const group = createHooksConfigGroup(hookManager);
+    const configRow = findByTitle(group, Adw.ActionRow, 'hooks.json');
+
+    if (configRow?.get_subtitle() !== '/tmp/cusco-user-hooks.json')
+        throw new Error('Hooks config group did not show the user config file');
+
+    if (findByTitle(group, Adw.SwitchRow, 'Enable trusted hooks')
+        || findByTitle(group, Adw.ActionRow, 'Current chat')
+        || findByTitle(group, Adw.ExpanderRow, 'PreToolUse')) {
+        throw new Error('Hooks config group exposed settings other than config files');
+    }
+
+    const workspaceManager = {
+        prompts: [],
+    };
+    const mcpManager = {
+        configPath: '/tmp/cusco-mcp.json',
+        configError: '',
+        listServers() {
+            return [];
+        },
+    };
+    const page = createWorkspaceSettingsPage(
         null,
-        hookManager,
-        appSettings,
-        conversation,
-        conversationManager,
+        workspaceManager,
+        mcpManager,
+        () => {},
+        { hookManager },
     );
+    const groupTitles = [];
 
-    if (!findByTitle(page, Adw.SwitchRow, 'Enable trusted hooks'))
-        throw new Error('Hooks settings did not expose the global enable control');
+    walkWidgets(page, (widget) => {
+        if (widget instanceof Adw.PreferencesGroup)
+            groupTitles.push(widget.get_title());
+    });
 
-    const workingDirectoryRow = findByTitle(page, Adw.ActionRow, 'Current chat');
+    const mcpIndex = groupTitles.indexOf('MCP Config File');
+    const hooksIndex = groupTitles.indexOf('Hooks Config File');
 
-    if (workingDirectoryRow?.get_subtitle() !== conversation.workingDirectory)
-        throw new Error('Hooks settings did not show the chat working directory');
-
-    const definitionRow = findByTitle(page, Adw.ExpanderRow, 'PreToolUse');
-
-    if (!definitionRow || !definitionRow.get_subtitle().includes('Review required'))
-        throw new Error('Hooks settings did not show untrusted definitions');
-
-    if (definitionRow.get_subtitle().includes('.codex'))
-        throw new Error('Hooks settings exposed an unsupported Codex source');
+    if (mcpIndex < 0 || hooksIndex !== mcpIndex + 1)
+        throw new Error('Workspace settings did not place the Hooks config file after MCP');
 }
 
 print('Cusco hooks settings smoke passed');

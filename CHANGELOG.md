@@ -7,6 +7,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- The Hooks configuration file now appears in Workspace settings after MCP, without a separate Hooks settings page.
+- Turning on Computer Use now automatically enables Cusco's GNOME Shell extension for the current user.
+
 ## [0.5.25] - 2026-07-27
 
 ### Added

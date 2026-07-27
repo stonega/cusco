@@ -65,7 +65,7 @@ import { createAppInfoSettingsPage } from '../src/settings/appInfoSettings.js';
 import { AppSettingsStore, createApplicationSettingsPage } from '../src/settings/appSettings.js';
 import { createArchivedChatsWindow, presentArchivedChatsWindow } from '../src/settings/archivedChats.js';
 import { createComputerUseSettingsGroup } from '../src/settings/computerUseSettings.js';
-import { createHooksSettingsPage } from '../src/settings/hooksSettings.js';
+import { createHooksConfigGroup } from '../src/settings/hooksSettings.js';
 import { createMemorySettingsPage } from '../src/settings/memorySettings.js';
 import { createMcpSettingsPage } from '../src/settings/mcpSettings.js';
 import { createProviderSettingsPage, presentProviderSettingsDialog } from '../src/settings/providerSettings.js';

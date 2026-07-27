@@ -5,6 +5,7 @@ import Pango from 'gi://Pango?version=1.0';
 import { findPromptVariables, formatPromptVariables } from '../workspace/promptVariables.js';
 import { createMcpConfigGroup } from './mcpSettings.js';
 import { createComputerUseSettingsGroup } from './computerUseSettings.js';
+import { createHooksConfigGroup } from './hooksSettings.js';
 
 const ADD_PROMPT_HELPER_TEXT = [
     'Write the reusable prompt here.',
@@ -338,6 +339,10 @@ export function createWorkspaceSettingsPage(
 
     if (mcpManager)
         page.add(createMcpConfigGroup(parent, mcpManager, onChanged));
+
+    if (options.hookManager) {
+        page.add(createHooksConfigGroup(options.hookManager));
+    }
 
     if (options.appSettings) {
         page.add(createComputerUseSettingsGroup(

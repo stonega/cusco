@@ -3695,7 +3695,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if ((result.failures?.length ?? 0) > 0) {
             log(
                 `Cusco hook ${result.eventName} reported ${result.failures.length} failure(s); `
-                + 'review Hooks settings for the latest status.',
+                + 'review the Hooks config file and application log for details.',
             );
         }
     }
