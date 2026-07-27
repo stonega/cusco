@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.25] - 2026-07-27
+
 ### Added
 
 - A per-user installer now installs Cusco under `$HOME/.local` without requiring root access.
@@ -163,7 +165,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.24...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.25...HEAD
+[0.5.25]: https://github.com/stonega/cusco/compare/v0.5.24...v0.5.25
 [0.5.24]: https://github.com/stonega/cusco/compare/v0.5.23...v0.5.24
 [0.5.23]: https://github.com/stonega/cusco/compare/v0.5.22...v0.5.23
 [0.5.22]: https://github.com/stonega/cusco/compare/v0.5.21...v0.5.22

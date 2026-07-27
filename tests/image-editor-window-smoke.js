@@ -18,7 +18,10 @@ function imageUsesIcon(image, iconName) {
         return true;
 
     const iconFile = image?.get_gicon?.()?.get_file?.();
-    return iconFile?.get_basename() === `${iconName}.svg`;
+    if (iconFile?.get_basename() === `${iconName}.svg`)
+        return true;
+
+    return image?.get_paintable?.() instanceof Gdk.Texture;
 }
 
 function removeTree(path) {
