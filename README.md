@@ -71,12 +71,14 @@ meson setup builddir
 meson compile -C builddir
 ```
 
-For a local install prefix:
+To install Cusco for the current user only:
 
 ```sh
-meson setup builddir --prefix "$PWD/.local"
-meson install -C builddir
+scripts/install-user.sh
 ```
+
+This installs under `$HOME/.local` without `sudo` and does not change the
+system-wide installation.
 
 ## Test
 

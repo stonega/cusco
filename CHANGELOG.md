@@ -7,6 +7,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- A per-user installer now installs Cusco under `$HOME/.local` without requiring root access.
+
+### Fixed
+
+- Custom symbolic button icons now render reliably on Ubuntu and follow light, dark, and high-contrast theme changes.
+
 ## [0.5.24] - 2026-07-27
 
 ### Fixed

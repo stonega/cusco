@@ -1,5 +1,14 @@
 import Gio from 'gi://Gio?version=2.0';
 
+import { getBundledIconForeground } from '../src/bundledIcons.js';
+
+if (getBundledIconForeground() !== '#2e3436'
+    || getBundledIconForeground({ dark: true }) !== '#deddda'
+    || getBundledIconForeground({ highContrast: true }) !== '#000000'
+    || getBundledIconForeground({ dark: true, highContrast: true }) !== '#ffffff') {
+    throw new Error('Bundled icon theme foreground colors are invalid');
+}
+
 const resourceDirectory = Gio.File.new_for_path('data/resources');
 const files = resourceDirectory.enumerate_children(
     'standard::name,standard::type',

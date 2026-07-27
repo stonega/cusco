@@ -25,11 +25,20 @@ meson setup builddir
 meson compile -C builddir
 ```
 
-Install into a local prefix:
+Install for the current user:
 
 ```sh
-meson setup builddir --prefix "$PWD/.local"
-meson install -C builddir
+scripts/install-user.sh
+```
+
+The installer configures the build with the `$HOME/.local` prefix and refuses
+to run as root, so it cannot overwrite the system-wide installation. To
+perform the same steps manually:
+
+```sh
+meson setup --reconfigure builddir --prefix "$HOME/.local"
+meson compile -C builddir
+meson install -C builddir --no-rebuild
 ```
 
 Build a system package from a fresh `/usr`-prefix build directory:
