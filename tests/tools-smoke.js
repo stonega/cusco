@@ -3,18 +3,22 @@ import GLib from 'gi://GLib?version=2.0';
 
 import {
     appendToolOutputPreview,
+    attachToolMessagesToAssistant,
     createToolCallFromResult,
     createToolCallFromRequest,
     latestOutputLines,
     normalizeToolCallDisplay,
+    toolCallBelongsToFollowingAssistant,
 } from '../src/tools/display.js';
 import {
     calculateExpression,
     commandUsesSudo,
-    extractSearchResults,
+    extractDuckDuckGoSearchResults,
+    extractExaSearchResults,
     formatToolResultForTranscript,
     parseToolRequest,
     runBashCommand,
+    searchWeb,
     summarizeStructuredData,
     ToolManager,
 } from '../src/tools/tools.js';
@@ -25,25 +29,119 @@ if (calculateExpression('2 + 3 * (4 - 1)') !== 11)
 if (!summarizeStructuredData('[{"name":"A","count":1}]').includes('fields: name, count'))
     throw new Error('JSON structured data summary was not produced');
 
-const searchResults = extractSearchResults({
-    web: {
-        results: [
-            {
-                title: 'Cusco',
-                url: 'https://example.com/cusco',
-                description: 'Cusco summary',
-            },
-            {
-                title: 'Extra',
-                url: 'https://example.com/extra',
-                description: 'Extra result',
-            },
-        ],
+const searchResults = extractExaSearchResults({
+    results: [
+        {
+            title: 'Cusco',
+            url: 'https://example.com/cusco',
+            highlights: ['Cusco summary'],
+            publishedDate: '2026-07-27T00:00:00.000Z',
+        },
+        {
+            title: 'Extra',
+            url: 'https://example.com/extra',
+            summary: 'Extra result',
+        },
+    ],
+});
+
+if (searchResults.length !== 2
+    || searchResults[0].url !== 'https://example.com/cusco'
+    || searchResults[0].snippet !== 'Cusco summary'
+    || searchResults[0].publishedAt !== '2026-07-27T00:00:00.000Z') {
+    throw new Error('Exa search results with citations were not extracted');
+}
+
+const duckDuckGoFixture = `
+<div class="result results_links results_links_deep web-result">
+  <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fcusco&amp;rut=test">Cusco &amp; GNOME</a>
+  <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fcusco">Native <b>GNOME</b> chat</a>
+</div>
+<div class="result results_links result--ad web-result">
+  <a class="result__a" href="https://example.com/sponsor">Sponsor</a>
+  <a class="result__snippet" href="https://example.com/sponsor">Sponsored result</a>
+</div>`;
+const duckDuckGoResults = extractDuckDuckGoSearchResults(duckDuckGoFixture);
+
+if (duckDuckGoResults.length !== 2
+    || duckDuckGoResults[0].title !== 'Cusco & GNOME'
+    || duckDuckGoResults[0].url !== 'https://example.com/cusco'
+    || duckDuckGoResults[0].snippet !== 'Native GNOME chat'
+    || !duckDuckGoResults[1].sponsored
+    || !duckDuckGoResults[1].title.startsWith('Sponsored:')) {
+    throw new Error('DuckDuckGo HTML search results were not normalized');
+}
+
+let duckDuckGoSearchUrl = '';
+let duckDuckGoSearchOptions = null;
+const duckDuckGoSearchResult = await searchWeb('native GNOME chat app', {
+    id: 'duckduckgo',
+    fetcher: async (url, options) => {
+        duckDuckGoSearchUrl = url;
+        duckDuckGoSearchOptions = options;
+        return duckDuckGoFixture;
     },
 });
 
-if (searchResults.length !== 2 || searchResults[0].url !== 'https://example.com/cusco')
-    throw new Error('Search results with citations were not extracted');
+if (duckDuckGoSearchResult.providerId !== 'duckduckgo'
+    || !duckDuckGoSearchUrl.startsWith('https://html.duckduckgo.com/html/?')
+    || !duckDuckGoSearchUrl.includes('q=native%20GNOME%20chat%20app')
+    || !duckDuckGoSearchUrl.includes('kp=-1')
+    || !duckDuckGoSearchUrl.includes('k1=1')
+    || duckDuckGoSearchOptions.headers.Accept !== 'text/html,application/xhtml+xml') {
+    throw new Error('Built-in DuckDuckGo search request was not configured correctly');
+}
+
+if (!formatToolResultForTranscript({
+    ...duckDuckGoSearchResult,
+    name: 'search',
+    input: 'native GNOME chat app',
+}).includes('via DuckDuckGo')) {
+    throw new Error('DuckDuckGo attribution was not included in the search transcript');
+}
+
+let exaSearchUrl = '';
+let exaSearchOptions = null;
+const exaSearchResult = await searchWeb('native GNOME chat app', {
+    id: 'exa-search',
+    apiKey: 'exa-test-key',
+    fetcher: async (url, options) => {
+        exaSearchUrl = url;
+        exaSearchOptions = options;
+        return {
+            results: [{
+                title: 'Cusco',
+                url: 'https://example.com/cusco',
+                highlights: ['Cusco summary'],
+            }],
+        };
+    },
+});
+
+if (exaSearchResult.providerId !== 'exa-search'
+    || exaSearchUrl !== 'https://api.exa.ai/search'
+    || exaSearchOptions.method !== 'POST'
+    || exaSearchOptions.headers['x-api-key'] !== 'exa-test-key'
+    || exaSearchOptions.body.query !== 'native GNOME chat app'
+    || exaSearchOptions.body.type !== 'auto'
+    || exaSearchOptions.body.numResults !== 5
+    || exaSearchOptions.body.contents.highlights.maxCharacters !== 500) {
+    throw new Error('Exa Search fallback request was not configured correctly');
+}
+
+const configuredSearchManager = new ToolManager({
+    searchConfig: () => ({
+        id: 'duckduckgo',
+        fetcher: async () => duckDuckGoFixture,
+    }),
+});
+const configuredSearchResult = await configuredSearchManager.runRequest(
+    configuredSearchManager.createRequest('search', 'configured local search'),
+    { providerId: 'kimi' },
+);
+
+if (configuredSearchResult.providerId !== 'duckduckgo')
+    throw new Error('The active chat provider overrode the configured search fallback');
 
 const request = parseToolRequest('/search native GNOME chat app');
 
@@ -84,6 +182,39 @@ const bashDisplay = normalizeToolCallDisplay(createToolCallFromRequest(
 
 if (bashDisplay.action !== 'Running command')
     throw new Error('Bash tool display metadata was not normalized');
+
+if (!toolCallBelongsToFollowingAssistant({ name: 'search' })
+    || toolCallBelongsToFollowingAssistant({ name: 'search', agentMode: true })
+    || toolCallBelongsToFollowingAssistant({})) {
+    throw new Error('Explicit tool calls were not assigned to the following assistant response');
+}
+
+let removedStandaloneTool = false;
+const attachedToolMessages = [];
+const pendingToolEntries = [{
+    message: {
+        role: 'system',
+        toolCall: { name: 'search' },
+    },
+    view: {
+        remove: () => {
+            removedStandaloneTool = true;
+        },
+    },
+}];
+const attachedToolCount = attachToolMessagesToAssistant(pendingToolEntries, {
+    append_tool_result: (message) => {
+        attachedToolMessages.push(message);
+        return {};
+    },
+});
+
+if (attachedToolCount !== 1
+    || pendingToolEntries.length !== 0
+    || attachedToolMessages.length !== 1
+    || !removedStandaloneTool) {
+    throw new Error('Explicit tool result was not moved into the following assistant response');
+}
 
 manager.registerTool({
     name: 'image_gen',

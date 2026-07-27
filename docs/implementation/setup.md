@@ -18,6 +18,17 @@ Run the current shell:
 gjs -m src/main.js
 ```
 
+## Built-in Web Search
+
+Cusco's default fallback queries DuckDuckGo's non-JavaScript search page with
+the existing libsoup runtime and normalizes its cited results in-process. No
+API key, container, daemon, or additional dependency is required. Moderate
+Safe Search remains enabled, DuckDuckGo is attributed in the transcript, and
+sponsored results remain visibly labeled.
+
+Providers → Web Search can instead select Exa Search and store its API key
+in Secret Service.
+
 Configure and compile:
 
 ```sh

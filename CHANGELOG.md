@@ -7,6 +7,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- Built-in DuckDuckGo search is now the default fallback for explicit web searches and models without native search, requiring no API key or additional software; Exa Search remains available as an optional API-key fallback with a free tier.
+
+### Fixed
+
+- Slash-command tool results such as `/search` now remain visually grouped with the assistant response, including after reopening the conversation.
+
 ## [0.5.26] - 2026-07-27
 
 ### Changed

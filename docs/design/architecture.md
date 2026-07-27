@@ -49,7 +49,7 @@ Cusco starts as a standalone native GNOME application.
 - `src/storage/workspaceStore.js`: local workspace database for prompts, profiles, folders, plugin descriptors, MCP configs, and cache entries.
 - `src/workspace/exports.js`: Markdown, JSON, and lightweight PDF conversation exporters.
 - `src/workspace/workspace.js`: prompt library, profile, folder, cache, plugin, and MCP workspace manager.
-- `src/tools/tools.js`: slash-command tool framework for web search, calculator, and structured data summaries.
+- `src/tools/tools.js`: slash-command tool framework for built-in DuckDuckGo or optional Exa web search, calculator, and structured data summaries.
 - `data/`: GNOME integration files.
 - `tests/import-smoke.js`: fast import smoke check.
 - `tests/mock-provider-smoke.js`: verifies the provider stream path.
@@ -75,7 +75,7 @@ Cusco starts as a standalone native GNOME application.
 - Memory writes are never implicit: user messages can trigger a proposal dialog, and only explicit approval stores memory.
 - Memory use is per-chat controllable and creates a stored usage audit entry without adding a transcript system message.
 - Installed skills are discovered from `~/.agents/skills`, enabled in the Skills preferences page, selected per chat, and injected as ephemeral hidden provider context.
-- Tools run before the assistant response when requested with slash commands; sensitive web search asks for permission and tool results render as expandable transcript entries with citations where available.
+- Tools run before the assistant response when requested with slash commands; sensitive web search asks for permission and tool results render as expandable transcript entries with citations where available. Models without native search use DuckDuckGo's non-JavaScript search surface through Cusco's existing HTTP stack, with Exa Search available as an opt-in fallback.
 - Local file and image attachments are selected through the native GTK file dialog and folded into the user message context.
 - GNOME integration uses app actions for shortcuts and desktop actions, native preferences windows, notifications for long responses, and a Shell SearchProvider2 conversation index.
 - High contrast, reduced motion, and compact-layout hooks are applied with CSS classes controlled by settings and window size.

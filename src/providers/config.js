@@ -30,6 +30,7 @@ const REQUIRED_SETTINGS_KEYS = [
     'active-model',
     'default-image-provider',
     'default-image-model',
+    'web-search-provider',
     'enabled-providers',
     'provider-endpoint-presets',
     'provider-custom-endpoints',
@@ -48,6 +49,7 @@ const FALLBACK_STRING_DEFAULTS = {
     'active-model': '',
     'default-image-provider': '',
     'default-image-model': '',
+    'web-search-provider': 'duckduckgo',
     'provider-endpoint-presets': '{}',
     'provider-custom-endpoints': '{}',
     'provider-default-models': '{}',
@@ -877,12 +879,19 @@ const GEMINI_3_PRO_LEVEL_THINKING = {
     includeThoughts: true,
 };
 
-export const BRAVE_SEARCH_CONFIG = {
-    id: 'brave-search',
-    name: 'Brave Search',
+export const EXA_SEARCH_CONFIG = {
+    id: 'exa-search',
+    name: 'Exa Search',
     apiKeyRequired: true,
     apiKeyConfigured: false,
-    apiKeyEnvVar: 'BRAVE_SEARCH_API_KEY',
+    apiKeyEnvVar: 'EXA_API_KEY',
+};
+
+export const DUCKDUCKGO_SEARCH_CONFIG = {
+    id: 'duckduckgo',
+    name: 'DuckDuckGo',
+    apiKeyRequired: false,
+    apiKeyConfigured: true,
 };
 
 function parseDiscoveredModelSettings(value) {
@@ -1153,7 +1162,8 @@ export class ProviderConfigStore {
         this._activeModelId = '';
         this._defaultImageProviderId = '';
         this._defaultImageModelId = '';
-        this._webSearchConfig = { ...BRAVE_SEARCH_CONFIG };
+        this._webSearchProviderId = DUCKDUCKGO_SEARCH_CONFIG.id;
+        this._webSearchConfig = { ...EXA_SEARCH_CONFIG };
         this._webSearchApiKeyStatus = {
             configured: false,
             source: null,
@@ -1248,6 +1258,35 @@ export class ProviderConfigStore {
         return { ...this._webSearchApiKeyStatus };
     }
 
+    listWebSearchProviders() {
+        return [
+            {
+                ...DUCKDUCKGO_SEARCH_CONFIG,
+                selected: this._webSearchProviderId === DUCKDUCKGO_SEARCH_CONFIG.id,
+            },
+            {
+                ...this._webSearchConfig,
+                selected: this._webSearchProviderId === EXA_SEARCH_CONFIG.id,
+            },
+        ];
+    }
+
+    getWebSearchProviderId() {
+        return this._webSearchProviderId;
+    }
+
+    setWebSearchProviderId(providerId) {
+        const normalizedProviderId = String(providerId ?? '').trim();
+
+        if (![DUCKDUCKGO_SEARCH_CONFIG.id, EXA_SEARCH_CONFIG.id].includes(normalizedProviderId))
+            throw new Error(`Web search provider does not exist: ${providerId}`);
+
+        this._webSearchProviderId = normalizedProviderId;
+        this._settings?.set_string('web-search-provider', normalizedProviderId);
+        flushSettings();
+        return this._webSearchProviderId;
+    }
+
     async setWebSearchApiKey(apiKey) {
         const normalizedApiKey = String(apiKey ?? '').trim();
 
@@ -1261,7 +1300,7 @@ export class ProviderConfigStore {
         );
 
         if (stored === false)
-            throw new Error('Secret Service did not store the Brave Search API key');
+            throw new Error('Secret Service did not store the Exa Search API key');
 
         return this._setApiKeyStatus(this._webSearchConfig, {
             configured: true,
@@ -1279,6 +1318,9 @@ export class ProviderConfigStore {
     }
 
     createWebSearchFallbackConfig() {
+        if (this._webSearchProviderId === DUCKDUCKGO_SEARCH_CONFIG.id)
+            return { ...DUCKDUCKGO_SEARCH_CONFIG };
+
         return {
             ...this._webSearchConfig,
             apiKey: this._getApiKey(this._webSearchConfig),
@@ -2108,6 +2150,11 @@ export class ProviderConfigStore {
     _loadPersistentState() {
         if (!this._settings)
             return;
+
+        const webSearchProviderId = this._settings.get_string('web-search-provider');
+
+        if ([DUCKDUCKGO_SEARCH_CONFIG.id, EXA_SEARCH_CONFIG.id].includes(webSearchProviderId))
+            this._webSearchProviderId = webSearchProviderId;
 
         this._loadCustomProviderSettings();
         this._loadEndpointPresetSettings();

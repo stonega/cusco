@@ -97,11 +97,13 @@ import { createArtifactTools } from './tools/artifacts.js';
 import { createToolPermissionDecision } from './tools/permissions.js';
 import {
     appendToolOutputPreview,
+    attachToolMessagesToAssistant,
     createToolCallFromFailure,
     createToolCallFromRequest,
     createToolCallFromResult,
     latestOutputLines,
     normalizeToolCallDisplay,
+    toolCallBelongsToFollowingAssistant,
 } from './tools/display.js';
 import { formatToolResultForTranscript, ToolManager } from './tools/tools.js';
 import { exportConversation } from './workspace/exports.js';
@@ -1101,6 +1103,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._activeQuestionSession = null;
         this._pendingUserMessagesByConversation = new Map();
         this._lastAssistantMessageView = null;
+        this._pendingAssistantToolEntries = [];
         this.connect('close-request', () => {
             this._stopActiveConversation();
             this._conversations.persist();
@@ -4093,10 +4096,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 return;
             }
 
+            const searchProviderName = request.name === 'search'
+                ? this._providerConfigs.listWebSearchProviders()
+                    .find((provider) => provider.selected)?.name ?? 'the selected search service'
+                : '';
             const dialog = new Adw.AlertDialog({
                 heading: `Run ${request.label}?`,
                 body: request.name === 'search'
-                    ? `Cusco will send this query to Brave Search:\n${request.input}`
+                    ? `Cusco will send this query through ${searchProviderName}:\n${request.input}`
                     : request.name === 'image_gen'
                         ? `Cusco will send this image prompt to the selected provider:\n${request.input}`
                     : request.input,
@@ -7273,6 +7280,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             conversationId: null,
             fingerprint: '',
             lastAssistantMessageView: null,
+            pendingAssistantToolEntries: [],
             referenceContents: new Set(),
         };
     }
@@ -7358,6 +7366,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return;
 
         entry.lastAssistantMessageView = this._lastAssistantMessageView;
+        entry.pendingAssistantToolEntries = this._pendingAssistantToolEntries;
         entry.referenceContents = this._userMessageReferenceContents;
     }
 
@@ -7365,6 +7374,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._messages = entry.messages;
         this._messageBottomSpacer = entry.bottomSpacer;
         this._lastAssistantMessageView = entry.lastAssistantMessageView;
+        this._pendingAssistantToolEntries = entry.pendingAssistantToolEntries ?? [];
         this._userMessageReferenceContents = entry.referenceContents;
         this._renderedConversationId = entry.conversationId;
 
@@ -7434,6 +7444,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _finishConversationViewRender(conversation, entry, staleEntry) {
         entry.lastAssistantMessageView = this._lastAssistantMessageView;
+        entry.pendingAssistantToolEntries = this._pendingAssistantToolEntries;
         entry.referenceContents = this._userMessageReferenceContents;
 
         if (conversation?.id) {
@@ -7558,6 +7569,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         entry.conversationId = conversation?.id ?? null;
         entry.fingerprint = this._conversationViewFingerprint(conversation);
         entry.lastAssistantMessageView = null;
+        entry.pendingAssistantToolEntries = [];
         entry.referenceContents = new Set();
         this._activateConversationView(entry, { reveal: false });
         const messageStartIndex = this._conversationMessageStartIndex(conversation);
@@ -8536,8 +8548,18 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return toolView ?? { set_label: () => {} };
         }
 
-        if (message?.toolCall)
-            return this._addToolMessage(message);
+        if (message?.toolCall) {
+            const toolView = this._addToolMessage(message);
+
+            if (toolCallBelongsToFollowingAssistant(message.toolCall)) {
+                this._pendingAssistantToolEntries.push({
+                    message,
+                    view: toolView,
+                });
+            }
+
+            return toolView;
+        }
 
         const wrapper = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
@@ -8757,10 +8779,15 @@ class CuscoWindow extends Adw.ApplicationWindow {
             },
         };
 
-        if (kind === 'assistant')
+        if (kind === 'assistant') {
             this._lastAssistantMessageView = messageView;
-        else
+            attachToolMessagesToAssistant(
+                this._pendingAssistantToolEntries,
+                messageView,
+            );
+        } else {
             this._lastAssistantMessageView = null;
+        }
 
         if (animateWelcomeMessage)
             this._startWelcomeMessageStream(messageView, displayBody);
@@ -8786,6 +8813,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
             set_label: () => {},
             update_tool_message: (nextMessage) => toolWidget.updateToolMessage?.(nextMessage),
             append_tool_output: (output) => toolWidget.appendToolOutput?.(output),
+            remove: () => {
+                const parent = wrapper.get_parent();
+
+                if (typeof parent?.remove === 'function')
+                    parent.remove(wrapper);
+            },
         };
     }
 

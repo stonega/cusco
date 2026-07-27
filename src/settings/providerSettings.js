@@ -128,12 +128,12 @@ function getWebSearchApiKeySubtitle(providerConfigs) {
         return 'Stored in Secret Service.';
 
     if (status.source === 'environment')
-        return 'BRAVE_SEARCH_API_KEY is available in the environment.';
+        return 'EXA_API_KEY is available in the environment.';
 
     if (status.error)
-        return 'Secret Service is unavailable; BRAVE_SEARCH_API_KEY can still be used.';
+        return 'Secret Service is unavailable; EXA_API_KEY can still be used.';
 
-    return 'Used when the selected model does not provide native web search.';
+    return 'Required only when Exa Search is selected as the fallback service.';
 }
 
 function canDiscoverModels(provider) {
@@ -693,25 +693,52 @@ function createImageGenerationSettingsGroup(providerConfigs, onChanged, syncAllR
 }
 
 function createWebSearchSettingsGroup(providerConfigs, onChanged, syncAllRows) {
+    const searchProviders = providerConfigs.listWebSearchProviders();
     const group = new Adw.PreferencesGroup({
         title: 'Web Search',
-        description: 'Supported models use their provider-native search. Brave Search is the fallback for other models and explicit /search commands.',
+        description: 'Supported models use provider-native search. Other models and /search use the selected fallback service.',
+    });
+    const providerList = createStringList(searchProviders.map((provider) => provider.name));
+    const providerRow = new Adw.ComboRow({
+        title: 'Fallback service',
+        model: providerList,
+        selected: selectedIndexOrNone(
+            searchProviders.findIndex((provider) => provider.selected),
+            searchProviders.length,
+        ),
+    });
+    const duckDuckGoStatusRow = new Adw.ActionRow({
+        title: 'DuckDuckGo search',
+        subtitle: 'Built in. No API key or additional software required.',
     });
     const apiKeyRow = new Adw.PasswordEntryRow({
-        title: 'Brave Search API key',
+        title: 'Exa Search API key',
     });
     const clearKeyButton = new Gtk.Button({
         icon_name: 'edit-clear-symbolic',
-        tooltip_text: 'Clear stored Brave Search key',
+        tooltip_text: 'Clear stored Exa Search key',
         valign: Gtk.Align.CENTER,
     });
     const statusRow = new Adw.ActionRow({
-        title: 'Fallback credentials',
+        title: 'Exa credentials',
     });
 
     apiKeyRow.set_show_apply_button(true);
     clearKeyButton.add_css_class('flat');
     apiKeyRow.add_suffix(clearKeyButton);
+
+    providerRow.connect('notify::selected', () => {
+        const selectedProvider = searchProviders[providerRow.get_selected()];
+
+        if (!selectedProvider
+            || selectedProvider.id === providerConfigs.getWebSearchProviderId()) {
+            return;
+        }
+
+        providerConfigs.setWebSearchProviderId(selectedProvider.id);
+        syncAllRows();
+        onChanged();
+    });
 
     apiKeyRow.connect('apply', async () => {
         const apiKey = apiKeyRow.get_text().trim();
@@ -731,7 +758,7 @@ function createWebSearchSettingsGroup(providerConfigs, onChanged, syncAllRows) {
                 'Could Not Save API Key',
                 error.userMessage ?? error.message,
             );
-            logError(error, 'Failed to store Brave Search API key');
+            logError(error, 'Failed to store Exa Search API key');
         } finally {
             apiKeyRow.set_sensitive(true);
             syncAllRows();
@@ -746,19 +773,28 @@ function createWebSearchSettingsGroup(providerConfigs, onChanged, syncAllRows) {
             apiKeyRow.set_text('');
             onChanged();
         } catch (error) {
-            logError(error, 'Failed to clear Brave Search API key');
+            logError(error, 'Failed to clear Exa Search API key');
         } finally {
             syncAllRows();
         }
     });
 
     const sync = () => {
+        const providerId = providerConfigs.getWebSearchProviderId();
+        const providerIndex = searchProviders.findIndex((provider) => provider.id === providerId);
         const status = providerConfigs.getWebSearchApiKeyStatus();
+        const usesDuckDuckGo = providerId === 'duckduckgo';
 
+        providerRow.set_selected(selectedIndexOrNone(providerIndex, searchProviders.length));
+        duckDuckGoStatusRow.set_sensitive(usesDuckDuckGo);
+        apiKeyRow.set_sensitive(!usesDuckDuckGo);
         statusRow.set_subtitle(getWebSearchApiKeySubtitle(providerConfigs));
-        clearKeyButton.set_sensitive(status.source === 'secret');
+        statusRow.set_sensitive(!usesDuckDuckGo);
+        clearKeyButton.set_sensitive(!usesDuckDuckGo && status.source === 'secret');
     };
 
+    group.add(providerRow);
+    group.add(duckDuckGoStatusRow);
     group.add(apiKeyRow);
     group.add(statusRow);
     sync();

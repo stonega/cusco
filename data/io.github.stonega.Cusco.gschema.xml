@@ -21,6 +21,11 @@
       <summary>Default image generation model</summary>
       <description>The model identifier used by the image generation tool.</description>
     </key>
+    <key name="web-search-provider" type="s">
+      <default>'duckduckgo'</default>
+      <summary>Web search fallback provider</summary>
+      <description>The search provider used for explicit searches and models without native web search.</description>
+    </key>
     <key name="enabled-providers" type="as">
       <default>[]</default>
       <summary>Enabled AI providers</summary>

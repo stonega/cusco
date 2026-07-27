@@ -50,7 +50,7 @@ const BUILT_IN_TOOLS = {
     search: {
         name: 'search',
         label: 'Web Search',
-        description: 'Search the web and return cited results. Models with native search use their provider; other models use Brave Search.',
+        description: 'Search the web and return cited results. Models with native search use their provider; other models use built-in DuckDuckGo search or optional Exa Search.',
         inputDescription: 'A concise web search query.',
         permissionPolicy: TOOL_PERMISSION_ASK,
         requiresPermission: true,
@@ -333,14 +333,29 @@ export function summarizeStructuredData(input) {
     throw userVisibleError('Structured data must be valid JSON or CSV-like text.');
 }
 
-export function extractSearchResults(response) {
-    const results = Array.isArray(response?.web?.results)
-        ? response.web.results.map((result) => ({
-            title: String(result?.title ?? result?.url ?? '').trim(),
-            url: String(result?.url ?? '').trim(),
-            snippet: String(result?.description ?? '').replace(/<[^>]+>/g, '').trim(),
-            ...(result?.age ? { publishedAt: String(result.age) } : {}),
-        }))
+export function extractExaSearchResults(response) {
+    const results = Array.isArray(response?.results)
+        ? response.results.map((result) => {
+            const highlights = Array.isArray(result?.highlights)
+                ? result.highlights.filter(Boolean).join(' … ')
+                : '';
+            const snippet = htmlText(
+                highlights
+                || result?.summary
+                || result?.text
+                || result?.author
+                || '',
+            ).slice(0, 800);
+
+            return {
+                title: String(result?.title ?? result?.url ?? '').trim(),
+                url: String(result?.url ?? '').trim(),
+                snippet,
+                ...(result?.publishedDate
+                    ? { publishedAt: String(result.publishedDate) }
+                    : {}),
+            };
+        })
         : [];
 
     const seenUrls = new Set();
@@ -353,37 +368,226 @@ export function extractSearchResults(response) {
     }).slice(0, 5);
 }
 
-async function fetchJson(url, {
+async function fetchText(url, {
     timeoutSeconds = DEFAULT_SEARCH_TIMEOUT_SECONDS,
     cancellable = null,
     headers = {},
+    method = 'GET',
+    body = null,
+    serviceName = 'Search service',
+    statusMessages = {},
+    unavailableMessage = '',
 } = {}) {
     const session = new Soup.Session({
         timeout: timeoutSeconds,
     });
-    const message = Soup.Message.new('GET', url);
+    const message = Soup.Message.new(method, url);
 
     for (const [name, value] of Object.entries(headers))
         message.request_headers.append(name, value);
 
-    const bytes = await sendAndRead(session, message, cancellable);
-    const text = new TextDecoder().decode(bytes.get_data());
+    if (body !== null) {
+        const requestBody = typeof body === 'string'
+            ? body
+            : JSON.stringify(body);
+        const bytes = new GLib.Bytes(new TextEncoder().encode(requestBody));
+        message.set_request_body_from_bytes('application/json', bytes);
+    }
+
+    let bytes;
+
+    try {
+        bytes = await sendAndRead(session, message, cancellable);
+    } catch (error) {
+        if (cancellable?.is_cancelled?.())
+            throw error;
+
+        throw userVisibleError(unavailableMessage || `${serviceName} could not be reached.`);
+    }
+
     const status = message.get_status();
 
-    if (status === 401 || status === 403)
-        throw userVisibleError('Brave Search rejected the configured API key.');
+    if (statusMessages[status])
+        throw userVisibleError(statusMessages[status]);
 
     if (status === 429)
-        throw userVisibleError('Brave Search rate limit exceeded. Try again later.');
+        throw userVisibleError(`${serviceName} rate limit exceeded. Try again later.`);
 
     if (status < 200 || status >= 300)
-        throw userVisibleError(`Brave Search failed with HTTP ${status}.`);
+        throw userVisibleError(`${serviceName} failed with HTTP ${status}.`);
+
+    return new TextDecoder().decode(bytes.get_data());
+}
+
+async function fetchJson(url, options = {}) {
+    const serviceName = options.serviceName ?? 'Search service';
+    const text = await fetchText(url, options);
 
     try {
         return JSON.parse(text);
     } catch (_error) {
-        throw userVisibleError('Brave Search returned an invalid response.');
+        throw userVisibleError(`${serviceName} returned an invalid JSON response.`);
     }
+}
+
+function appendQueryParameters(endpoint, parameters) {
+    const separator = endpoint.includes('?') ? '&' : '?';
+    const query = Object.entries(parameters)
+        .map(([name, value]) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`)
+        .join('&');
+
+    return `${endpoint}${separator}${query}`;
+}
+
+const HTML_ENTITIES = {
+    amp: '&',
+    apos: '\'',
+    gt: '>',
+    hellip: '…',
+    ldquo: '“',
+    lsquo: '‘',
+    lt: '<',
+    mdash: '—',
+    nbsp: ' ',
+    ndash: '–',
+    quot: '"',
+    rdquo: '”',
+    rsquo: '’',
+};
+
+function decodeHtmlEntities(value) {
+    return String(value ?? '').replace(
+        /&(#x[0-9a-f]+|#\d+|[a-z][a-z0-9]+);/gi,
+        (entityText, entity) => {
+            if (entity.startsWith('#')) {
+                const radix = entity[1]?.toLowerCase() === 'x' ? 16 : 10;
+                const digits = radix === 16 ? entity.slice(2) : entity.slice(1);
+                const codePoint = Number.parseInt(digits, radix);
+
+                if (Number.isInteger(codePoint)
+                    && codePoint > 0
+                    && codePoint <= 0x10ffff) {
+                    return String.fromCodePoint(codePoint);
+                }
+            }
+
+            return HTML_ENTITIES[entity.toLowerCase()] ?? entityText;
+        },
+    );
+}
+
+function htmlText(value) {
+    return decodeHtmlEntities(String(value ?? '').replace(/<[^>]+>/g, ' '))
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function htmlAttribute(attributes, name) {
+    const match = String(attributes ?? '').match(
+        new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i'),
+    );
+
+    return decodeHtmlEntities(match?.[1] ?? match?.[2] ?? '');
+}
+
+function anchorByClass(html, className) {
+    const anchors = String(html ?? '').matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi);
+
+    for (const anchor of anchors) {
+        const classes = htmlAttribute(anchor[1], 'class').split(/\s+/);
+
+        if (!classes.includes(className))
+            continue;
+
+        return {
+            href: htmlAttribute(anchor[1], 'href'),
+            text: htmlText(anchor[2]),
+        };
+    }
+
+    return null;
+}
+
+function decodedDuckDuckGoResultUrl(href) {
+    let url = decodeHtmlEntities(href);
+
+    if (url.startsWith('//'))
+        url = `https:${url}`;
+    else if (url.startsWith('/'))
+        url = `https://html.duckduckgo.com${url}`;
+
+    let uri;
+
+    try {
+        uri = GLib.Uri.parse(url, GLib.UriFlags.NONE);
+    } catch (_error) {
+        return '';
+    }
+
+    const host = uri.get_host()?.toLowerCase() ?? '';
+
+    if ((host === 'duckduckgo.com' || host.endsWith('.duckduckgo.com'))
+        && uri.get_path() === '/l/') {
+        for (const pair of String(uri.get_query() ?? '').split('&')) {
+            const [rawName, ...rawValueParts] = pair.split('=');
+
+            if (rawName !== 'uddg')
+                continue;
+
+            try {
+                url = GLib.uri_unescape_string(
+                    rawValueParts.join('=').replace(/\+/g, '%20'),
+                    null,
+                ) ?? '';
+            } catch (_error) {
+                return '';
+            }
+            break;
+        }
+    }
+
+    try {
+        const resultUri = GLib.Uri.parse(url, GLib.UriFlags.NONE);
+        const scheme = resultUri.get_scheme()?.toLowerCase();
+
+        return resultUri.get_host() && (scheme === 'http' || scheme === 'https')
+            ? url
+            : '';
+    } catch (_error) {
+        return '';
+    }
+}
+
+export function extractDuckDuckGoSearchResults(html) {
+    const parts = String(html ?? '').split(
+        /(<div\b[^>]*class=(?:"[^"]*\bresults_links\b[^"]*"|'[^']*\bresults_links\b[^']*')[^>]*>)/gi,
+    );
+    const results = [];
+    const seenUrls = new Set();
+
+    for (let index = 1; index < parts.length && results.length < 5; index += 2) {
+        const openingTag = parts[index];
+        const body = parts[index + 1] ?? '';
+        const titleLink = anchorByClass(body, 'result__a');
+        const snippetLink = anchorByClass(body, 'result__snippet');
+        const url = decodedDuckDuckGoResultUrl(titleLink?.href);
+
+        if (!titleLink?.text || !url || seenUrls.has(url))
+            continue;
+
+        const sponsored = /result--ad|badge--ad|result__badge|\bsponsored\b/i
+            .test(`${openingTag}${body.slice(0, 1200)}`);
+
+        seenUrls.add(url);
+        results.push({
+            title: sponsored ? `Sponsored: ${titleLink.text}` : titleLink.text,
+            url,
+            snippet: snippetLink?.text ?? '',
+            ...(sponsored ? { sponsored: true } : {}),
+        });
+    }
+
+    return results;
 }
 
 export async function searchWeb(query, options = {}) {
@@ -392,31 +596,80 @@ export async function searchWeb(query, options = {}) {
     if (!normalizedQuery)
         throw userVisibleError('Search query cannot be empty.');
 
-    const apiKey = String(options.apiKey ?? GLib.getenv('BRAVE_SEARCH_API_KEY') ?? '').trim();
+    const providerId = String(options.searchProviderId ?? options.id ?? 'duckduckgo').trim();
 
-    if (!apiKey)
-        throw userVisibleError('Configure Brave Search credentials in Settings before searching.');
+    if (providerId === 'duckduckgo') {
+        const url = appendQueryParameters('https://html.duckduckgo.com/html/', {
+            q: normalizedQuery,
+            kp: '-1',
+            k1: '1',
+            t: 'cusco',
+        });
+        const html = await (options.fetcher ?? fetchText)(url, {
+            ...options,
+            serviceName: 'DuckDuckGo',
+            headers: {
+                Accept: 'text/html,application/xhtml+xml',
+                'User-Agent': 'Cusco desktop search',
+            },
+            unavailableMessage: 'DuckDuckGo could not be reached. Check the internet connection and try again.',
+        });
+        const results = extractDuckDuckGoSearchResults(html);
 
-    const url = [
-        'https://api.search.brave.com/res/v1/web/search',
-        `?q=${encodeURIComponent(normalizedQuery)}`,
-        '&count=5&safesearch=moderate&text_decorations=false',
-    ].join('');
-    const response = await fetchJson(url, {
-        ...options,
-        headers: {
-            Accept: 'application/json',
-            'X-Subscription-Token': apiKey,
-        },
-    });
-    const results = extractSearchResults(response);
+        if (results.length === 0
+            && !/no results|result--no-result|no-results/i.test(html)) {
+            throw userVisibleError('DuckDuckGo returned a search page Cusco could not read. Try again later or select Exa Search in Settings.');
+        }
 
-    return {
-        query: normalizedQuery,
-        results,
-        providerId: 'brave-search',
-        providerName: 'Brave Search',
-    };
+        return {
+            query: normalizedQuery,
+            results,
+            providerId,
+            providerName: 'DuckDuckGo',
+        };
+    }
+
+    if (providerId === 'exa-search') {
+        const apiKey = String(options.apiKey ?? GLib.getenv('EXA_API_KEY') ?? '').trim();
+
+        if (!apiKey)
+            throw userVisibleError('Configure Exa Search credentials in Settings before searching.');
+
+        const response = await (options.fetcher ?? fetchJson)('https://api.exa.ai/search', {
+            ...options,
+            method: 'POST',
+            body: {
+                query: normalizedQuery,
+                type: 'auto',
+                numResults: 5,
+                contents: {
+                    highlights: {
+                        maxCharacters: 500,
+                        query: normalizedQuery,
+                    },
+                },
+            },
+            serviceName: 'Exa Search',
+            headers: {
+                Accept: 'application/json',
+                'x-api-key': apiKey,
+            },
+            statusMessages: {
+                401: 'Exa Search rejected the configured API key.',
+                402: 'Exa Search has no available credits. Check the Exa dashboard or switch to DuckDuckGo.',
+                403: 'Exa Search rejected the configured API key.',
+            },
+        });
+
+        return {
+            query: normalizedQuery,
+            results: extractExaSearchResults(response),
+            providerId,
+            providerName: 'Exa Search',
+        };
+    }
+
+    throw userVisibleError(`Unsupported web search provider: ${providerId}`);
 }
 
 export function listLocalDirectory(path) {
@@ -844,8 +1097,9 @@ export function formatToolResultForTranscript(result) {
             `${index + 1}. ${item.title}\n${item.url}\n${item.snippet}`
         )).join('\n\n');
         const searchLabel = result.name === 'x_search' ? 'X search' : 'Web search';
+        const providerLabel = result.providerName ? ` via ${result.providerName}` : '';
 
-        return `${searchLabel} results for "${result.input}"\n\n${citations || 'No cited results returned.'}`;
+        return `${searchLabel} results for "${result.input}"${providerLabel}\n\n${citations || 'No cited results returned.'}`;
     }
 
     if (result.name === 'file_list')

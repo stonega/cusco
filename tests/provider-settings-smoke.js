@@ -184,6 +184,29 @@ if (Gtk.init_check()) {
     if (!findComboRowByTitle(page, 'Default model')?.get_list_factory())
         throw new Error('Settings model selector did not install the full-name list factory');
 
+    const searchProviderRow = findComboRowByTitle(page, 'Fallback service');
+    const duckDuckGoStatusRow = findActionRowByTitle(page, 'DuckDuckGo search');
+    const exaSearchApiKeyRow = findPasswordEntryRowByTitle(page, 'Exa Search API key');
+
+    if (!searchProviderRow || !duckDuckGoStatusRow || !exaSearchApiKeyRow)
+        throw new Error('Web search fallback settings were not created');
+
+    if (searchProviderRow.get_model().get_string(searchProviderRow.get_selected()) !== 'DuckDuckGo'
+        || !duckDuckGoStatusRow.get_sensitive()
+        || exaSearchApiKeyRow.get_sensitive()) {
+        throw new Error('Built-in DuckDuckGo was not shown as the default search fallback');
+    }
+
+    searchProviderRow.set_selected(1);
+
+    if (providerConfigs.getWebSearchProviderId() !== 'exa-search'
+        || duckDuckGoStatusRow.get_sensitive()
+        || !exaSearchApiKeyRow.get_sensitive()) {
+        throw new Error('Web search fallback selector did not activate Exa Search settings');
+    }
+
+    searchProviderRow.set_selected(0);
+
     const kimiRow = findExpanderRowByTitle(builtInGroup, 'Kimi');
     const kimiEndpointRow = findActionRowByTitle(kimiRow, 'Endpoint');
     const kimiGlobalButton = findToggleButtonByLabel(kimiEndpointRow, 'Global');

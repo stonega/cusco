@@ -246,7 +246,7 @@ for (const [providerId, expectedTools] of Object.entries(expectedNativeSearchToo
 
 for (const providerId of ['kimi', 'deepseek']) {
     if (defaultStore.getNativeSearchTools(providerId).length > 0)
-        throw new Error(`${providerId} should use the Brave Search fallback`);
+        throw new Error(`${providerId} should use the configured web search fallback`);
 }
 
 if (defaultStore.listProviders().some((provider) => provider.customizable))
@@ -255,14 +255,40 @@ if (defaultStore.listProviders().some((provider) => provider.customizable))
 if (defaultStore.getProvider('grok').apiFormat !== 'openai-responses')
     throw new Error('Grok should use the Responses API for native Web and X search');
 
-await defaultStore.setWebSearchApiKey('brave-test-key');
+if (defaultStore.getWebSearchProviderId() !== 'duckduckgo'
+    || defaultStore.createWebSearchFallbackConfig().apiKeyRequired) {
+    throw new Error('Built-in DuckDuckGo was not configured as the no-key web search fallback');
+}
+
+const webSearchSettings = new MemorySettings({
+    strings: {
+        'web-search-provider': 'exa-search',
+    },
+});
+const persistedWebSearchStore = new ProviderConfigStore(undefined, {
+    settings: webSearchSettings,
+    apiKeyStore: new MemoryApiKeyStore({ 'exa-search': 'persisted-exa-key' }),
+    envLookup: () => '',
+});
+
+if (persistedWebSearchStore.getWebSearchProviderId() !== 'exa-search')
+    throw new Error('Persisted Exa Search fallback selection was not restored');
+
+persistedWebSearchStore.setWebSearchProviderId('duckduckgo');
+
+if (webSearchSettings.get_string('web-search-provider') !== 'duckduckgo')
+    throw new Error('DuckDuckGo fallback selection was not persisted');
+
+defaultStore.setWebSearchProviderId('exa-search');
+await defaultStore.setWebSearchApiKey('exa-test-key');
 
 if (defaultStore.getWebSearchApiKeyStatus().source !== 'secret'
-    || defaultStore.createWebSearchFallbackConfig().apiKey !== 'brave-test-key') {
-    throw new Error('Brave Search fallback credentials were not stored in Secret Service');
+    || defaultStore.createWebSearchFallbackConfig().apiKey !== 'exa-test-key') {
+    throw new Error('Exa Search fallback credentials were not stored in Secret Service');
 }
 
 await defaultStore.clearWebSearchApiKey();
+defaultStore.setWebSearchProviderId('duckduckgo');
 
 if (defaultStore.getThinkingLevels('grok', 'grok-4.5').join(',') !== 'low,medium,high')
     throw new Error('Grok 4.5 should expose low/medium/high reasoning levels');

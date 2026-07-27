@@ -268,6 +268,35 @@ export function normalizeToolCallDisplay(toolCall = {}) {
     };
 }
 
+export function toolCallBelongsToFollowingAssistant(toolCall = {}) {
+    return Boolean(toolName(toolCall)) && !Boolean(toolCall?.agentMode);
+}
+
+export function attachToolMessagesToAssistant(pendingEntries, assistantView) {
+    if (!Array.isArray(pendingEntries)
+        || pendingEntries.length === 0
+        || typeof assistantView?.append_tool_result !== 'function') {
+        return 0;
+    }
+
+    const entries = pendingEntries.splice(0);
+    let attachedCount = 0;
+
+    for (const entry of entries) {
+        const embeddedView = assistantView.append_tool_result(entry.message);
+
+        if (!embeddedView) {
+            pendingEntries.push(entry);
+            continue;
+        }
+
+        entry.view?.remove?.();
+        attachedCount += 1;
+    }
+
+    return attachedCount;
+}
+
 export function createToolCallFromRequest(request, options = {}) {
     const status = normalizeStatus(options.status ?? 'running');
 
