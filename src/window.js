@@ -66,6 +66,12 @@ import {
     HomeFileIndex,
     listPathExecutables,
 } from './composer/references.js';
+import {
+    buildComposerHistoryEntries,
+    composerHistoryDirection,
+    composerReadlineAction,
+    planComposerReadlineEdit,
+} from './composer/readline.js';
 import { createCronCreateTool, CronJobManager } from './cron/manager.js';
 import { isComputerUseError } from './computerUse/protocol.js';
 import { ComputerUseService } from './computerUse/service.js';
@@ -1020,6 +1026,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._clipboardPasteCancellables = new Set();
         this._imageViewer = null;
         this._composerReferences = [];
+        this._composerHistory = null;
         this._userMessageReferenceContents = new Set();
         this._composerSuggestionItems = [];
         this._composerSuggestionRefreshSourceId = 0;
@@ -1620,6 +1627,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         composerMetaRow.append(this._scrollToBottomButton);
 
         this._composerBuffer = new Gtk.TextBuffer();
+        this._composerReadlineKillText = '';
         this._composerReferenceTags = new Map();
 
         for (const kind of ['skill', 'file', 'command', 'artifact']) {
@@ -1774,7 +1782,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (this._handleComposerSuggestionKey(keyval))
                 return true;
 
+            if (this._handleComposerHistoryKey(keyval, state))
+                return true;
+
             if (this._deleteComposerReferenceAtCursor(keyval))
+                return true;
+
+            if (this._handleComposerReadlineKey(keyval, state))
                 return true;
 
             const isEnter = keyval === Gdk.KEY_Return || keyval === Gdk.KEY_KP_Enter;
@@ -1905,9 +1919,15 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return this._composerBuffer.get_text(start, end, true);
     }
 
-    _setComposerText(text, { preserveReferences = false } = {}) {
+    _setComposerText(text, {
+        preserveHistory = false,
+        preserveReferences = false,
+    } = {}) {
         if (!this._composerBuffer)
             return;
+
+        if (!preserveHistory)
+            this._composerHistory = null;
 
         if (!preserveReferences)
             this._composerReferences = [];
@@ -2595,6 +2615,150 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._updatingComposerReferences = false;
         this._syncComposerReferenceTags();
         this._refreshComposerSuggestions();
+        return true;
+    }
+
+    _handleComposerReadlineKey(keyval, state) {
+        const action = composerReadlineAction(keyval, state);
+
+        if (!action || !this._composerBuffer)
+            return false;
+
+        if (action === 'backward-delete-character'
+            && this._deleteComposerReferenceAtCursor(Gdk.KEY_BackSpace)) {
+            return true;
+        }
+
+        if (action === 'delete-character'
+            && this._deleteComposerReferenceAtCursor(Gdk.KEY_Delete)) {
+            return true;
+        }
+
+        const insertMark = this._composerBuffer.get_insert();
+        const selectionBoundMark = this._composerBuffer.get_selection_bound();
+        const cursorOffset = this._composerBuffer.get_iter_at_mark(insertMark).get_offset();
+        const selectionBoundOffset = this._composerBuffer
+            .get_iter_at_mark(selectionBoundMark)
+            .get_offset();
+        const plan = planComposerReadlineEdit(
+            this._getComposerText(),
+            cursorOffset,
+            selectionBoundOffset,
+            action,
+            this._composerReadlineKillText,
+        );
+
+        if (!plan)
+            return false;
+
+        if (plan.killedText !== undefined)
+            this._composerReadlineKillText = plan.killedText;
+
+        if (plan.edit) {
+            this._composerBuffer.begin_user_action();
+            this._composerBuffer.delete(
+                this._composerBuffer.get_iter_at_offset(plan.edit.startOffset),
+                this._composerBuffer.get_iter_at_offset(plan.edit.endOffset),
+            );
+
+            if (plan.edit.replacement) {
+                this._composerBuffer.insert(
+                    this._composerBuffer.get_iter_at_offset(plan.edit.startOffset),
+                    plan.edit.replacement,
+                    -1,
+                );
+            }
+
+            this._composerBuffer.place_cursor(
+                this._composerBuffer.get_iter_at_offset(plan.cursorOffset),
+            );
+            this._composerBuffer.end_user_action();
+        } else {
+            this._composerBuffer.place_cursor(
+                this._composerBuffer.get_iter_at_offset(plan.cursorOffset),
+            );
+        }
+
+        return true;
+    }
+
+    _handleComposerHistoryKey(keyval, state) {
+        if (this._activeQuestionSession || !this._composerBuffer)
+            return false;
+
+        const insertMark = this._composerBuffer.get_insert();
+        const selectionBoundMark = this._composerBuffer.get_selection_bound();
+        const cursorOffset = this._composerBuffer.get_iter_at_mark(insertMark).get_offset();
+        const selectionBoundOffset = this._composerBuffer
+            .get_iter_at_mark(selectionBoundMark)
+            .get_offset();
+        const direction = composerHistoryDirection(
+            keyval,
+            state,
+            this._getComposerText(),
+            cursorOffset,
+            selectionBoundOffset,
+        );
+
+        if (direction === 0)
+            return false;
+
+        return this._navigateComposerHistory(direction);
+    }
+
+    _navigateComposerHistory(direction) {
+        const conversation = this._conversations.activeConversation;
+
+        if (!conversation)
+            return false;
+
+        let history = this._composerHistory;
+
+        if (!history || history.conversationId !== conversation.id) {
+            const entries = buildComposerHistoryEntries(
+                conversation.messages,
+                this._getPendingUserMessages(conversation.id),
+            );
+
+            if (entries.length === 0)
+                return false;
+
+            history = {
+                conversationId: conversation.id,
+                entries,
+                index: entries.length,
+                draft: {
+                    text: this._getComposerText(),
+                    references: this._getComposerReferences(),
+                },
+            };
+            this._composerHistory = history;
+        }
+
+        const currentEntry = {
+            text: this._getComposerText(),
+            references: this._getComposerReferences(),
+        };
+
+        if (history.index === history.entries.length)
+            history.draft = currentEntry;
+        else
+            history.entries[history.index] = currentEntry;
+
+        const nextIndex = history.index + direction;
+
+        if (nextIndex < 0 || nextIndex > history.entries.length)
+            return false;
+
+        history.index = nextIndex;
+        const nextEntry = nextIndex === history.entries.length
+            ? history.draft
+            : history.entries[nextIndex];
+        this._composerReferences = normalizeComposerReferences(nextEntry.references);
+        this._setComposerText(nextEntry.text, {
+            preserveHistory: true,
+            preserveReferences: true,
+        });
         return true;
     }
 
@@ -3499,7 +3663,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 this._formatUserMessageContent(pendingMessage.content, attachments),
                 {
                     attachments,
-                    metadata: { composerReferences: references },
+                    metadata: {
+                        composerReferences: references,
+                        composerText: pendingMessage.content,
+                    },
                 },
             );
 
@@ -3623,7 +3790,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 this._formatUserMessageContent(text, attachments),
                 {
                     attachments,
-                    metadata: { composerReferences: normalizedReferences },
+                    metadata: {
+                        composerReferences: normalizedReferences,
+                        composerText: text,
+                    },
                 },
             );
             this._conversations.appendMessage(conversation.id, userMessage);

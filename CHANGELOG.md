@@ -7,6 +7,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- The message composer now supports familiar Readline/Emacs editing shortcuts for cursor movement, line and word deletion, transposition, and yank.
+- Up and Down now navigate each chat's input history while preserving the current draft and normal multiline cursor movement.
+
 ### Changed
 
 - Built-in DuckDuckGo search is now the default fallback for explicit web searches and models without native search, requiring no API key or additional software; Exa Search remains available as an optional API-key fallback with a free tier.

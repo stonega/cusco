@@ -48,6 +48,7 @@ artifact_web_sources = files(
 )
 
 composer_sources = files(
+  'composer/readline.js',
   'composer/references.js',
 )
 
