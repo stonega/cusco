@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.27] - 2026-07-28
+
 ### Added
 
 - The message composer now supports familiar Readline/Emacs editing shortcuts for cursor movement, line and word deletion, transposition, and yank.
@@ -185,7 +187,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.26...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.27...HEAD
+[0.5.27]: https://github.com/stonega/cusco/compare/v0.5.26...v0.5.27
 [0.5.26]: https://github.com/stonega/cusco/compare/v0.5.25...v0.5.26
 [0.5.25]: https://github.com/stonega/cusco/compare/v0.5.24...v0.5.25
 [0.5.24]: https://github.com/stonega/cusco/compare/v0.5.23...v0.5.24
