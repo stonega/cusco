@@ -14,6 +14,8 @@ const VISUAL_PIXEL_DELTA_THRESHOLD = 24;
 const VISUAL_PIXEL_TOTAL_DELTA_THRESHOLD = 48;
 const VISUAL_CHANGE_MINIMUM_PIXELS = 12;
 const VISUAL_CHANGE_MINIMUM_RATIO = 0.001;
+const VISUAL_CHANGE_COMPONENT_MINIMUM_PIXELS = 3;
+const VISUAL_CHANGE_MAX_COMPONENTS = 16;
 
 function clamp(value, minimum, maximum) {
     return Math.min(maximum, Math.max(minimum, value));
@@ -66,6 +68,7 @@ export function compareVisualSignatures(before, after) {
             changeRatio: null,
             thresholdPixels: null,
             changedBounds: null,
+            changedRegions: [],
         };
     }
 
@@ -82,9 +85,11 @@ export function compareVisualSignatures(before, after) {
             changeRatio: 1,
             thresholdPixels,
             changedBounds: null,
+            changedRegions: [],
         };
     }
 
+    const changedMask = new Uint8Array(totalPixels);
     let changedPixels = 0;
     let minimumX = after.width;
     let minimumY = after.height;
@@ -102,6 +107,7 @@ export function compareVisualSignatures(before, after) {
             const x = pixelIndex % after.width;
             const y = Math.floor(pixelIndex / after.width);
 
+            changedMask[pixelIndex] = 1;
             changedPixels += 1;
             minimumX = Math.min(minimumX, x);
             minimumY = Math.min(minimumY, y);
@@ -110,14 +116,81 @@ export function compareVisualSignatures(before, after) {
         }
     }
 
+    const normalizedBounds = (left, top, right, bottom) => ({
+        x: (left / after.width) * NORMALIZED_COORDINATE_SIZE,
+        y: (top / after.height) * NORMALIZED_COORDINATE_SIZE,
+        width: ((right - left + 1) / after.width) * NORMALIZED_COORDINATE_SIZE,
+        height: ((bottom - top + 1) / after.height) * NORMALIZED_COORDINATE_SIZE,
+    });
     const changedBounds = changedPixels > 0
-        ? {
-            x: (minimumX / after.width) * NORMALIZED_COORDINATE_SIZE,
-            y: (minimumY / after.height) * NORMALIZED_COORDINATE_SIZE,
-            width: ((maximumX - minimumX + 1) / after.width) * NORMALIZED_COORDINATE_SIZE,
-            height: ((maximumY - minimumY + 1) / after.height) * NORMALIZED_COORDINATE_SIZE,
-        }
+        ? normalizedBounds(minimumX, minimumY, maximumX, maximumY)
         : null;
+    const changedRegions = [];
+
+    if (changedPixels > 0) {
+        const queue = new Int32Array(totalPixels);
+
+        for (let start = 0; start < totalPixels; start++) {
+            if (changedMask[start] !== 1)
+                continue;
+
+            let head = 0;
+            let tail = 0;
+            let componentPixels = 0;
+            let componentMinimumX = after.width;
+            let componentMinimumY = after.height;
+            let componentMaximumX = -1;
+            let componentMaximumY = -1;
+            queue[tail++] = start;
+            changedMask[start] = 2;
+
+            while (head < tail) {
+                const pixelIndex = queue[head++];
+                const x = pixelIndex % after.width;
+                const y = Math.floor(pixelIndex / after.width);
+
+                componentPixels += 1;
+                componentMinimumX = Math.min(componentMinimumX, x);
+                componentMinimumY = Math.min(componentMinimumY, y);
+                componentMaximumX = Math.max(componentMaximumX, x);
+                componentMaximumY = Math.max(componentMaximumY, y);
+
+                const left = Math.max(0, x - 1);
+                const right = Math.min(after.width - 1, x + 1);
+                const top = Math.max(0, y - 1);
+                const bottom = Math.min(after.height - 1, y + 1);
+
+                for (let neighborY = top; neighborY <= bottom; neighborY++) {
+                    for (let neighborX = left; neighborX <= right; neighborX++) {
+                        const neighbor = (neighborY * after.width) + neighborX;
+
+                        if (changedMask[neighbor] !== 1)
+                            continue;
+
+                        changedMask[neighbor] = 2;
+                        queue[tail++] = neighbor;
+                    }
+                }
+            }
+
+            if (componentPixels < VISUAL_CHANGE_COMPONENT_MINIMUM_PIXELS)
+                continue;
+
+            changedRegions.push({
+                ...normalizedBounds(
+                    componentMinimumX,
+                    componentMinimumY,
+                    componentMaximumX,
+                    componentMaximumY,
+                ),
+                changedPixels: componentPixels,
+            });
+        }
+    }
+
+    changedRegions.sort((first, second) => (
+        second.changedPixels - first.changedPixels
+    ));
 
     return {
         changed: changedPixels >= thresholdPixels,
@@ -125,6 +198,7 @@ export function compareVisualSignatures(before, after) {
         changeRatio: changedPixels / totalPixels,
         thresholdPixels,
         changedBounds,
+        changedRegions: changedRegions.slice(0, VISUAL_CHANGE_MAX_COMPONENTS),
     };
 }
 

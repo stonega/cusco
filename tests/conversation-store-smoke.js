@@ -5,6 +5,57 @@ import { ConversationManager } from '../src/chat/conversation.js';
 import { createMessage } from '../src/providers/provider.js';
 import { ConversationFileStore } from '../src/storage/conversationStore.js';
 
+const transientPath = GLib.build_filenamev([
+    GLib.get_tmp_dir(),
+    `cusco-transient-conversation-${GLib.uuid_string_random()}`,
+    'conversations.json',
+]);
+const transientStore = new ConversationFileStore({ path: transientPath });
+const transientConversations = new ConversationManager({
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
+    store: transientStore,
+});
+const transientChat = transientConversations.createConversation();
+transientConversations.renameConversation(transientChat.id, 'Still transient');
+transientConversations.appendMessage(
+    transientChat.id,
+    createMessage('system', 'A system-only message must not save the chat'),
+);
+transientConversations.appendMessage(transientChat.id, createMessage('user', '   '));
+
+if (GLib.file_test(transientPath, GLib.FileTest.EXISTS))
+    throw new Error('A transient chat wrote the conversation database before user input');
+
+transientConversations.persist();
+
+const emptyReload = new ConversationManager({
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
+    store: transientStore,
+});
+
+if (emptyReload.conversations.length !== 0)
+    throw new Error('An ordinary chat without non-empty user input was persisted');
+
+transientConversations.appendMessage(
+    transientChat.id,
+    createMessage('user', '', {
+        attachments: [{ kind: 'file', path: '/tmp/input.txt' }],
+    }),
+);
+
+const materializedReload = new ConversationManager({
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
+    store: transientStore,
+});
+
+if (materializedReload.activeConversation?.id !== transientChat.id
+    || materializedReload.activeConversation.messages.at(-1)?.attachments.length !== 1) {
+    throw new Error('The first non-empty user input did not persist its transient chat');
+}
+
 const path = GLib.build_filenamev([
     GLib.get_tmp_dir(),
     `cusco-conversation-store-${GLib.uuid_string_random()}`,
@@ -248,7 +299,9 @@ const selectionConversations = new ConversationManager({
     store: selectionFileStore,
 });
 const selectedChat = selectionConversations.createConversation({ title: 'Selected chat' });
-selectionConversations.createConversation({ title: 'Other chat' });
+selectionConversations.appendMessage(selectedChat.id, createMessage('user', 'Selected chat message'));
+const otherChat = selectionConversations.createConversation({ title: 'Other chat' });
+selectionConversations.appendMessage(otherChat.id, createMessage('user', 'Other chat message'));
 const [, databaseBeforeSelection] = GLib.file_get_contents(selectionDatabasePath);
 selectionConversations.selectConversation(selectedChat.id);
 const [, databaseAfterSelection] = GLib.file_get_contents(selectionDatabasePath);

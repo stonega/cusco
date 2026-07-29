@@ -1092,11 +1092,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
         }
         this._syncComputerUseTools();
 
-        if (this._conversations.conversations.length === 0) {
+        if (defaultProvider) {
+            this._createConversationWithDefaults();
+        } else if (this._conversations.conversations.length === 0) {
             this._createConversationWithDefaults({
                 title: WELCOME_CONVERSATION_TITLE,
                 thinkingLevel: this._appSettings.thinkingLevel,
                 messages: [createWelcomeMessage()],
+                persistImmediately: true,
             });
         }
 
@@ -1163,6 +1166,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         this._refreshConversationList();
         this._renderActiveConversation();
+
+        if (defaultProvider)
+            this.focusComposer();
+
         this._syncCronJobsWithConversations({ refreshUi: true }).catch((error) => {
             logError(error, 'Failed to sync cron job chats');
         });
@@ -1879,6 +1886,23 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _createNewConversation() {
         const activeConversation = this._conversations.activeConversation;
+        const transientConversation = this._conversations.allConversations.find((conversation) => (
+            !conversation.archived
+            && this._conversations.isConversationTransient(conversation.id)
+        ));
+
+        if (transientConversation) {
+            if (transientConversation.id !== activeConversation?.id) {
+                this._conversationSelectionSerial += 1;
+                this._conversations.selectConversation(transientConversation.id);
+                this._refreshConversationList();
+            }
+
+            this._renderActiveConversation();
+            this.focusComposer();
+            return;
+        }
+
         const providerId = activeConversation?.providerId;
         const modelId = activeConversation?.modelId;
         const thinkingLevel = activeConversation?.thinkingLevel ?? this._appSettings.thinkingLevel;
@@ -4325,6 +4349,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             const entry = new Gtk.PasswordEntry({
                 placeholder_text: 'Password',
                 show_peek_icon: true,
+                activates_default: true,
                 hexpand: true,
             });
             const box = new Gtk.Box({

@@ -42,6 +42,18 @@ const AUTO_ZOOM_MAXIMUM_DIMENSION = 700;
 const AUTO_ZOOM_MAXIMUM_AREA = 200_000;
 const AUTO_ZOOM_CLICK_PROXIMITY = 120;
 const AUTO_ZOOM_MINIMUM_EXTENSION = 55;
+const AUTO_ZOOM_COMPONENT_MERGE_GAP = 80;
+const INTERACTION_BOUNDARY_PADDING = 8;
+const INTERACTION_TRIGGER_EXCLUSION_RADIUS = 24;
+const INTERACTION_CLICK_ACTIONS = new Set(['click']);
+const INTERACTION_SEMANTIC_ACTIONS = new Set(['click_element']);
+const INTERACTION_RESOLUTION_KEYS = new Set([
+    'ENTER',
+    'ESC',
+    'ESCAPE',
+    'RETURN',
+    'SPACE',
+]);
 const WORKSPACE_ACTIONS = new Set([
     'create_workspace',
     'move_to_workspace',
@@ -477,6 +489,255 @@ function normalizedRootPoint(coordinates) {
     };
 }
 
+function normalizedRootPointForAction(action, observation) {
+    const x = Number(action?.x);
+    const y = Number(action?.y);
+    const view = observation?.view?.normalized;
+
+    if (!Number.isFinite(x)
+        || !Number.isFinite(y)
+        || !view
+        || ![view.x, view.y, view.width, view.height].every(Number.isFinite)) {
+        return null;
+    }
+
+    if (isNormalizedComputerUseCoordinateSpace(action.coordinateSpace)) {
+        return {
+            x: view.x + ((x / NORMALIZED_COORDINATE_SIZE) * view.width),
+            y: view.y + ((y / NORMALIZED_COORDINATE_SIZE) * view.height),
+        };
+    }
+
+    const imageWidth = Math.max(1, Number(observation.imageWidth) || 1);
+    const imageHeight = Math.max(1, Number(observation.imageHeight) || 1);
+    return {
+        x: view.x + ((x / imageWidth) * view.width),
+        y: view.y + ((y / imageHeight) * view.height),
+    };
+}
+
+function pointDistanceFromBounds(point, bounds) {
+    const left = Number(bounds?.x);
+    const top = Number(bounds?.y);
+    const right = left + Number(bounds?.width);
+    const bottom = top + Number(bounds?.height);
+
+    if (!point
+        || ![point.x, point.y, left, top, right, bottom].every(Number.isFinite)
+        || right <= left || bottom <= top) {
+        return Number.POSITIVE_INFINITY;
+    }
+
+    const horizontal = point.x < left
+        ? left - point.x
+        : point.x > right
+            ? point.x - right
+            : 0;
+    const vertical = point.y < top
+        ? top - point.y
+        : point.y > bottom
+            ? point.y - bottom
+            : 0;
+    return Math.hypot(horizontal, vertical);
+}
+
+function boundsDistance(first, second) {
+    const firstLeft = Number(first?.x);
+    const firstTop = Number(first?.y);
+    const firstRight = firstLeft + Number(first?.width);
+    const firstBottom = firstTop + Number(first?.height);
+    const secondLeft = Number(second?.x);
+    const secondTop = Number(second?.y);
+    const secondRight = secondLeft + Number(second?.width);
+    const secondBottom = secondTop + Number(second?.height);
+
+    if (![firstLeft, firstTop, firstRight, firstBottom,
+        secondLeft, secondTop, secondRight, secondBottom].every(Number.isFinite)) {
+        return Number.POSITIVE_INFINITY;
+    }
+
+    const horizontal = firstRight < secondLeft
+        ? secondLeft - firstRight
+        : secondRight < firstLeft
+            ? firstLeft - secondRight
+            : 0;
+    const vertical = firstBottom < secondTop
+        ? secondTop - firstBottom
+        : secondBottom < firstTop
+            ? firstTop - secondBottom
+            : 0;
+    return Math.hypot(horizontal, vertical);
+}
+
+function mergedChangedRegions(regions) {
+    const candidates = (regions ?? []).filter(region => (
+        [region?.x, region?.y, region?.width, region?.height].every(Number.isFinite)
+        && region.width > 0
+        && region.height > 0
+    ));
+    const parents = candidates.map((_region, index) => index);
+    const root = (index) => {
+        let current = index;
+
+        while (parents[current] !== current) {
+            parents[current] = parents[parents[current]];
+            current = parents[current];
+        }
+
+        return current;
+    };
+
+    for (let first = 0; first < candidates.length; first++) {
+        for (let second = first + 1; second < candidates.length; second++) {
+            if (boundsDistance(candidates[first], candidates[second])
+                > AUTO_ZOOM_COMPONENT_MERGE_GAP) {
+                continue;
+            }
+
+            const firstRoot = root(first);
+            const secondRoot = root(second);
+
+            if (firstRoot !== secondRoot)
+                parents[secondRoot] = firstRoot;
+        }
+    }
+
+    const groups = new Map();
+
+    for (let index = 0; index < candidates.length; index++) {
+        const group = groups.get(root(index)) ?? [];
+        group.push(candidates[index]);
+        groups.set(root(index), group);
+    }
+
+    return [...groups.values()].map(group => {
+        const left = Math.min(...group.map(region => region.x));
+        const top = Math.min(...group.map(region => region.y));
+        const right = Math.max(...group.map(region => region.x + region.width));
+        const bottom = Math.max(...group.map(region => region.y + region.height));
+
+        return {
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+            changedPixels: group.reduce(
+                (total, region) => total + Number(region.changedPixels ?? 0),
+                0,
+            ),
+        };
+    });
+}
+
+function boundsExtensionFromPoint(point, bounds) {
+    const left = Number(bounds?.x);
+    const top = Number(bounds?.y);
+    const right = left + Number(bounds?.width);
+    const bottom = top + Number(bounds?.height);
+
+    if (!point
+        || ![point.x, point.y, left, top, right, bottom].every(Number.isFinite)
+        || right <= left || bottom <= top) {
+        return 0;
+    }
+
+    return Math.max(
+        Math.abs(point.x - left),
+        Math.abs(point.x - right),
+        Math.abs(point.y - top),
+        Math.abs(point.y - bottom),
+    );
+}
+
+function pointInsideBounds(point, bounds, padding = 0) {
+    const left = Number(bounds?.x) - padding;
+    const top = Number(bounds?.y) - padding;
+    const right = Number(bounds?.x) + Number(bounds?.width) + padding;
+    const bottom = Number(bounds?.y) + Number(bounds?.height) + padding;
+
+    return Boolean(point)
+        && [point.x, point.y, left, top, right, bottom].every(Number.isFinite)
+        && point.x >= left
+        && point.x <= right
+        && point.y >= top
+        && point.y <= bottom;
+}
+
+function pointNearTrigger(point, triggerPoint) {
+    if (!point
+        || !triggerPoint
+        || ![point.x, point.y, triggerPoint.x, triggerPoint.y].every(Number.isFinite)) {
+        return false;
+    }
+
+    return Math.hypot(
+        point.x - triggerPoint.x,
+        point.y - triggerPoint.y,
+    ) <= INTERACTION_TRIGGER_EXCLUSION_RADIUS;
+}
+
+function boundsInObservation(bounds, observation) {
+    const view = observation?.view?.normalized;
+    const left = Math.max(Number(bounds?.x), Number(view?.x));
+    const top = Math.max(Number(bounds?.y), Number(view?.y));
+    const right = Math.min(
+        Number(bounds?.x) + Number(bounds?.width),
+        Number(view?.x) + Number(view?.width),
+    );
+    const bottom = Math.min(
+        Number(bounds?.y) + Number(bounds?.height),
+        Number(view?.y) + Number(view?.height),
+    );
+
+    if (![left, top, right, bottom, view?.x, view?.y, view?.width, view?.height]
+        .every(Number.isFinite)
+        || right <= left
+        || bottom <= top
+        || view.width <= 0
+        || view.height <= 0) {
+        return null;
+    }
+
+    return {
+        x: ((left - view.x) / view.width) * NORMALIZED_COORDINATE_SIZE,
+        y: ((top - view.y) / view.height) * NORMALIZED_COORDINATE_SIZE,
+        width: ((right - left) / view.width) * NORMALIZED_COORDINATE_SIZE,
+        height: ((bottom - top) / view.height) * NORMALIZED_COORDINATE_SIZE,
+    };
+}
+
+function pointInObservation(point, observation) {
+    const view = observation?.view?.normalized;
+
+    if (!point
+        || !view
+        || ![point.x, point.y, view.x, view.y, view.width, view.height]
+            .every(Number.isFinite)
+        || view.width <= 0
+        || view.height <= 0) {
+        return null;
+    }
+
+    const x = ((point.x - view.x) / view.width) * NORMALIZED_COORDINATE_SIZE;
+    const y = ((point.y - view.y) / view.height) * NORMALIZED_COORDINATE_SIZE;
+
+    if (x < 0 || x > NORMALIZED_COORDINATE_SIZE
+        || y < 0 || y > NORMALIZED_COORDINATE_SIZE) {
+        return null;
+    }
+
+    return { x, y };
+}
+
+function keypressResolvesInteraction(action) {
+    if (action?.action !== 'keypress')
+        return false;
+
+    return (action.keys ?? []).some(key => (
+        INTERACTION_RESOLUTION_KEYS.has(String(key ?? '').trim().toUpperCase())
+    ));
+}
+
 function expandedAxis(start, end, minimumSize) {
     let nextStart = Math.max(0, start);
     let nextEnd = Math.min(NORMALIZED_COORDINATE_SIZE, end);
@@ -504,8 +765,17 @@ function expandedAxis(start, end, minimumSize) {
 }
 
 function automaticZoomRegion(visualChange, actionResult) {
-    const bounds = visualChange?.changedBounds;
     const point = normalizedRootPoint(actionResult?.coordinates);
+    const componentBounds = mergedChangedRegions(visualChange?.changedRegions)
+        .filter(bounds => (
+            pointDistanceFromBounds(point, bounds) <= AUTO_ZOOM_CLICK_PROXIMITY
+            && boundsExtensionFromPoint(point, bounds) >= AUTO_ZOOM_MINIMUM_EXTENSION
+        ))
+        .sort((first, second) => (
+            pointDistanceFromBounds(point, first) - pointDistanceFromBounds(point, second)
+            || Number(second.changedPixels ?? 0) - Number(first.changedPixels ?? 0)
+        ))[0] ?? null;
+    const bounds = componentBounds ?? visualChange?.changedBounds;
 
     if (visualChange?.changed !== true || !bounds || !point)
         return null;
@@ -520,16 +790,9 @@ function automaticZoomRegion(visualChange, actionResult) {
         return null;
     }
 
-    const nearChange = point.x >= left - AUTO_ZOOM_CLICK_PROXIMITY
-        && point.x <= right + AUTO_ZOOM_CLICK_PROXIMITY
-        && point.y >= top - AUTO_ZOOM_CLICK_PROXIMITY
-        && point.y <= bottom + AUTO_ZOOM_CLICK_PROXIMITY;
-    const extensionFromClick = Math.max(
-        Math.abs(point.x - left),
-        Math.abs(point.x - right),
-        Math.abs(point.y - top),
-        Math.abs(point.y - bottom),
-    );
+    const nearChange = pointDistanceFromBounds(point, bounds)
+        <= AUTO_ZOOM_CLICK_PROXIMITY;
+    const extensionFromClick = boundsExtensionFromPoint(point, bounds);
 
     if (!nearChange || extensionFromClick < AUTO_ZOOM_MINIMUM_EXTENSION)
         return null;
@@ -681,6 +944,7 @@ export class ComputerUseService {
         this._coordinateRetryBlocked = new Set();
         this._coordinateRetryBlockReasons = new Map();
         this._visualStateHistories = new Map();
+        this._localizedInteractionGuards = new Map();
         this._sessionDirectory = options.cacheDirectory ?? GLib.build_filenamev([
             GLib.get_user_cache_dir(),
             'io.github.stonega.Cusco',
@@ -911,6 +1175,88 @@ export class ComputerUseService {
         this._observationViews.set(observation.observationId, observation);
     }
 
+    _interactionGuardForObservation(windowId, observation) {
+        const guard = this._localizedInteractionGuards.get(String(windowId ?? ''));
+
+        if (!guard || !observation)
+            return null;
+
+        return {
+            active: true,
+            reason: 'localized_visual_change',
+            cycleDetected: Boolean(guard.cycleDetected),
+            observationId: observation.observationId,
+            localBounds: boundsInObservation(guard.bounds, observation),
+            triggerPoint: pointInObservation(guard.triggerPoint, observation),
+        };
+    }
+
+    _evaluateInteractionGuard(windowId, action, observation) {
+        const guard = this._localizedInteractionGuards.get(String(windowId ?? ''));
+
+        if (!guard)
+            return { allowed: true, resolves: false, selection: false };
+
+        const coordinateAction = hasComputerUseCoordinates(action);
+
+        if (!coordinateAction) {
+            const semanticSelection = INTERACTION_SEMANTIC_ACTIONS.has(action?.action);
+            const keyboardAction = action?.action === 'keypress';
+
+            if (guard.cycleDetected && !semanticSelection && !keyboardAction) {
+                return {
+                    allowed: false,
+                    resolves: false,
+                    selection: false,
+                    reason: 'cycle_action',
+                    message: 'The popup is protected after an open/close cycle. No action was sent. Select a visible option inside the popup, use keyboard navigation, or press Escape to dismiss it.',
+                };
+            }
+
+            return {
+                allowed: true,
+                resolves: semanticSelection || keypressResolvesInteraction(action),
+                selection: semanticSelection,
+            };
+        }
+
+        const primaryClick = INTERACTION_CLICK_ACTIONS.has(action?.action)
+            && (action.button === undefined || action.button === 'left');
+        const point = normalizedRootPointForAction(action, observation);
+
+        if (!primaryClick || !point) {
+            return {
+                allowed: false,
+                resolves: false,
+                selection: false,
+                reason: 'coordinate_action',
+                message: 'A localized popup is active, so only a single primary click inside it is allowed. No action was sent. Use the attached popup crop or keyboard navigation.',
+            };
+        }
+
+        if (!pointInsideBounds(point, guard.bounds, INTERACTION_BOUNDARY_PADDING)) {
+            return {
+                allowed: false,
+                resolves: false,
+                selection: false,
+                reason: 'outside_bounds',
+                message: 'The requested click is outside the active popup boundary. No action was sent. Select a visible option inside interactionGuard.localBounds, use keyboard navigation, or press Escape to dismiss the popup.',
+            };
+        }
+
+        if (guard.cycleDetected && pointNearTrigger(point, guard.triggerPoint)) {
+            return {
+                allowed: false,
+                resolves: false,
+                selection: false,
+                reason: 'cycle_trigger',
+                message: 'The requested click targets the popup trigger after an open/close cycle. No action was sent. Select an option away from interactionGuard.triggerPoint or use keyboard navigation.',
+            };
+        }
+
+        return { allowed: true, resolves: true, selection: true };
+    }
+
     _resolveObservation(windowId, observationId = '') {
         const id = String(windowId ?? '');
         const current = this._observations.get(id) ?? null;
@@ -1073,6 +1419,7 @@ export class ComputerUseService {
             this._unchangedCoordinateStepCounts.set(normalizedWindowId, 0);
             this._coordinateRetryBlocked.delete(normalizedWindowId);
             this._coordinateRetryBlockReasons.delete(normalizedWindowId);
+            this._localizedInteractionGuards.delete(normalizedWindowId);
             this._visualStateHistories.set(
                 normalizedWindowId,
                 [observationVisualState(observation)],
@@ -1397,16 +1744,61 @@ export class ComputerUseService {
         let failure = null;
         let preActionVerification = null;
         let preconditionObservation = null;
+        let attemptedInteractionResolution = false;
 
         for (const [index, action] of actionList.entries()) {
             const coordinateAction = hasComputerUseCoordinates(action);
+            const referencedObservation = coordinateAction
+                ? this._resolveObservation(windowId, action.observationId)
+                : actionObservation;
+            const interactionGuardActive = this._localizedInteractionGuards.has(windowId);
+            const interactionDecision = this._evaluateInteractionGuard(
+                windowId,
+                action,
+                referencedObservation,
+            );
+
+            if (!interactionDecision.allowed) {
+                failure = {
+                    phase: 'precondition',
+                    actionIndex: index,
+                    action: String(action.action ?? 'unknown'),
+                    kind: 'interaction_guard',
+                    message: interactionDecision.message,
+                    reason: interactionDecision.reason,
+                };
+                preActionVerification = {
+                    matched: true,
+                    screenChanged: false,
+                    visualChange: {
+                        changed: false,
+                        changedPixels: 0,
+                        changeRatio: 0,
+                        thresholdPixels: 0,
+                        changedBounds: null,
+                        changedRegions: [],
+                    },
+                    focused: referencedObservation?.window?.focused === true,
+                    referenceObservationId: referencedObservation?.observationId ?? null,
+                    referenceRootObservationId: referencedObservation?.rootObservationId ?? null,
+                    freshObservationId: null,
+                    actionIndex: index,
+                    action: String(action.action ?? 'unknown'),
+                    actionDispatched: false,
+                    interactionGuardRejected: true,
+                    interactionGuardReason: interactionDecision.reason,
+                };
+                preconditionObservation = referencedObservation
+                    ? this._observationPayload(referencedObservation)
+                    : null;
+                break;
+            }
+
+            if (interactionGuardActive && interactionDecision.resolves)
+                attemptedInteractionResolution = true;
 
             if (coordinateAction) {
                 const preActionStartedAt = GLib.get_monotonic_time();
-                const referencedObservation = this._resolveObservation(
-                    windowId,
-                    action.observationId,
-                );
                 let liveState;
 
                 try {
@@ -1612,6 +2004,14 @@ export class ComputerUseService {
             }
         }
         let visualStateCycleDetected = false;
+        let interactionResolved = false;
+
+        if (!failure
+            && attemptedInteractionResolution
+            && screenChanged === true) {
+            this._localizedInteractionGuards.delete(windowId);
+            interactionResolved = true;
+        }
 
         if (!failure && observation) {
             unchangedCount = screenChanged === false && semanticActionsVerified !== true
@@ -1626,7 +2026,12 @@ export class ComputerUseService {
                 coordinateMissCount = 0;
             }
 
-            if (lastPointerResult && currentObservation) {
+            if (interactionResolved && currentObservation) {
+                this._visualStateHistories.set(
+                    windowId,
+                    [observationVisualState(currentObservation)],
+                );
+            } else if (lastPointerResult && currentObservation) {
                 const history = [
                     ...(this._visualStateHistories.get(windowId) ?? []),
                 ];
@@ -1658,6 +2063,10 @@ export class ComputerUseService {
             if (visualStateCycleDetected) {
                 this._coordinateRetryBlocked.add(windowId);
                 this._coordinateRetryBlockReasons.set(windowId, 'visual_state_cycle');
+                const guard = this._localizedInteractionGuards.get(windowId);
+
+                if (guard)
+                    guard.cycleDetected = true;
             } else if (coordinateMissCount >= STALLED_STEP_THRESHOLD) {
                 this._coordinateRetryBlocked.add(windowId);
                 this._coordinateRetryBlockReasons.set(windowId, 'unchanged_steps');
@@ -1674,10 +2083,18 @@ export class ComputerUseService {
             && observation
             && currentObservation
             && lastPointerResult
+            && !interactionResolved
             && expectations.length === 0) {
             const zoom = automaticZoomRegion(visualChange, lastPointerResult);
 
             if (zoom) {
+                const previousGuard = this._localizedInteractionGuards.get(windowId) ?? null;
+                this._localizedInteractionGuards.set(windowId, {
+                    bounds: zoom.changedBounds,
+                    triggerPoint: zoom.triggerPoint,
+                    cycleDetected: visualStateCycleDetected,
+                });
+
                 try {
                     const rootObservationId = currentObservation.observationId;
                     const zoomMetadata = {
@@ -1703,6 +2120,10 @@ export class ComputerUseService {
                         region: observation.view?.normalized ?? zoom.region,
                     };
                 } catch (error) {
+                    if (previousGuard)
+                        this._localizedInteractionGuards.set(windowId, previousGuard);
+                    else
+                        this._localizedInteractionGuards.delete(windowId);
                     logRecoverableComputerUseError(
                         error,
                         'Failed to enlarge a localized post-click change',
@@ -1764,6 +2185,7 @@ export class ComputerUseService {
             observation,
             autoZoom,
             retainedRegion,
+            interactionGuard: this._interactionGuardForObservation(windowId, observation),
             verification: {
                 screenChanged,
                 visualChange,
@@ -1891,6 +2313,7 @@ export class ComputerUseService {
         this._coordinateRetryBlocked.clear();
         this._coordinateRetryBlockReasons.clear();
         this._visualStateHistories.clear();
+        this._localizedInteractionGuards.clear();
         this._accessibility?.shutdown?.();
 
         try {

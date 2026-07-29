@@ -122,6 +122,7 @@ function stepForTranscript(stepResult, observation, instruction, normalization =
         observation: observationForTranscript(observation),
         autoZoom: stepResult.autoZoom,
         retainedRegion: stepResult.retainedRegion,
+        interactionGuard: stepResult.interactionGuard,
         verification: {
             screenChanged: verification.screenChanged,
             focused: verification.focused,
@@ -341,7 +342,7 @@ export function createComputerUseTools(service) {
         {
             name: 'computer_step',
             label: 'Act and observe desktop window',
-            description: 'Perform one or more bounded actions on one observed window, wait briefly, and return the updated screenshot plus semantic, coordinate, change, and stall feedback. Before coordinate input, Cusco passively checks that the referenced UI is still visible and focused; stale UI is returned without dispatching the action. After a click produces a localized visual change such as a popup, Cusco may return one automatically enlarged region image; after an unchanged click inside a region it retains that same crop for a centered retry. Prefer accessibility refs when available. Visual coordinates may be any value from 0..1000 in the attached full or region grid; click target centers instead of snapping to grid lines or borders. Prefer paste_text for non-sensitive text because it copies the complete value to the clipboard and pastes it atomically; use type for sensitive values or fields that reject paste. Either text input action may include x and y to focus a visual field, with replace:true selecting its existing text first. Common click-then-input and click-then-Ctrl+A-then-input calls are normalized to those atomic forms. Other explicit coordinate click and keyboard batches remain unsafe. For small targets or a blocked retry, use computer_observe_region. Coordinate actions that navigate or enter input should include an expect entry when accessibility is available.',
+            description: 'Perform one or more bounded actions on one observed window, wait briefly, and return the updated screenshot plus semantic, coordinate, change, and stall feedback. Before coordinate input, Cusco passively checks that the referenced UI is still visible and focused; stale UI is returned without dispatching the action. After a click produces a localized visual change such as a popup, Cusco may return one automatically enlarged region image and an interactionGuard.localBounds boundary; clicks outside that boundary are rejected without closing the popup. After an unchanged click inside a region it retains that same crop for a centered retry. Prefer accessibility refs when available. Visual coordinates may be any value from 0..1000 in the attached full or region grid; click target centers instead of snapping to grid lines or borders. Prefer paste_text for non-sensitive text because it copies the complete value to the clipboard and pastes it atomically; use type for sensitive values or fields that reject paste. Either text input action may include x and y to focus a visual field, with replace:true selecting its existing text first. Common click-then-input and click-then-Ctrl+A-then-input calls are normalized to those atomic forms. Other explicit coordinate click and keyboard batches remain unsafe. For small targets or a blocked retry, use computer_observe_region. Coordinate actions that navigate or enter input should include an expect entry when accessibility is available.',
             inputDescription: 'JSON: {"windowId":"ID","observationId":"latest full or region observation ID","actions":[{"action":"click","x":480,"y":280}],"settleMs":250}. For an inaccessible visual text field, prefer exactly one atomic action: {"action":"paste_text","x":480,"y":280,"text":"value","replace":true}; omit replace for an empty field. Use type with the same fields for sensitive values or when paste is rejected. Semantic actions include click_element {ref} and set_text_element {ref,text}; other actions include keypress, maximize, move_to_workspace, move_to_new_workspace, scroll, and drag. A keypress keys array is one simultaneous chord; use separate keypress actions for a sequence such as Down then Return. Arbitrary explicit click and keyboard batches are rejected. All visual coordinates are normalized 0..1000. Maximum 8 actions.',
             inputSchema: {
                 type: 'object',
@@ -481,7 +482,9 @@ export function createComputerUseTools(service) {
                 };
                 let instruction = 'The post-action screenshot is attached. Check it and the verification fields before continuing or claiming success.';
 
-                if (stepResult.failure?.kind === 'stale_observation') {
+                if (stepResult.failure?.kind === 'interaction_guard') {
+                    instruction = 'Cusco rejected this action before dispatch because it would leave or retrigger the active popup. The popup state and attached crop are unchanged. Click a visible option center inside interactionGuard.localBounds, use keyboard navigation, or press Escape to dismiss it.';
+                } else if (stepResult.failure?.kind === 'stale_observation') {
                     instruction = 'The visible UI changed or lost focus before coordinate input could be dispatched. No coordinate action was sent. Replan from the attached fresh screenshot and use its new observationId.';
                 } else if (stepResult.failed) {
                     const completed = Number(stepResult.completedActionCount) || 0;

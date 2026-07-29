@@ -7,6 +7,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.28] - 2026-07-29
+
+### Changed
+
+- Cusco now opens configured sessions in a fresh unsaved chat with the message input focused, and ordinary empty chats stay out of history until the first non-empty user message.
+
+### Fixed
+
+- Computer use now centers popup crops on the relevant visual change and rejects clicks outside the active popup before they can close or retrigger it.
+- Pressing Enter in the sudo password dialog now runs the pending command.
+
 ## [0.5.27] - 2026-07-28
 
 ### Added
@@ -187,7 +198,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.27...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.28...HEAD
+[0.5.28]: https://github.com/stonega/cusco/compare/v0.5.27...v0.5.28
 [0.5.27]: https://github.com/stonega/cusco/compare/v0.5.26...v0.5.27
 [0.5.26]: https://github.com/stonega/cusco/compare/v0.5.25...v0.5.26
 [0.5.25]: https://github.com/stonega/cusco/compare/v0.5.24...v0.5.25

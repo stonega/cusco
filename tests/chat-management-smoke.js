@@ -47,7 +47,15 @@ const persistedSelectionConversations = new ConversationManager({
     store: selectionStore,
 });
 const persistedFirstChat = persistedSelectionConversations.createConversation({ title: 'Persisted first chat' });
+persistedSelectionConversations.appendMessage(
+    persistedFirstChat.id,
+    createMessage('user', 'Persist the first chat'),
+);
 const persistedSecondChat = persistedSelectionConversations.createConversation({ title: 'Persisted second chat' });
+persistedSelectionConversations.appendMessage(
+    persistedSecondChat.id,
+    createMessage('user', 'Persist the second chat'),
+);
 
 fullSaveCount = 0;
 persistedSelectionConversations.selectConversation(persistedFirstChat.id);

@@ -58,6 +58,9 @@ changedContext.fill();
 changedContext.setSourceRGB(0.1, 0.8, 1);
 changedContext.rectangle(20, 20, 80, 40);
 changedContext.fill();
+changedContext.setSourceRGB(0.9, 0.2, 0.3);
+changedContext.rectangle(320, 170, 40, 20);
+changedContext.fill();
 changedSurface.writeToPNG(changedPath);
 changedContext.$dispose();
 changedSurface.finish();
@@ -78,7 +81,12 @@ if (cursorOnlyChange.changed !== false
     || meaningfulChange.changedBounds.x > 75
     || meaningfulChange.changedBounds.y > 125
     || meaningfulChange.changedBounds.x + meaningfulChange.changedBounds.width < 225
-    || meaningfulChange.changedBounds.y + meaningfulChange.changedBounds.height < 275) {
+    || meaningfulChange.changedBounds.y + meaningfulChange.changedBounds.height < 900
+    || meaningfulChange.changedRegions.length < 2
+    || meaningfulChange.changedRegions[0].changedPixels
+        <= meaningfulChange.changedRegions[1].changedPixels
+    || meaningfulChange.changedRegions[0].x > 75
+    || meaningfulChange.changedRegions[1].x < 750) {
     throw new Error(`Visual change filtering was incorrect: ${JSON.stringify({ cursorOnlyChange, meaningfulChange })}`);
 }
 

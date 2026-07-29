@@ -624,6 +624,9 @@ function popupPng(open) {
     context.fill();
 
     if (open) {
+        context.setSourceRGB(0.18, 0.2, 0.24);
+        context.rectangle(20, 10, 60, 10);
+        context.fill();
         context.setSourceRGB(0.06, 0.07, 0.085);
         context.rectangle(210, 89, 60, 80);
         context.fill();
@@ -1244,6 +1247,11 @@ let popupClickChangesState = true;
 capturePng = popupClosedPng;
 passivePng = popupClosedPng;
 const popupClosedObservation = await computerUse.observe('42');
+const popupClosedInternalObservation = computerUse._observations.get('42');
+const popupClosedVisualState = {
+    fingerprint: popupClosedInternalObservation.fingerprint,
+    visualSignature: popupClosedInternalObservation.visualSignature,
+};
 performActionEffect = (request) => {
     if (request.action !== 'click')
         return;
@@ -1263,23 +1271,42 @@ const popupOpenedStep = await realTools.get('computer_step').run(JSON.stringify(
     actions: [{ action: 'click', x: 600, y: 400 }],
     settleMs: 0,
 }));
+const popupOpenInternalObservation = computerUse._observations.get('42');
+const popupOpenVisualState = {
+    fingerprint: popupOpenInternalObservation.fingerprint,
+    visualSignature: popupOpenInternalObservation.visualSignature,
+};
 if (!popupOpenedStep.autoZoom?.applied
     || popupOpenedStep.view?.type !== 'region'
     || popupOpenedStep.capture?.source !== 'localized_change_region'
     || popupOpenedStep.observationId === popupOpenedStep.rootObservationId
+    || popupOpenedStep.autoZoom.changedBounds.y < 400
+    || popupOpenedStep.autoZoom.changedBounds.width < 100
+    || popupOpenedStep.autoZoom.changedBounds.height < 250
+    || popupOpenedStep.verification.visualChange.changedBounds.y > 100
+    || popupOpenedStep.verification.visualChange.changedRegions.length < 2
+    || !popupOpenedStep.interactionGuard?.active
+    || !popupOpenedStep.interactionGuard.localBounds
+    || popupOpenedStep.interactionGuard.cycleDetected
     || popupOpenedStep.verification.visualStateCycleDetected
     || !popupOpenedStep.output.includes('automatically enlarged crop')
-    || !popupOpenedStep.output.includes('Coordinates are local')) {
+    || !popupOpenedStep.output.includes('Coordinates are local')
+    || !popupOpenedStep.output.includes('"interactionGuard"')) {
     throw new Error(
         `A localized popup change was not enlarged automatically: ${JSON.stringify(popupOpenedStep)}`,
     );
 }
 
 popupClickChangesState = false;
+const popupBounds = popupOpenedStep.interactionGuard.localBounds;
 const popupMissedOptionStep = await realTools.get('computer_step').run(JSON.stringify({
     windowId: '42',
     observationId: popupOpenedStep.observationId,
-    actions: [{ action: 'click', x: 850, y: 720 }],
+    actions: [{
+        action: 'click',
+        x: popupBounds.x + (popupBounds.width / 2),
+        y: popupBounds.y + (popupBounds.height / 2),
+    }],
     settleMs: 0,
 }));
 if (!popupMissedOptionStep.retainedRegion?.applied
@@ -1289,6 +1316,7 @@ if (!popupMissedOptionStep.retainedRegion?.applied
     || popupMissedOptionStep.grid?.minorStep !== 100
     || popupMissedOptionStep.verification.likelyCoordinateMiss !== true
     || popupMissedOptionStep.verification.coordinateMissCount !== 1
+    || !popupMissedOptionStep.interactionGuard?.active
     || !popupMissedOptionStep.output.includes('"outcome": "likely_miss"')
     || !popupMissedOptionStep.output.includes('retains the same enlarged region')
     || popupMissedOptionStep.output.includes('sourceBytes')
@@ -1298,16 +1326,65 @@ if (!popupMissedOptionStep.retainedRegion?.applied
     );
 }
 
-const popupClosedAgainStep = await realTools.get('computer_step').run(JSON.stringify({
+const popupOutsideActionCount = proxyCalls
+    .filter(call => call.method === 'PerformAction').length;
+const popupOutsideRejectedStep = await realTools.get('computer_step').run(JSON.stringify({
     windowId: '42',
     observationId: popupMissedOptionStep.observationId,
-    actions: [{ action: 'click', x: 500, y: 500 }],
+    actions: [{ action: 'click', x: 980, y: 980 }],
     settleMs: 0,
 }));
+if (!popupOutsideRejectedStep.failed
+    || popupOutsideRejectedStep.failure?.kind !== 'interaction_guard'
+    || popupOutsideRejectedStep.failure?.reason !== 'outside_bounds'
+    || popupOutsideRejectedStep.completedActionCount !== 0
+    || popupOutsideRejectedStep.verification.preAction?.actionDispatched !== false
+    || !popupOutsideRejectedStep.interactionGuard?.active
+    || popupOutsideRejectedStep.observationId
+        !== popupMissedOptionStep.observationId
+    || proxyCalls.filter(call => call.method === 'PerformAction').length
+        !== popupOutsideActionCount
+    || !popupOutsideRejectedStep.output.includes('rejected this action before dispatch')
+    || !popupOutsideRejectedStep.output.includes('inside interactionGuard.localBounds')) {
+    throw new Error(
+        `An outside popup click was not rejected safely: ${JSON.stringify(popupOutsideRejectedStep)}`,
+    );
+}
+
+const guardedBounds = popupOutsideRejectedStep.interactionGuard.localBounds;
+const popupSelectedStep = await realTools.get('computer_step').run(JSON.stringify({
+    windowId: '42',
+    observationId: popupOutsideRejectedStep.observationId,
+    actions: [{
+        action: 'click',
+        x: guardedBounds.x + (guardedBounds.width * 0.75),
+        y: guardedBounds.y + (guardedBounds.height * 0.75),
+    }],
+    settleMs: 0,
+}));
+if (popupSelectedStep.failed
+    || popupSelectedStep.completedActionCount !== 1
+    || popupSelectedStep.autoZoom
+    || popupSelectedStep.interactionGuard
+    || !popupSelectedStep.retainedRegion?.applied) {
+    throw new Error(
+        `A valid popup option click did not resolve its guard: ${JSON.stringify(popupSelectedStep)}`,
+    );
+}
+const popupSelectedInternalObservation = computerUse._observations.get('42');
+computerUse._visualStateHistories.set('42', [
+    popupClosedVisualState,
+    popupOpenVisualState,
+    {
+        fingerprint: popupSelectedInternalObservation.fingerprint,
+        visualSignature: popupSelectedInternalObservation.visualSignature,
+    },
+]);
+
 const popupReopenedStep = await realTools.get('computer_step').run(JSON.stringify({
     windowId: '42',
-    observationId: popupClosedAgainStep.observationId,
-    actions: [{ action: 'click', x: 500, y: 500 }],
+    observationId: popupSelectedStep.rootObservationId,
+    actions: [{ action: 'click', x: 600, y: 400 }],
     settleMs: 0,
 }));
 if (!popupReopenedStep.autoZoom?.applied
@@ -1315,6 +1392,8 @@ if (!popupReopenedStep.autoZoom?.applied
     || popupReopenedStep.verification.visualStateCycleLength !== 2
     || !popupReopenedStep.verification.coordinateRetryBlocked
     || popupReopenedStep.verification.coordinateRetryBlockReason !== 'visual_state_cycle'
+    || !popupReopenedStep.interactionGuard?.active
+    || !popupReopenedStep.interactionGuard.cycleDetected
     || !popupReopenedStep.output.includes('alternating visual-state cycle')
     || !popupReopenedStep.output.includes('do not click the popup trigger again')) {
     throw new Error(
@@ -1340,21 +1419,59 @@ try {
 if (!popupCycleFullRetryRejected)
     throw new Error('An alternating popup loop did not block another full-window click');
 
-const popupCycleRegionActionCount = proxyCalls
+const popupCycleKeyboardActionCount = proxyCalls
     .filter(call => call.method === 'PerformAction').length;
+const popupCycleKeyboardStep = await computerUse.step([{
+    action: 'keypress',
+    windowId: '42',
+    observationId: popupReopenedStep.observationId,
+    keys: ['Down'],
+}], { settleMs: 0 });
+if (popupCycleKeyboardStep.failed
+    || popupCycleKeyboardStep.completedActionCount !== 1
+    || !popupCycleKeyboardStep.interactionGuard?.active
+    || proxyCalls.filter(call => call.method === 'PerformAction').length
+        !== popupCycleKeyboardActionCount + 1) {
+    throw new Error('Keyboard navigation was blocked inside a cycling popup');
+}
+
+const popupCycleGuardActionCount = proxyCalls
+    .filter(call => call.method === 'PerformAction').length;
+const popupCycleTriggerStep = await realTools.get('computer_step').run(JSON.stringify({
+    windowId: '42',
+    observationId: popupCycleKeyboardStep.observation.observationId,
+    actions: [{
+        action: 'click',
+        x: popupCycleKeyboardStep.interactionGuard.triggerPoint?.x ?? 0,
+        y: popupCycleKeyboardStep.interactionGuard.triggerPoint?.y ?? 0,
+    }],
+    settleMs: 0,
+}));
+if (!popupCycleTriggerStep.failed
+    || popupCycleTriggerStep.failure?.kind !== 'interaction_guard'
+    || proxyCalls.filter(call => call.method === 'PerformAction').length
+        !== popupCycleGuardActionCount) {
+    throw new Error(
+        `A cycling popup trigger was not rejected: ${JSON.stringify(popupCycleTriggerStep)}`,
+    );
+}
+
+const cycleBounds = popupCycleTriggerStep.interactionGuard.localBounds;
 const popupCycleRegionStep = await computerUse.step([{
     action: 'click',
     windowId: '42',
-    observationId: popupReopenedStep.observationId,
+    observationId: popupCycleTriggerStep.observationId,
     coordinateSpace: 'normalized_1000',
-    x: 500,
-    y: 500,
+    x: cycleBounds.x + (cycleBounds.width * 0.75),
+    y: cycleBounds.y + (cycleBounds.height * 0.75),
 }], { settleMs: 0 });
 if (popupCycleRegionStep.failed
     || popupCycleRegionStep.completedActionCount !== 1
     || proxyCalls.filter(call => call.method === 'PerformAction').length
-        !== popupCycleRegionActionCount + 1) {
-    throw new Error('The current enlarged popup region was blocked with full-window retries');
+        !== popupCycleGuardActionCount + 1
+    || popupCycleRegionStep.interactionGuard
+    || popupCycleRegionStep.verification.coordinateRetryBlocked) {
+    throw new Error('A valid option click inside the cycling popup was blocked');
 }
 
 performActionEffect = null;

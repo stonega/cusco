@@ -90,6 +90,13 @@ function normalizeConversationType(value) {
     return value === 'cron' ? 'cron' : 'chat';
 }
 
+function hasUserInput(conversation) {
+    return conversation.messages.some((message) => (
+        message.role === 'user'
+        && (message.content.trim() || message.attachments.length > 0)
+    ));
+}
+
 export class ConversationManager {
     constructor({ providerId, modelId, thinkingLevel = DEFAULT_THINKING_LEVEL, store = null }) {
         this._store = store;
@@ -102,6 +109,7 @@ export class ConversationManager {
         this._hydratedConversationIds = new Set();
         this._conversationLoadErrors = new Map();
         this._dirtyConversationIds = new Set();
+        this._transientConversationIds = new Set();
         this._storeLoadError = null;
         const stored = this._loadStoredConversations();
 
@@ -165,9 +173,18 @@ export class ConversationManager {
 
         this._conversations.unshift(conversation);
         this._activeConversationId = conversation.id;
-        this._persist(conversation);
 
-        if (this._usesLazyStore)
+        const shouldPersistImmediately = options.persistImmediately === true
+            || conversation.conversationType !== 'chat'
+            || hasUserInput(conversation);
+
+        if (shouldPersistImmediately) {
+            this._persist(conversation);
+        } else {
+            this._transientConversationIds.add(conversation.id);
+        }
+
+        if (shouldPersistImmediately && this._usesLazyStore)
             this._persistActiveConversationId();
 
         return conversation;
@@ -189,6 +206,10 @@ export class ConversationManager {
         this._activeConversationId = conversationId;
         this._persistActiveConversationId();
         return conversation;
+    }
+
+    isConversationTransient(conversationId) {
+        return this._transientConversationIds.has(conversationId);
     }
 
     appendMessage(conversationId, message, options = {}) {
@@ -307,6 +328,7 @@ export class ConversationManager {
             throw new Error(`Conversation does not exist: ${conversationId}`);
 
         const [conversation] = this._conversations.splice(index, 1);
+        const wasTransient = this._transientConversationIds.delete(conversationId);
 
         const activeConversationChanged = this._activeConversationId === conversationId;
 
@@ -314,7 +336,13 @@ export class ConversationManager {
             this._activeConversationId = this._conversations.find((item) => !item.archived)?.id
                 ?? null;
 
-        this._persistDeletion(conversationId);
+        if (wasTransient) {
+            this._dirtyConversationIds.delete(conversationId);
+            this._hydratedConversationIds.delete(conversationId);
+            this._conversationLoadErrors.delete(conversationId);
+        } else {
+            this._persistDeletion(conversationId);
+        }
 
         if (activeConversationChanged && this._usesLazyStore)
             this._persistActiveConversationId();
@@ -714,18 +742,31 @@ export class ConversationManager {
             return;
 
         try {
+            const materializedConversationIds = this._materializeTransientConversations(conversation);
+
+            if (conversation && this.isConversationTransient(conversation.id))
+                return;
+
+            const persistedConversations = this._persistedConversations();
+            const persistedActiveConversationId = this._persistedActiveConversationId();
+
             if (this._usesLazyStore) {
-                if (conversation)
+                if (conversation && !this.isConversationTransient(conversation.id))
                     this._dirtyConversationIds.add(conversation.id);
 
                 const conversationIds = new Set(this._dirtyConversationIds);
 
                 if (allHydrated) {
-                    for (const conversationId of this._hydratedConversationIds)
-                        conversationIds.add(conversationId);
+                    for (const conversationId of this._hydratedConversationIds) {
+                        if (!this.isConversationTransient(conversationId))
+                            conversationIds.add(conversationId);
+                    }
                 }
 
                 for (const conversationId of conversationIds) {
+                    if (this.isConversationTransient(conversationId))
+                        continue;
+
                     const storedConversation = this._conversations.find((item) => (
                         item.id === conversationId
                     ));
@@ -740,16 +781,19 @@ export class ConversationManager {
                 }
 
                 this._store.saveIndex({
-                    conversations: this._conversations,
-                    activeConversationId: this._activeConversationId,
+                    conversations: persistedConversations,
+                    activeConversationId: persistedActiveConversationId,
                 });
 
                 for (const conversationId of conversationIds)
                     this._dirtyConversationIds.delete(conversationId);
+
+                if (materializedConversationIds.has(this._activeConversationId))
+                    this._store.saveActiveConversationId?.(this._activeConversationId);
             } else {
                 this._store.save({
-                    conversations: this._conversations,
-                    activeConversationId: this._activeConversationId,
+                    conversations: persistedConversations,
+                    activeConversationId: persistedActiveConversationId,
                 }, { normalized: true });
             }
         } catch (error) {
@@ -759,8 +803,10 @@ export class ConversationManager {
 
     _persistMutation(options, conversation) {
         if (options.persist === false) {
-            if (this._usesLazyStore)
+            if (this._usesLazyStore
+                && (!this.isConversationTransient(conversation.id) || hasUserInput(conversation))) {
                 this._dirtyConversationIds.add(conversation.id);
+            }
             return;
         }
 
@@ -783,13 +829,49 @@ export class ConversationManager {
         try {
             this._store.discardPendingConversation?.(conversationId);
             this._store.saveIndex({
-                conversations: this._conversations,
-                activeConversationId: this._activeConversationId,
+                conversations: this._persistedConversations(),
+                activeConversationId: this._persistedActiveConversationId(),
             });
             this._store.deleteConversation(conversationId);
         } catch (error) {
             logError(error, `Failed to delete conversation ${conversationId}`);
         }
+    }
+
+    _materializeTransientConversations(conversation = null) {
+        const materializedConversationIds = new Set();
+        const candidates = conversation
+            ? [conversation]
+            : [...this._transientConversationIds]
+                .map((conversationId) => this.getConversation(conversationId))
+                .filter(Boolean);
+
+        for (const candidate of candidates) {
+            if (!this.isConversationTransient(candidate.id) || !hasUserInput(candidate))
+                continue;
+
+            this._transientConversationIds.delete(candidate.id);
+            materializedConversationIds.add(candidate.id);
+        }
+
+        return materializedConversationIds;
+    }
+
+    _persistedConversations() {
+        return this._conversations.filter((conversation) => (
+            !this.isConversationTransient(conversation.id)
+        ));
+    }
+
+    _persistedActiveConversationId() {
+        if (this._activeConversationId
+            && !this.isConversationTransient(this._activeConversationId)) {
+            return this._activeConversationId;
+        }
+
+        return this._conversations.find((conversation) => (
+            !conversation.archived && !this.isConversationTransient(conversation.id)
+        ))?.id ?? null;
     }
 
     _applyPersistedSummary(conversation, summary) {
@@ -804,8 +886,10 @@ export class ConversationManager {
             return;
 
         try {
+            const activeConversationId = this._persistedActiveConversationId();
+
             if (typeof this._store.saveActiveConversationId === 'function')
-                this._store.saveActiveConversationId(this._activeConversationId);
+                this._store.saveActiveConversationId(activeConversationId);
             else
                 this._persist();
         } catch (error) {
