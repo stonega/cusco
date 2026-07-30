@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.29] - 2026-07-30
+
 ### Changed
 
 - Restyled image-editor shapes, arrows, lines, and text with Cartoonist sketch strokes and clearly handwritten type; arrows now have a draggable midpoint curvature handle.
@@ -202,7 +204,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.28...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.29...HEAD
+[0.5.29]: https://github.com/stonega/cusco/compare/v0.5.28...v0.5.29
 [0.5.28]: https://github.com/stonega/cusco/compare/v0.5.27...v0.5.28
 [0.5.27]: https://github.com/stonega/cusco/compare/v0.5.26...v0.5.27
 [0.5.26]: https://github.com/stonega/cusco/compare/v0.5.25...v0.5.26
