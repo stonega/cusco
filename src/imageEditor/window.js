@@ -18,6 +18,7 @@ const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 12;
 const CANVAS_PADDING = 24;
 const HANDLE_SIZE = 9;
+const CURVE_HANDLE_SIZE = 14;
 const CROP_MIN_SIZE = 0.01;
 const NARROW_WIDTH = 760;
 const MAX_PREVIEW_DIMENSION = 1600;
@@ -131,7 +132,9 @@ function inlineTextAttributes(annotation, fontSize) {
         : Pango.Weight.NORMAL;
     const attributes = new Pango.AttrList();
 
-    attributes.insert(Pango.attr_family_new(String(annotation?.fontFamily ?? 'Sans')));
+    attributes.insert(Pango.attr_family_new(String(
+        annotation?.fontFamily ?? DocumentModel.HANDWRITTEN_FONT_FAMILY,
+    )));
     attributes.insert(Pango.attr_weight_new(weight));
     attributes.insert(Pango.attr_size_new_absolute(
         Math.max(1, Math.round(fontSize * Pango.SCALE)),
@@ -1449,6 +1452,23 @@ export const ImageViewerWindow = GObject.registerClass({
             cr.setLineWidth(1.5 / geometry.scale);
             cr.stroke();
         }
+
+        if (selected?.type === 'arrow') {
+            const bend = DocumentModel.getArrowBendPoint(selected);
+            const px = bend.x * geometry.width;
+            const py = bend.y * geometry.height;
+            const radius = CURVE_HANDLE_SIZE / geometry.scale / 2;
+
+            cr.setSourceRGBA(0.38, 0.43, 1, 0.24);
+            cr.arc(px, py, radius, 0, Math.PI * 2);
+            cr.fill();
+            cr.setSourceRGB(1, 1, 1);
+            cr.arc(px, py, radius * 0.58, 0, Math.PI * 2);
+            cr.fillPreserve();
+            cr.setSourceRGBA(0.28, 0.34, 0.95, 1);
+            cr.setLineWidth(2 / geometry.scale);
+            cr.stroke();
+        }
         cr.restore();
     }
 
@@ -1524,6 +1544,20 @@ export const ImageViewerWindow = GObject.registerClass({
         ))?.handle ?? null;
     }
 
+    _curveHandleAt(point, annotation) {
+        if (!point || annotation?.type !== 'arrow')
+            return false;
+
+        const geometry = this._viewGeometry();
+        const bend = DocumentModel.getArrowBendPoint(annotation);
+        const distance = Math.hypot(
+            (point.x - bend.x) * geometry.width * geometry.scale,
+            (point.y - bend.y) * geometry.height * geometry.scale,
+        );
+
+        return distance <= CURVE_HANDLE_SIZE / 2 + 4;
+    }
+
     _dragBegin(x, y, forcePan, owner = null) {
         if (this._inlineTextState)
             this._finishInlineTextEdit({ restoreFocus: false });
@@ -1570,10 +1604,15 @@ export const ImageViewerWindow = GObject.registerClass({
 
         if (this._tool === 'select') {
             const selected = this._document.selectedAnnotation;
-            const handle = selected ? this._handleAt(point, annotationBounds(selected)) : null;
+            const curveHandle = selected
+                ? this._curveHandleAt(point, selected)
+                : false;
+            const handle = selected && !curveHandle
+                ? this._handleAt(point, annotationBounds(selected))
+                : null;
             let target = selected;
 
-            if (!handle) {
+            if (!handle && !curveHandle) {
                 const geometry = this._viewGeometry();
                 const tolerance = 8 / Math.max(geometry.width * geometry.scale, geometry.height * geometry.scale, 1);
                 target = hitAnnotations(this._document.annotations, point, tolerance);
@@ -1587,9 +1626,15 @@ export const ImageViewerWindow = GObject.registerClass({
                 return;
             }
 
-            this._document.beginTransaction(handle ? 'Resize annotation' : 'Move annotation');
+            const interactionType = curveHandle
+                ? 'curve'
+                : handle ? 'resize' : 'move';
+            const transactionLabel = curveHandle
+                ? 'Curve arrow'
+                : handle ? 'Resize annotation' : 'Move annotation';
+            this._document.beginTransaction(transactionLabel);
             this._dragState = {
-                type: handle ? 'resize' : 'move',
+                type: interactionType,
                 id: target.id,
                 handle,
                 start: point,
@@ -1661,6 +1706,8 @@ export const ImageViewerWindow = GObject.registerClass({
                 clamp: true,
                 scaleStyle: false,
             });
+        } else if (state.type === 'curve') {
+            this._document.updateAnnotation(state.id, { bend: current });
         } else if (state.type === 'draw') {
             if (state.tool === 'pencil') {
                 const annotation = this._document.annotations.find(item => item.id === state.id);
@@ -1685,7 +1732,7 @@ export const ImageViewerWindow = GObject.registerClass({
         this._dragState = null;
         this._dragOwner = null;
 
-        if (['draw', 'move', 'resize'].includes(type))
+        if (['draw', 'move', 'resize', 'curve'].includes(type))
             this._document.commitTransaction();
 
         if (type === 'draw')
@@ -1705,7 +1752,7 @@ export const ImageViewerWindow = GObject.registerClass({
             this._panY = state.panY;
         } else if (state.type.startsWith('crop')) {
             this._cropRect = { ...state.originalRect };
-        } else if (['draw', 'move', 'resize'].includes(state.type)
+        } else if (['draw', 'move', 'resize', 'curve'].includes(state.type)
             && this._document?.inTransaction) {
             this._document.cancelTransaction();
         }
@@ -1929,8 +1976,8 @@ export const ImageViewerWindow = GObject.registerClass({
             text: this._text || 'Text',
             color: this._strokeColor,
             fontSize: this._fontSize,
-            fontFamily: 'Sans',
-            fontWeight: 500,
+            fontFamily: DocumentModel.HANDWRITTEN_FONT_FAMILY,
+            fontWeight: DocumentModel.DEFAULT_ANNOTATION_STYLE.fontWeight,
             rotation: 0,
             flipX: false,
             flipY: false,
@@ -1938,8 +1985,18 @@ export const ImageViewerWindow = GObject.registerClass({
     }
 
     _annotationGeometry(type, start, end) {
-        if (type === 'line' || type === 'arrow')
+        if (type === 'line')
             return { start, end };
+        if (type === 'arrow') {
+            return {
+                start,
+                end,
+                bend: {
+                    x: (start.x + end.x) / 2,
+                    y: (start.y + end.y) / 2,
+                },
+            };
+        }
         return { rect: normalizedRect(start, end) };
     }
 

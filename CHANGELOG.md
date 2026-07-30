@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- Restyled image-editor shapes, arrows, lines, and text with Cartoonist sketch strokes and clearly handwritten type; arrows now have a draggable midpoint curvature handle.
+
 ## [0.5.28] - 2026-07-29
 
 ### Changed

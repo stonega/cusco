@@ -5,7 +5,14 @@ import GLib from 'gi://GLib?version=2.0';
 
 import {
     createAnnotation,
+    DEFAULT_ANNOTATION_STYLE,
     getAnnotationBounds,
+    getArrowBendPoint,
+    getArrowPoint,
+    HAND_DRAWN_ROUGHNESS,
+    HAND_DRAWN_STYLE,
+    HANDWRITTEN_FONT_FAMILY,
+    hitTestAnnotation,
     hitTestAnnotations,
     ImageDocument,
     normalizeImageTransform,
@@ -99,6 +106,72 @@ const sourceHash = checksum(sourcePath);
 const loaded = loadImageSource(sourcePath);
 assert(loaded.width === 80 && loaded.height === 60, 'The source image decoded at the wrong size');
 assert(loaded.mimeType === 'image/png', `Unexpected image MIME type: ${loaded.mimeType}`);
+assert(
+    DEFAULT_ANNOTATION_STYLE.fontFamily === HANDWRITTEN_FONT_FAMILY,
+    'Text annotations do not default to the handwritten font family',
+);
+assert(
+    HAND_DRAWN_ROUGHNESS > DEFAULT_ANNOTATION_STYLE.strokeWidth,
+    'Sketch variation must remain visible outside the default stroke width',
+);
+assert(HAND_DRAWN_STYLE === 'cartoonist',
+    'Image-editor annotations are not using the Cartoonist sketch preset');
+assert(
+    createAnnotation('text', { text: 'Handwritten' }).fontFamily
+        === HANDWRITTEN_FONT_FAMILY,
+    'A normalized text annotation lost the handwritten font family',
+);
+assert(
+    createAnnotation('text', { text: 'Legacy', fontFamily: 'Sans' }).fontFamily
+        === HANDWRITTEN_FONT_FAMILY,
+    'Legacy image-editor text did not migrate to the handwritten font family',
+);
+const legacyStraightArrow = createAnnotation('arrow', {
+    start: { x: 0.1, y: 0.2 },
+    end: { x: 0.9, y: 0.2 },
+});
+assert(
+    Math.abs(legacyStraightArrow.bend.x - 0.5) < 1e-9
+        && Math.abs(legacyStraightArrow.bend.y - 0.2) < 1e-9,
+    'An arrow without curvature did not receive a straight midpoint handle',
+);
+const curveDocument = new ImageDocument({ width: 1000, height: 800 });
+const curvedArrow = curveDocument.addAnnotation(createAnnotation('arrow', {
+    start: { x: 0.1, y: 0.2 },
+    end: { x: 0.9, y: 0.2 },
+    bend: { x: 0.5, y: 0.7 },
+}));
+assert(
+    Math.abs(getArrowPoint(curvedArrow, 0.5).y - getArrowBendPoint(curvedArrow).y) < 1e-9,
+    'The arrow curvature handle is not anchored to the visible curve midpoint',
+);
+assert(
+    Math.abs(getAnnotationBounds(curvedArrow).height - 0.5) < 1e-9,
+    'Curved-arrow bounds ignored the quadratic arc',
+);
+assert(
+    hitTestAnnotation(curvedArrow, curvedArrow.bend, { tolerance: 0.001 }),
+    'Curved-arrow hit testing missed the visible arc',
+);
+assert(
+    !hitTestAnnotation(curvedArrow, { x: 0.5, y: 0.2 }, { tolerance: 0.001 }),
+    'Curved-arrow hit testing still selected the obsolete straight chord',
+);
+curveDocument.markSaved();
+curveDocument.beginTransaction('Curve arrow');
+curveDocument.updateAnnotation(curvedArrow.id, { bend: { x: 0.5, y: 0.6 } });
+assert(curveDocument.commitTransaction(), 'Changing arrow curvature did not commit');
+assert(curveDocument.undo()
+    && Math.abs(curveDocument.selectedAnnotation.bend.y - 0.7) < 1e-9,
+    'Curved-arrow undo did not restore the previous bend');
+assert(curveDocument.redo()
+    && Math.abs(curveDocument.selectedAnnotation.bend.y - 0.6) < 1e-9,
+    'Curved-arrow redo did not restore the edited bend');
+const restoredCurveDocument = ImageDocument.fromJSON(curveDocument.toJSON());
+assert(
+    Math.abs(restoredCurveDocument.annotations[0].bend.y - 0.6) < 1e-9,
+    'Arrow curvature was lost during document serialization',
+);
 assert(normalizeImageTransform({
     type: 'rotate',
     quarterTurns: 2,
@@ -115,6 +188,12 @@ const rectangle = document.addAnnotation(createAnnotation('rectangle', {
     fillColor: '#3584e4',
 }));
 assert(rectangle?.id, 'A rectangle annotation was not added');
+const strokedRectangleBounds = getAnnotationBounds(rectangle, { includeStroke: true });
+const expectedSketchPadding = rectangle.strokeWidth / 2 + HAND_DRAWN_ROUGHNESS;
+assert(
+    Math.abs(strokedRectangleBounds.x - (rectangle.rect.x - expectedSketchPadding)) < 1e-9,
+    'Hand-drawn shape bounds do not include their sketch variation',
+);
 assert(
     hitTestAnnotations(document.annotations, { x: 0.2, y: 0.2 })?.id === rectangle.id,
     'Filled rectangle hit testing failed',
@@ -149,6 +228,7 @@ document.addAnnotation(createAnnotation('pencil', {
 document.addAnnotation(createAnnotation('arrow', {
     start: { x: 0.12, y: 0.6 },
     end: { x: 0.42, y: 0.38 },
+    bend: { x: 0.2, y: 0.7 },
     strokeColor: '#ffffff',
 }));
 document.addAnnotation(createAnnotation('line', {
@@ -182,7 +262,17 @@ assert(
 const previewSurface = renderDocumentToSurface(loaded.pixbuf, document);
 assert(previewSurface.getWidth() === 60 && previewSurface.getHeight() === 60,
     'Rendered transformed dimensions were incorrect');
+const repeatedPreviewSurface = renderDocumentToSurface(loaded.pixbuf, document);
+const previewPath = GLib.build_filenamev([root, 'hand-drawn-preview.png']);
+const repeatedPreviewPath = GLib.build_filenamev([root, 'hand-drawn-preview-repeat.png']);
+previewSurface.writeToPNG(previewPath);
+repeatedPreviewSurface.writeToPNG(repeatedPreviewPath);
+assert(
+    checksum(previewPath) === checksum(repeatedPreviewPath),
+    'Hand-drawn annotations changed between identical renders',
+);
 previewSurface.finish();
+repeatedPreviewSurface.finish();
 
 const edgePixbuf = loaded.pixbuf.scale_simple(32, 32, GdkPixbuf.InterpType.NEAREST);
 const edgeCrop = new ImageDocument({ width: 32, height: 32 });

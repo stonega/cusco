@@ -267,13 +267,47 @@ if (Gtk.init_check()) {
     viewer._drawSelection(selectionContext, viewer._viewGeometry(96, 64));
     selectionContext.$dispose();
     selectionSurface.finish();
-    viewer._document.addAnnotation(createAnnotation('arrow', {
+    const curvedArrow = viewer._document.addAnnotation(createAnnotation('arrow', {
         start: { x: 0.1, y: 0.2 },
         end: { x: 0.8, y: 0.7 },
+        bend: { x: 0.5, y: 0.3 },
         strokeColor: '#ffffff',
     }));
     viewer._afterDocumentChange();
     assert(viewer._document.dirty, 'UI annotation did not mark the document dirty');
+    const curveGeometry = viewer._viewGeometry();
+    const curveHandleX = curveGeometry.x
+        + curvedArrow.bend.x * curveGeometry.width * curveGeometry.scale;
+    const curveHandleY = curveGeometry.y
+        + curvedArrow.bend.y * curveGeometry.height * curveGeometry.scale;
+    const curveUndoDepth = viewer._document.undoDepth;
+    viewer._dragBegin(
+        curveHandleX,
+        curveHandleY,
+        false,
+        viewer._primaryDragGesture,
+    );
+    assert(viewer._dragState?.type === 'curve' && viewer._document.inTransaction,
+        'The selected arrow midpoint did not start a curvature gesture');
+    viewer._dragEnd(0, 18, viewer._primaryDragGesture);
+    const bentArrow = viewer._document.selectedAnnotation;
+    assert(!viewer._document.inTransaction
+        && bentArrow?.id === curvedArrow.id
+        && bentArrow.bend.y > curvedArrow.bend.y
+        && viewer._document.undoDepth === curveUndoDepth + 1,
+        'Dragging the arrow midpoint did not commit one curvature edit');
+    viewer._undo();
+    assert(Math.abs(viewer._document.selectedAnnotation.bend.y - curvedArrow.bend.y) < 1e-9,
+        'Undo did not restore the previous arrow curvature');
+    viewer._redo();
+    assert(viewer._document.selectedAnnotation.bend.y > curvedArrow.bend.y,
+        'Redo did not restore the edited arrow curvature');
+
+    const curvedSelectionSurface = new Cairo.ImageSurface(Cairo.Format.ARGB32, 96, 64);
+    const curvedSelectionContext = new Cairo.Context(curvedSelectionSurface);
+    viewer._drawSelection(curvedSelectionContext, viewer._viewGeometry(96, 64));
+    curvedSelectionContext.$dispose();
+    curvedSelectionSurface.finish();
 
     assert(typeof viewer.get_clipboard().set === 'function',
         'The display clipboard does not expose the generic GDK setter');

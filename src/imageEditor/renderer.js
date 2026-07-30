@@ -7,13 +7,21 @@ import Pango from 'gi://Pango?version=1.0';
 import PangoCairo from 'gi://PangoCairo?version=1.0';
 
 import { APP_ID } from '../appInfo.js';
+import {
+    DEFAULT_ANNOTATION_STYLE,
+    HAND_DRAWN_ROUGHNESS,
+} from './document.js';
 
 const PNG_MIME_TYPE = 'image/png';
-const DEFAULT_STROKE_WIDTH = 0.006;
-const DEFAULT_FONT_SIZE = 0.04;
+const DEFAULT_STROKE_WIDTH = DEFAULT_ANNOTATION_STYLE.strokeWidth;
+const DEFAULT_FONT_SIZE = DEFAULT_ANNOTATION_STYLE.fontSize;
 const MINIMUM_DEVICE_STROKE_WIDTH = 0.5;
 const ARROW_HEAD_ANGLE = Math.PI / 7;
-const ELLIPSE_BEZIER_FACTOR = 0.5522847498307936;
+const ROUGH_BOWING = 0.75;
+const ROUGH_CURVE_STEP_COUNT = 9;
+const ROUGH_MIN_RANDOMNESS_OFFSET = 0.75;
+const ROUGH_PRIMARY_JITTER_SCALE = 0.25;
+const ROUGH_RETRACE_JITTER_SCALE = 0.12;
 
 function finiteNumber(value, fallback = 0) {
     const number = Number(value);
@@ -452,6 +460,497 @@ function configureStroke(cr, annotation, minimumDimension) {
     );
 }
 
+function sketchRandom(annotation, salt) {
+    const identity = annotation?.id
+        ? String(annotation.id)
+        : JSON.stringify(annotation ?? {});
+    const input = `${identity}:${salt}`;
+    let hash = 2166136261;
+
+    for (let index = 0; index < input.length; index++) {
+        hash ^= input.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+    }
+
+    let state = hash >>> 0;
+    return () => {
+        state = (state + 0x6D2B79F5) >>> 0;
+        let value = state;
+        value = Math.imul(value ^ (value >>> 15), value | 1);
+        value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+        return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+function randomOffset(random, amount) {
+    return ((random() * 2) - 1) * amount;
+}
+
+function randomBetween(random, minimum, maximum) {
+    return minimum + random() * (maximum - minimum);
+}
+
+// Cairo port of the core RoughJS 4.6.4 line and ellipse construction used by
+// Excalidraw. Keep the accompanying license notice in THIRD_PARTY_NOTICES.md.
+function roughnessGain(length) {
+    if (length < 200)
+        return 1;
+    if (length > 500)
+        return 0.4;
+    return -0.0016668 * length + 1.233334;
+}
+
+function appendRoughLinePass(
+    cr,
+    start,
+    end,
+    random,
+    gesture,
+    overlay,
+) {
+    if (gesture.length <= Number.EPSILON) {
+        cr.moveTo(start.x, start.y);
+        cr.lineTo(end.x, end.y);
+        return;
+    }
+
+    const jitterScale = overlay
+        ? ROUGH_RETRACE_JITTER_SCALE
+        : ROUGH_PRIMARY_JITTER_SCALE;
+    const jitter = gesture.boundedOffset * gesture.gain * jitterScale;
+
+    cr.moveTo(start.x, start.y);
+    cr.curveTo(
+        start.x + gesture.deltaX * gesture.divergePoint
+            + gesture.displacementX + randomOffset(random, jitter),
+        start.y + gesture.deltaY * gesture.divergePoint
+            + gesture.displacementY + randomOffset(random, jitter),
+        start.x + gesture.deltaX * gesture.divergePoint * 2
+            + gesture.displacementX + randomOffset(random, jitter),
+        start.y + gesture.deltaY * gesture.divergePoint * 2
+            + gesture.displacementY + randomOffset(random, jitter),
+        end.x,
+        end.y,
+    );
+}
+
+function createRoughLineGesture(
+    start,
+    end,
+    random,
+    maxRandomnessOffset,
+) {
+    const deltaX = end.x - start.x;
+    const deltaY = end.y - start.y;
+    const length = Math.hypot(deltaX, deltaY);
+    const gain = roughnessGain(length);
+    const boundedOffset = maxRandomnessOffset * maxRandomnessOffset * 100
+        > length * length
+        ? length / 10
+        : maxRandomnessOffset;
+    const lengthBowingGain = clamp(length / 200 * gain, 0.35, 1);
+    const bowDirection = random() < 0.5 ? -1 : 1;
+    const bowAmount = ROUGH_BOWING
+        * boundedOffset
+        * lengthBowingGain
+        * randomBetween(random, 0.55, 1)
+        * bowDirection;
+    const normalX = length > Number.EPSILON ? -deltaY / length : 0;
+    const normalY = length > Number.EPSILON ? deltaX / length : 0;
+
+    return {
+        deltaX,
+        deltaY,
+        length,
+        gain,
+        boundedOffset,
+        divergePoint: 0.2 + random() * 0.2,
+        displacementX: normalX * bowAmount,
+        displacementY: normalY * bowAmount,
+    };
+}
+
+function appendRoughDoubleLine(
+    cr,
+    start,
+    end,
+    random,
+    maxRandomnessOffset,
+) {
+    const gesture = createRoughLineGesture(
+        start,
+        end,
+        random,
+        maxRandomnessOffset,
+    );
+
+    appendRoughLinePass(
+        cr,
+        start,
+        end,
+        random,
+        gesture,
+        false,
+    );
+    appendRoughLinePass(
+        cr,
+        start,
+        end,
+        random,
+        gesture,
+        true,
+    );
+}
+
+function appendRoughQuadraticPass(
+    cr,
+    start,
+    control,
+    end,
+    random,
+    gesture,
+    overlay,
+) {
+    if (gesture.length <= Number.EPSILON) {
+        cr.moveTo(start.x, start.y);
+        cr.lineTo(end.x, end.y);
+        return;
+    }
+
+    const jitterScale = overlay
+        ? ROUGH_RETRACE_JITTER_SCALE
+        : ROUGH_PRIMARY_JITTER_SCALE;
+    const jitter = gesture.boundedOffset * gesture.gain * jitterScale;
+    const firstControl = {
+        x: start.x + (control.x - start.x) * 2 / 3,
+        y: start.y + (control.y - start.y) * 2 / 3,
+    };
+    const secondControl = {
+        x: end.x + (control.x - end.x) * 2 / 3,
+        y: end.y + (control.y - end.y) * 2 / 3,
+    };
+
+    cr.moveTo(start.x, start.y);
+    cr.curveTo(
+        firstControl.x + gesture.displacementX + randomOffset(random, jitter),
+        firstControl.y + gesture.displacementY + randomOffset(random, jitter),
+        secondControl.x + gesture.displacementX + randomOffset(random, jitter),
+        secondControl.y + gesture.displacementY + randomOffset(random, jitter),
+        end.x,
+        end.y,
+    );
+}
+
+function appendRoughDoubleQuadratic(
+    cr,
+    start,
+    control,
+    end,
+    random,
+    maxRandomnessOffset,
+) {
+    const gesture = createRoughLineGesture(
+        start,
+        end,
+        random,
+        maxRandomnessOffset,
+    );
+
+    appendRoughQuadraticPass(
+        cr,
+        start,
+        control,
+        end,
+        random,
+        gesture,
+        false,
+    );
+    appendRoughQuadraticPass(
+        cr,
+        start,
+        control,
+        end,
+        random,
+        gesture,
+        true,
+    );
+}
+
+function appendRoughPolygonStroke(cr, points, random, maxRandomnessOffset) {
+    for (let index = 0; index < points.length; index++) {
+        appendRoughDoubleLine(
+            cr,
+            points[index],
+            points[(index + 1) % points.length],
+            random,
+            maxRandomnessOffset,
+        );
+    }
+}
+
+function appendRoughPolygonFill(cr, points, random, maxRandomnessOffset) {
+    if (points.length === 0)
+        return;
+
+    cr.moveTo(
+        points[0].x + randomOffset(random, maxRandomnessOffset),
+        points[0].y + randomOffset(random, maxRandomnessOffset),
+    );
+    for (const point of points.slice(1)) {
+        cr.lineTo(
+            point.x + randomOffset(random, maxRandomnessOffset),
+            point.y + randomOffset(random, maxRandomnessOffset),
+        );
+    }
+    cr.closePath();
+}
+
+function appendRoughCurve(cr, points) {
+    if (points.length < 4)
+        return;
+
+    cr.moveTo(points[1].x, points[1].y);
+    for (let index = 1; index + 2 < points.length; index++) {
+        const previous = points[index - 1];
+        const current = points[index];
+        const next = points[(index + 1) % points.length];
+        const following = points[index + 2];
+
+        cr.curveTo(
+            current.x + (next.x - previous.x) / 6,
+            current.y + (next.y - previous.y) / 6,
+            next.x - (following.x - current.x) / 6,
+            next.y - (following.y - current.y) / 6,
+            next.x,
+            next.y,
+        );
+    }
+}
+
+function ellipseIncrement(rect) {
+    const radiusX = Math.abs(rect.width) / 2;
+    const radiusY = Math.abs(rect.height) / 2;
+    const perimeterScale = Math.sqrt(
+        Math.PI * 2 * Math.sqrt((radiusX * radiusX + radiusY * radiusY) / 2),
+    );
+    const stepCount = Math.ceil(Math.max(
+        ROUGH_CURVE_STEP_COUNT,
+        ROUGH_CURVE_STEP_COUNT / Math.sqrt(200) * perimeterScale,
+    ));
+
+    return Math.PI * 2 / stepCount;
+}
+
+function roughEllipsePoints(
+    rect,
+    random,
+    increment,
+    pointOffset,
+    overlap,
+) {
+    const radiusX = Math.abs(rect.width) / 2;
+    const radiusY = Math.abs(rect.height) / 2;
+    const centerX = rect.x + rect.width / 2;
+    const centerY = rect.y + rect.height / 2;
+    const radialStart = randomOffset(random, 0.5) - Math.PI / 2;
+    const points = [];
+
+    points.push({
+        x: centerX + randomOffset(random, pointOffset)
+            + radiusX * 0.9 * Math.cos(radialStart - increment),
+        y: centerY + randomOffset(random, pointOffset)
+            + radiusY * 0.9 * Math.sin(radialStart - increment),
+    });
+
+    const endAngle = Math.PI * 2 + radialStart - 0.01;
+    for (let angle = radialStart; angle < endAngle; angle += increment) {
+        points.push({
+            x: centerX + randomOffset(random, pointOffset)
+                + radiusX * Math.cos(angle),
+            y: centerY + randomOffset(random, pointOffset)
+                + radiusY * Math.sin(angle),
+        });
+    }
+
+    points.push({
+        x: centerX + randomOffset(random, pointOffset)
+            + radiusX * Math.cos(radialStart + Math.PI * 2 + overlap * 0.5),
+        y: centerY + randomOffset(random, pointOffset)
+            + radiusY * Math.sin(radialStart + Math.PI * 2 + overlap * 0.5),
+    });
+    points.push({
+        x: centerX + randomOffset(random, pointOffset)
+            + radiusX * 0.98 * Math.cos(radialStart + overlap),
+        y: centerY + randomOffset(random, pointOffset)
+            + radiusY * 0.98 * Math.sin(radialStart + overlap),
+    });
+    points.push({
+        x: centerX + randomOffset(random, pointOffset)
+            + radiusX * 0.9 * Math.cos(radialStart + overlap * 0.5),
+        y: centerY + randomOffset(random, pointOffset)
+            + radiusY * 0.9 * Math.sin(radialStart + overlap * 0.5),
+    });
+
+    return points;
+}
+
+function appendRoughEllipsePass(
+    cr,
+    rect,
+    random,
+    maxRandomnessOffset,
+    passScale,
+    overlap,
+) {
+    const pointOffset = Math.max(
+        0.5,
+        maxRandomnessOffset * 0.65 * passScale,
+    );
+    appendRoughCurve(
+        cr,
+        roughEllipsePoints(
+            rect,
+            random,
+            ellipseIncrement(rect),
+            pointOffset,
+            overlap,
+        ),
+    );
+}
+
+function appendRoughDoubleEllipse(cr, rect, random, maxRandomnessOffset) {
+    const increment = ellipseIncrement(rect);
+    const overlapLimit = randomBetween(random, 0.4, 1);
+    const overlap = increment * randomBetween(random, 0.1, overlapLimit);
+    const points = roughEllipsePoints(
+        rect,
+        random,
+        increment,
+        Math.max(0.5, maxRandomnessOffset * 0.65),
+        overlap,
+    );
+
+    appendRoughCurve(cr, points);
+    appendRoughCurve(cr, points.map(point => ({
+        x: point.x + randomOffset(
+            random,
+            maxRandomnessOffset * ROUGH_RETRACE_JITTER_SCALE,
+        ),
+        y: point.y + randomOffset(
+            random,
+            maxRandomnessOffset * ROUGH_RETRACE_JITTER_SCALE,
+        ),
+    })));
+}
+
+function sketchMaxRandomnessOffset(minimumDimension) {
+    return Math.max(
+        ROUGH_MIN_RANDOMNESS_OFFSET,
+        minimumDimension * HAND_DRAWN_ROUGHNESS,
+    );
+}
+
+function strokeRoughLines(
+    cr,
+    annotation,
+    minimumDimension,
+    salt,
+    segments,
+) {
+    const random = sketchRandom(annotation, salt);
+    const maxRandomnessOffset = sketchMaxRandomnessOffset(minimumDimension);
+
+    cr.newPath();
+    for (const [start, end] of segments)
+        appendRoughDoubleLine(cr, start, end, random, maxRandomnessOffset);
+    configureStroke(cr, annotation, minimumDimension);
+    cr.stroke();
+}
+
+function paintRoughPolygon(
+    cr,
+    annotation,
+    minimumDimension,
+    salt,
+    points,
+) {
+    const maxRandomnessOffset = sketchMaxRandomnessOffset(minimumDimension);
+    const fillColor = annotation?.fillColor ?? annotation?.fill;
+
+    if (fillColor) {
+        cr.newPath();
+        appendRoughPolygonFill(
+            cr,
+            points,
+            sketchRandom(annotation, `${salt}:fill`),
+            maxRandomnessOffset,
+        );
+        setSourceColor(
+            cr,
+            fillColor,
+            annotationOpacity(annotation),
+            'transparent',
+        );
+        cr.fill();
+    }
+
+    if (annotation?.strokeColor === null || annotation?.strokeColor === 'transparent')
+        return;
+
+    cr.newPath();
+    appendRoughPolygonStroke(
+        cr,
+        points,
+        sketchRandom(annotation, `${salt}:stroke`),
+        maxRandomnessOffset,
+    );
+    configureStroke(cr, annotation, minimumDimension);
+    cr.stroke();
+}
+
+function paintRoughEllipse(cr, annotation, minimumDimension, rect) {
+    const maxRandomnessOffset = sketchMaxRandomnessOffset(minimumDimension);
+    const fillColor = annotation?.fillColor ?? annotation?.fill;
+
+    if (fillColor) {
+        const random = sketchRandom(annotation, 'ellipse:fill');
+        const increment = ellipseIncrement(rect);
+        const overlapLimit = randomBetween(random, 0.4, 1);
+        const overlap = increment * randomBetween(random, 0.1, overlapLimit);
+
+        cr.newPath();
+        appendRoughEllipsePass(
+            cr,
+            rect,
+            random,
+            maxRandomnessOffset,
+            1,
+            overlap,
+        );
+        cr.closePath();
+        setSourceColor(
+            cr,
+            fillColor,
+            annotationOpacity(annotation),
+            'transparent',
+        );
+        cr.fill();
+    }
+
+    if (annotation?.strokeColor === null || annotation?.strokeColor === 'transparent')
+        return;
+
+    cr.newPath();
+    appendRoughDoubleEllipse(
+        cr,
+        rect,
+        sketchRandom(annotation, 'ellipse:stroke'),
+        maxRandomnessOffset,
+    );
+    configureStroke(cr, annotation, minimumDimension);
+    cr.stroke();
+}
+
 function drawPencil(cr, annotation, width, height, minimumDimension) {
     const points = Array.isArray(annotation?.points)
         ? annotation.points.map((point) => normalizedPoint(point, width, height))
@@ -500,10 +999,13 @@ function lineEndpoints(annotation, width, height) {
 function drawLine(cr, annotation, width, height, minimumDimension) {
     const { start, end } = lineEndpoints(annotation, width, height);
 
-    configureStroke(cr, annotation, minimumDimension);
-    cr.moveTo(start.x, start.y);
-    cr.lineTo(end.x, end.y);
-    cr.stroke();
+    strokeRoughLines(
+        cr,
+        annotation,
+        minimumDimension,
+        'line',
+        [[start, end]],
+    );
 }
 
 function drawArrow(cr, annotation, width, height, minimumDimension) {
@@ -511,10 +1013,20 @@ function drawArrow(cr, annotation, width, height, minimumDimension) {
     const deltaX = end.x - start.x;
     const deltaY = end.y - start.y;
     const length = Math.hypot(deltaX, deltaY);
-
-    configureStroke(cr, annotation, minimumDimension);
+    const chordMidpoint = {
+        x: (start.x + end.x) / 2,
+        y: (start.y + end.y) / 2,
+    };
+    const bend = annotation?.bend
+        ? normalizedPoint(annotation.bend, width, height)
+        : chordMidpoint;
+    const control = {
+        x: bend.x * 2 - chordMidpoint.x,
+        y: bend.y * 2 - chordMidpoint.y,
+    };
 
     if (length < 0.5) {
+        configureStroke(cr, annotation, minimumDimension);
         cr.arc(
             end.x,
             end.y,
@@ -526,7 +1038,6 @@ function drawArrow(cr, annotation, width, height, minimumDimension) {
         return;
     }
 
-    const lineAngle = Math.atan2(deltaY, deltaX);
     const requestedHeadLength = finiteNumber(annotation?.headSize, 0)
         * minimumDimension;
     const headLength = Math.min(
@@ -538,53 +1049,40 @@ function drawArrow(cr, annotation, width, height, minimumDimension) {
         ),
     );
 
-    cr.moveTo(start.x, start.y);
-    cr.lineTo(end.x, end.y);
-    cr.moveTo(
-        end.x - (Math.cos(lineAngle - ARROW_HEAD_ANGLE) * headLength),
-        end.y - (Math.sin(lineAngle - ARROW_HEAD_ANGLE) * headLength),
+    let tangentX = end.x - control.x;
+    let tangentY = end.y - control.y;
+
+    if (Math.hypot(tangentX, tangentY) < 0.5) {
+        tangentX = deltaX;
+        tangentY = deltaY;
+    }
+
+    const lineAngle = Math.atan2(tangentY, tangentX);
+    const left = {
+        x: end.x - Math.cos(lineAngle - ARROW_HEAD_ANGLE) * headLength,
+        y: end.y - Math.sin(lineAngle - ARROW_HEAD_ANGLE) * headLength,
+    };
+    const right = {
+        x: end.x - Math.cos(lineAngle + ARROW_HEAD_ANGLE) * headLength,
+        y: end.y - Math.sin(lineAngle + ARROW_HEAD_ANGLE) * headLength,
+    };
+
+    const random = sketchRandom(annotation, 'arrow');
+    const maxRandomnessOffset = sketchMaxRandomnessOffset(minimumDimension);
+
+    cr.newPath();
+    appendRoughDoubleQuadratic(
+        cr,
+        start,
+        control,
+        end,
+        random,
+        maxRandomnessOffset,
     );
-    cr.lineTo(end.x, end.y);
-    cr.lineTo(
-        end.x - (Math.cos(lineAngle + ARROW_HEAD_ANGLE) * headLength),
-        end.y - (Math.sin(lineAngle + ARROW_HEAD_ANGLE) * headLength),
-    );
+    appendRoughDoubleLine(cr, left, end, random, maxRandomnessOffset);
+    appendRoughDoubleLine(cr, right, end, random, maxRandomnessOffset);
+    configureStroke(cr, annotation, minimumDimension);
     cr.stroke();
-}
-
-function appendEllipse(cr, rect) {
-    const x0 = rect.x;
-    const y0 = rect.y;
-    const x1 = rect.x + rect.width;
-    const y1 = rect.y + rect.height;
-    const centerX = (x0 + x1) / 2;
-    const centerY = (y0 + y1) / 2;
-    const offsetX = Math.abs(rect.width) * ELLIPSE_BEZIER_FACTOR / 2;
-    const offsetY = Math.abs(rect.height) * ELLIPSE_BEZIER_FACTOR / 2;
-
-    cr.moveTo(centerX, y0);
-    cr.curveTo(centerX + offsetX, y0, x1, centerY - offsetY, x1, centerY);
-    cr.curveTo(x1, centerY + offsetY, centerX + offsetX, y1, centerX, y1);
-    cr.curveTo(centerX - offsetX, y1, x0, centerY + offsetY, x0, centerY);
-    cr.curveTo(x0, centerY - offsetY, centerX - offsetX, y0, centerX, y0);
-    cr.closePath();
-}
-
-function paintShapePath(cr, annotation, minimumDimension) {
-    const opacity = annotationOpacity(annotation);
-    const fillColor = annotation?.fillColor ?? annotation?.fill;
-
-    if (fillColor) {
-        setSourceColor(cr, fillColor, opacity, 'transparent');
-        cr.fillPreserve();
-    }
-
-    if (annotation?.strokeColor !== null && annotation?.strokeColor !== 'transparent') {
-        configureStroke(cr, annotation, minimumDimension);
-        cr.stroke();
-    } else {
-        cr.newPath();
-    }
 }
 
 function drawRectangle(cr, annotation, width, height, minimumDimension) {
@@ -594,8 +1092,20 @@ function drawRectangle(cr, annotation, width, height, minimumDimension) {
         height,
     );
 
-    cr.rectangle(rect.x, rect.y, rect.width, rect.height);
-    paintShapePath(cr, annotation, minimumDimension);
+    const points = [
+        { x: rect.x, y: rect.y },
+        { x: rect.x + rect.width, y: rect.y },
+        { x: rect.x + rect.width, y: rect.y + rect.height },
+        { x: rect.x, y: rect.y + rect.height },
+    ];
+
+    paintRoughPolygon(
+        cr,
+        annotation,
+        minimumDimension,
+        'rectangle',
+        points,
+    );
 }
 
 function drawEllipse(cr, annotation, width, height, minimumDimension) {
@@ -605,8 +1115,7 @@ function drawEllipse(cr, annotation, width, height, minimumDimension) {
         height,
     );
 
-    appendEllipse(cr, rect);
-    paintShapePath(cr, annotation, minimumDimension);
+    paintRoughEllipse(cr, annotation, minimumDimension, rect);
 }
 
 function pangoWeight(value) {
@@ -661,7 +1170,9 @@ function drawText(cr, annotation, width, height, minimumDimension) {
     );
     const description = new Pango.FontDescription();
 
-    description.set_family(String(annotation?.fontFamily ?? 'Sans'));
+    description.set_family(String(
+        annotation?.fontFamily ?? DEFAULT_ANNOTATION_STYLE.fontFamily,
+    ));
     description.set_weight(pangoWeight(annotation?.fontWeight));
     description.set_absolute_size(fontSize * Pango.SCALE);
 

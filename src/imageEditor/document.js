@@ -1,6 +1,20 @@
 export const IMAGE_DOCUMENT_VERSION = 1;
 export const MAX_HISTORY_ENTRIES = 100;
 export const MIN_NORMALIZED_SIZE = 0.000001;
+export const HAND_DRAWN_STYLE = 'cartoonist';
+// Excalidraw's Cartoonist preset is deliberately stronger than Artist. Keep
+// the variation larger than the default 0.006 stroke so it survives Cairo
+// antialiasing at ordinary editor sizes.
+export const HAND_DRAWN_ROUGHNESS = 0.012;
+export const HANDWRITTEN_FONT_FAMILY = [
+    'Excalifont',
+    'Virgil',
+    'Comic Shanns',
+    'Z003',
+    'LXGW WenKai',
+    'Paper Mono',
+    'cursive',
+].join(', ');
 
 export const ANNOTATION_TYPES = Object.freeze([
     'pencil',
@@ -29,7 +43,7 @@ export const DEFAULT_ANNOTATION_STYLE = Object.freeze({
     opacity: 1,
     color: '#ed333b',
     fontSize: 0.045,
-    fontFamily: 'Sans',
+    fontFamily: HANDWRITTEN_FONT_FAMILY,
     fontWeight: 400,
 });
 
@@ -50,6 +64,17 @@ function normalizedSize(value, fallback) {
 
 function normalizedFontSize(value, fallback = DEFAULT_ANNOTATION_STYLE.fontSize) {
     return Math.max(MIN_NORMALIZED_SIZE, finiteNumber(value, fallback));
+}
+
+function normalizedFontFamily(value) {
+    const family = String(value ?? '').trim();
+
+    // Sans was the editor's old hard-coded default and was never user
+    // selectable, so migrate it to the handwritten family on load.
+    if (!family || family.toLowerCase() === 'sans')
+        return HANDWRITTEN_FONT_FAMILY;
+
+    return family;
 }
 
 function normalizedColor(value, fallback) {
@@ -94,6 +119,58 @@ export function normalizePoint(point = {}, fallback = { x: 0, y: 0 }) {
         x: finiteNumber(point?.x, fallback.x),
         y: finiteNumber(point?.y, fallback.y),
     };
+}
+
+function midpoint(first, second) {
+    return {
+        x: (first.x + second.x) / 2,
+        y: (first.y + second.y) / 2,
+    };
+}
+
+/**
+ * Return the on-curve midpoint used by the arrow curvature handle.
+ *
+ * Older straight-arrow documents have no `bend`, so their handle is derived
+ * from the segment midpoint without requiring a document migration.
+ */
+export function getArrowBendPoint(annotation = {}) {
+    const start = normalizePoint(annotation?.start);
+    const end = normalizePoint(annotation?.end, start);
+    return normalizePoint(annotation?.bend, midpoint(start, end));
+}
+
+export function getArrowControlPoint(annotation = {}) {
+    const start = normalizePoint(annotation?.start);
+    const end = normalizePoint(annotation?.end, start);
+    const bend = getArrowBendPoint({ ...annotation, start, end });
+    const chordMidpoint = midpoint(start, end);
+
+    return {
+        x: bend.x * 2 - chordMidpoint.x,
+        y: bend.y * 2 - chordMidpoint.y,
+    };
+}
+
+function quadraticPoint(start, control, end, position) {
+    const remaining = 1 - position;
+
+    return {
+        x: remaining * remaining * start.x
+            + 2 * remaining * position * control.x
+            + position * position * end.x,
+        y: remaining * remaining * start.y
+            + 2 * remaining * position * control.y
+            + position * position * end.y,
+    };
+}
+
+export function getArrowPoint(annotation = {}, position = 0.5) {
+    const start = normalizePoint(annotation?.start);
+    const end = normalizePoint(annotation?.end, start);
+    const control = getArrowControlPoint({ ...annotation, start, end });
+
+    return quadraticPoint(start, control, end, clamp(position));
 }
 
 export function normalizeRect(rect = {}, fallback = {}) {
@@ -206,12 +283,25 @@ export function normalizeAnnotation(annotation = {}, options = {}) {
         };
     }
 
-    if (type === 'line' || type === 'arrow') {
+    if (type === 'line') {
         return {
             ...base,
             ...strokeStyle(annotation),
             start: normalizePoint(annotation?.start),
             end: normalizePoint(annotation?.end, annotation?.start),
+        };
+    }
+
+    if (type === 'arrow') {
+        const start = normalizePoint(annotation?.start);
+        const end = normalizePoint(annotation?.end, start);
+
+        return {
+            ...base,
+            ...strokeStyle(annotation),
+            start,
+            end,
+            bend: getArrowBendPoint({ ...annotation, start, end }),
         };
     }
 
@@ -239,9 +329,7 @@ export function normalizeAnnotation(annotation = {}, options = {}) {
         text: String(annotation?.text ?? ''),
         color: normalizedColor(annotation?.color, DEFAULT_ANNOTATION_STYLE.color),
         fontSize: normalizedFontSize(annotation?.fontSize),
-        fontFamily: String(
-            annotation?.fontFamily ?? DEFAULT_ANNOTATION_STYLE.fontFamily,
-        ).trim() || DEFAULT_ANNOTATION_STYLE.fontFamily,
+        fontFamily: normalizedFontFamily(annotation?.fontFamily),
         fontWeight,
         rotation: finiteNumber(annotation?.rotation, 0),
         flipX: Boolean(annotation?.flipX),
@@ -275,8 +363,7 @@ export function getAnnotationBounds(annotation, { includeStroke = false } = {}) 
         };
         break;
     }
-    case 'line':
-    case 'arrow': {
+    case 'line': {
         const start = normalizePoint(annotation.start);
         const end = normalizePoint(annotation.end);
         bounds = normalizeRect({
@@ -285,6 +372,33 @@ export function getAnnotationBounds(annotation, { includeStroke = false } = {}) 
             width: end.x - start.x,
             height: end.y - start.y,
         });
+        break;
+    }
+    case 'arrow': {
+        const start = normalizePoint(annotation.start);
+        const end = normalizePoint(annotation.end, start);
+        const control = getArrowControlPoint(annotation);
+        const points = [start, end];
+
+        for (const axis of ['x', 'y']) {
+            const denominator = start[axis] - 2 * control[axis] + end[axis];
+
+            if (Math.abs(denominator) <= Number.EPSILON)
+                continue;
+
+            const position = (start[axis] - control[axis]) / denominator;
+            if (position > 0 && position < 1)
+                points.push(quadraticPoint(start, control, end, position));
+        }
+
+        const xs = points.map(point => point.x);
+        const ys = points.map(point => point.y);
+        bounds = {
+            x: Math.min(...xs),
+            y: Math.min(...ys),
+            width: Math.max(...xs) - Math.min(...xs),
+            height: Math.max(...ys) - Math.min(...ys),
+        };
         break;
     }
     case 'rectangle':
@@ -299,7 +413,8 @@ export function getAnnotationBounds(annotation, { includeStroke = false } = {}) 
     if (!includeStroke || annotation.type === 'text')
         return bounds;
 
-    const padding = normalizedSize(annotation.strokeWidth, 0) / 2;
+    const sketchPadding = annotation.type === 'pencil' ? 0 : HAND_DRAWN_ROUGHNESS;
+    const padding = normalizedSize(annotation.strokeWidth, 0) / 2 + sketchPadding;
     return {
         x: bounds.x - padding,
         y: bounds.y - padding,
@@ -360,7 +475,10 @@ export function hitTestAnnotation(annotation, point, options = {}) {
     const target = normalizePoint(point);
     const scale = metricScale(options);
     const tolerance = Math.max(0, finiteNumber(options.tolerance, 0.008));
-    const strokeTolerance = tolerance + normalizedSize(annotation?.strokeWidth, 0) / 2;
+    const sketchTolerance = annotation?.type === 'pencil' ? 0 : HAND_DRAWN_ROUGHNESS;
+    const strokeTolerance = tolerance
+        + normalizedSize(annotation?.strokeWidth, 0) / 2
+        + sketchTolerance;
 
     if (annotation?.type === 'pencil') {
         const points = Array.isArray(annotation.points)
@@ -380,13 +498,31 @@ export function hitTestAnnotation(annotation, point, options = {}) {
         return false;
     }
 
-    if (annotation?.type === 'line' || annotation?.type === 'arrow') {
+    if (annotation?.type === 'line') {
         return distanceToSegment(
             target,
             normalizePoint(annotation.start),
             normalizePoint(annotation.end),
             scale,
         ) <= strokeTolerance;
+    }
+
+    if (annotation?.type === 'arrow') {
+        const start = normalizePoint(annotation.start);
+        const end = normalizePoint(annotation.end, start);
+        const control = getArrowControlPoint(annotation);
+        let previous = start;
+
+        for (let index = 1; index <= 32; index++) {
+            const current = quadraticPoint(start, control, end, index / 32);
+
+            if (distanceToSegment(target, previous, current, scale) <= strokeTolerance)
+                return true;
+
+            previous = current;
+        }
+
+        return false;
     }
 
     const rect = normalizeRect(annotation?.rect);
@@ -510,11 +646,18 @@ export function mapAnnotationGeometry(annotation, pointMapper, options = {}) {
             ...normalized,
             points: normalized.points.map(mapPoint),
         };
-    } else if (normalized.type === 'line' || normalized.type === 'arrow') {
+    } else if (normalized.type === 'line') {
         mapped = {
             ...normalized,
             start: mapPoint(normalized.start),
             end: mapPoint(normalized.end),
+        };
+    } else if (normalized.type === 'arrow') {
+        mapped = {
+            ...normalized,
+            start: mapPoint(normalized.start),
+            end: mapPoint(normalized.end),
+            bend: mapPoint(normalized.bend),
         };
     } else {
         const rect = normalized.rect;
@@ -1004,7 +1147,7 @@ export class ImageDocument {
                 type: current.type,
             };
 
-            for (const key of ['rect', 'start', 'end']) {
+            for (const key of ['rect', 'start', 'end', 'bend']) {
                 if (update[key])
                     merged[key] = { ...current[key], ...update[key] };
             }
