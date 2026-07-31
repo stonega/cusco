@@ -7,9 +7,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.30] - 2026-07-31
+
 ### Changed
 
 - Expanded tool results now appear above their artifact cards in assistant messages.
+
+### Fixed
+
+- Question-and-answer panels now use an opaque background so conversation content cannot show through them.
 
 ## [0.5.29] - 2026-07-30
 
@@ -208,7 +214,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.29...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.30...HEAD
+[0.5.30]: https://github.com/stonega/cusco/compare/v0.5.29...v0.5.30
 [0.5.29]: https://github.com/stonega/cusco/compare/v0.5.28...v0.5.29
 [0.5.28]: https://github.com/stonega/cusco/compare/v0.5.27...v0.5.28
 [0.5.27]: https://github.com/stonega/cusco/compare/v0.5.26...v0.5.27
