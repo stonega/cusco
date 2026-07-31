@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- Expanded tool results now appear above their artifact cards in assistant messages.
+
 ## [0.5.29] - 2026-07-30
 
 ### Changed

@@ -8630,8 +8630,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         container.append(headerButton);
         container.append(outputPreviewSlot);
-        container.append(artifactPreview);
         container.append(revealer);
+        container.append(artifactPreview);
         container.updateToolMessage = (nextMessage) => {
             currentMessage = nextMessage;
             updateFromMessage();
