@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.31] - 2026-08-02
+
 ### Fixed
 
 - Fixed idle memory growth caused by repeatedly rebuilding unchanged chat sidebar rows during cron log polling.
@@ -218,7 +220,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.30...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.31...HEAD
+[0.5.31]: https://github.com/stonega/cusco/compare/v0.5.30...v0.5.31
 [0.5.30]: https://github.com/stonega/cusco/compare/v0.5.29...v0.5.30
 [0.5.29]: https://github.com/stonega/cusco/compare/v0.5.28...v0.5.29
 [0.5.28]: https://github.com/stonega/cusco/compare/v0.5.27...v0.5.28
