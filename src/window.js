@@ -1119,6 +1119,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._conversations.persist();
             this._stopCronLogSync();
             this._homeFileIndex.stop();
+            this._conversationList?.set_model(null);
+            this._conversationList?.set_factory(null);
 
             for (const cancellable of this._clipboardPasteCancellables)
                 cancellable.cancel();
@@ -1149,6 +1151,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 this._chatStatisticsPopover.popdown();
                 this._chatStatisticsPopover.unparent();
                 this._chatStatisticsPopover = null;
+            }
+
+            if (this._composerUsagePopover) {
+                this._composerUsagePopover.popdown();
+                this._composerUsagePopover.unparent();
+                this._composerUsagePopover = null;
             }
 
             this._mcp.shutdown();
@@ -1375,13 +1383,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
             const container = listItem.get_child();
             const conversationId = listItem.get_item()?.get_string?.() ?? '';
             const conversation = this._conversations.getConversation(conversationId);
-            this._clearBox(container);
+            this._clearConversationListRow(container);
 
             if (conversation)
                 container.append(this._createConversationRow(conversation));
         });
         conversationListFactory.connect('unbind', (_factory, listItem) => {
-            this._clearBox(listItem.get_child());
+            this._clearConversationListRow(listItem.get_child());
         });
 
         this._conversationList = new Gtk.ListView({
@@ -3446,26 +3454,31 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return status;
 
         this._cronJobIndex = new Map(status.jobs.map((job) => [job.id, job]));
+        let conversationsChanged = false;
 
         for (const job of status.jobs) {
-            const conversation = this._ensureCronConversation(job);
+            const ensured = this._ensureCronConversation(job);
+            const conversation = ensured.conversation;
+
+            conversationsChanged = conversationsChanged || ensured.changed;
 
             if (conversation && job.conversationId !== conversation.id) {
                 const updatedJob = await this._cron.updateJob(job.id, { conversationId: conversation.id });
                 this._cronJobIndex.set(updatedJob.id, updatedJob);
             }
 
-            if (conversation)
-                this._appendCronRunLogs(job, conversation);
+            if (conversation && this._appendCronRunLogs(job, conversation))
+                conversationsChanged = true;
         }
 
-        if (selectionSerial === this._conversationSelectionSerial
+        if (conversationsChanged
+            && selectionSerial === this._conversationSelectionSerial
             && activeConversationId
             && this._conversations.getConversation(activeConversationId)) {
             this._conversations.selectConversation(activeConversationId);
         }
 
-        if (refreshUi) {
+        if (refreshUi && conversationsChanged) {
             this._refreshConversationList();
 
             if (this._isCronConversation(this._conversations.activeConversation))
@@ -3479,6 +3492,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         let conversation = job.conversationId
             ? this._conversations.getConversation(job.conversationId)
             : null;
+        let changed = false;
 
         if (!conversation)
             conversation = this._findCronConversation(job.id);
@@ -3494,14 +3508,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     createMessage('system', this._formatCronJobCreatedMessage(job)),
                 ],
             });
+            changed = true;
         } else if (conversation.conversationType !== 'cron' || conversation.cronJobId !== job.id) {
             this._conversations.setCronMetadata(conversation.id, {
                 conversationType: 'cron',
                 cronJobId: job.id,
             });
+            changed = true;
         }
 
-        return conversation;
+        return { conversation, changed };
     }
 
     _findCronConversation(jobId) {
@@ -7190,6 +7206,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         rowBox.append(box);
         rowBox.append(actions);
+        rowBox._releaseConversationRow = () => {
+            actions._releaseConversationMenu?.();
+            rowBox._releaseConversationRow = null;
+        };
         return rowBox;
     }
 
@@ -7212,12 +7232,15 @@ class CuscoWindow extends Adw.ApplicationWindow {
             margin_end: 6,
         });
         menu.add_css_class('cusco-conversation-menu');
+        const menuItems = [];
 
         const addMenuItem = (iconName, label, onClicked, options = {}) => {
-            menu.append(this._createConversationMenuItem(iconName, label, () => {
+            const item = this._createConversationMenuItem(iconName, label, () => {
                 popover.popdown();
                 onClicked();
-            }, options));
+            }, options);
+            menuItems.push(item);
+            menu.append(item);
         };
 
         addMenuItem('document-edit-symbolic', 'Rename chat', () => {
@@ -7251,18 +7274,31 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const syncMenuVisibility = () => setMenuVisible(isHovered || popover.get_visible());
         const motionController = new Gtk.EventControllerMotion();
 
-        motionController.connect('enter', () => {
+        const enterSignalId = motionController.connect('enter', () => {
             isHovered = true;
             syncMenuVisibility();
         });
-        motionController.connect('leave', () => {
+        const leaveSignalId = motionController.connect('leave', () => {
             isHovered = false;
             syncMenuVisibility();
         });
-        popover.connect('closed', syncMenuVisibility);
+        const closedSignalId = popover.connect('closed', syncMenuVisibility);
 
         hoverTarget.add_controller(motionController);
         setMenuVisible(false);
+        menuButton._releaseConversationMenu = () => {
+            motionController.disconnect(enterSignalId);
+            motionController.disconnect(leaveSignalId);
+            popover.disconnect(closedSignalId);
+            hoverTarget.remove_controller(motionController);
+
+            for (const item of menuItems)
+                item._releaseConversationMenuItem?.();
+
+            popover.set_child(null);
+            menuButton.set_popover(null);
+            menuButton._releaseConversationMenu = null;
+        };
 
         return menuButton;
     }
@@ -7294,7 +7330,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
             hexpand: true,
         }));
         button.set_child(content);
-        button.connect('clicked', onClicked);
+        const clickedSignalId = button.connect('clicked', onClicked);
+        button._releaseConversationMenuItem = () => {
+            button.disconnect(clickedSignalId);
+            button._releaseConversationMenuItem = null;
+        };
         return button;
     }
 
@@ -9208,6 +9248,15 @@ class CuscoWindow extends Adw.ApplicationWindow {
             box.remove(child);
             child = next;
         }
+    }
+
+    _clearConversationListRow(container) {
+        const row = container?.get_first_child?.();
+
+        row?._releaseConversationRow?.();
+
+        if (container)
+            this._clearBox(container);
     }
 
     _appendMessageBottomSpacer() {

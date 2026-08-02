@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed idle memory growth caused by repeatedly rebuilding unchanged chat sidebar rows during cron log polling.
+
 ## [0.5.30] - 2026-07-31
 
 ### Changed

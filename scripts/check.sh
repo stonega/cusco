@@ -43,6 +43,7 @@ gjs -m tests/image-editor-smoke.js
 gjs -m tests/image-editor-window-smoke.js
 gjs -m tests/tools-smoke.js
 gjs -m tests/cron-smoke.js
+gjs -m tests/window-background-sync-smoke.js
 gjs -m tests/agent-mode-smoke.js
 gjs -m tests/ask-user-smoke.js
 gjs -m tests/accessibility-smoke.js
