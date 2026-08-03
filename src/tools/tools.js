@@ -5,7 +5,10 @@ import Soup from 'gi://Soup?version=3.0';
 import { normalizePermissionPolicy, TOOL_PERMISSION_ALLOW, TOOL_PERMISSION_ASK } from './permissions.js';
 
 const DEFAULT_SEARCH_TIMEOUT_SECONDS = 15;
-const DEFAULT_BASH_TIMEOUT_SECONDS = 30;
+const DEFAULT_BASH_TIMEOUT_SECONDS = 300;
+const MAX_BASH_TIMEOUT_SECONDS = 300;
+const BASH_OUTPUT_NOTIFY_INTERVAL_MS = 100;
+const BASH_OUTPUT_NOTIFY_MAX_CHARS = 8192;
 const MAX_FILE_READ_BYTES = 120000;
 const MAX_FILE_LIST_ITEMS = 200;
 const MAX_TOOL_OUTPUT_CHARS = 60000;
@@ -77,7 +80,7 @@ const BUILT_IN_TOOLS = {
     bash: {
         name: 'bash',
         label: 'Bash',
-        description: 'Run a shell command with timeout and bounded output.',
+        description: 'Run a shell command for up to five minutes with bounded, live output.',
         inputDescription: 'A shell command to execute through bash -lc.',
         permissionPolicy: TOOL_PERMISSION_ASK,
         requiresPermission: true,
@@ -770,6 +773,14 @@ function bashProgram() {
     return path;
 }
 
+function setsidProgram() {
+    return GLib.find_program_in_path('setsid');
+}
+
+function killProgram() {
+    return GLib.find_program_in_path('kill');
+}
+
 function sudoProgram() {
     return GLib.find_program_in_path('sudo');
 }
@@ -926,12 +937,12 @@ function waitForSubprocess(subprocess) {
     });
 }
 
-function readTextPipe(stream, onChunk = null) {
+function readTextPipe(stream, onChunk = null, cancellable = null) {
     const collector = createBoundedTextCollector(MAX_BASH_OUTPUT_CHARS);
 
     return new Promise((resolve, reject) => {
         const readNext = () => {
-            stream.read_bytes_async(BASH_READ_CHUNK_BYTES, GLib.PRIORITY_DEFAULT, null, (source, result) => {
+            stream.read_bytes_async(BASH_READ_CHUNK_BYTES, GLib.PRIORITY_LOW, cancellable, (source, result) => {
                 try {
                     const bytes = source.read_bytes_finish(result);
                     const data = bytes.get_data();
@@ -946,7 +957,10 @@ function readTextPipe(stream, onChunk = null) {
                     onChunk?.(text);
                     readNext();
                 } catch (error) {
-                    reject(error);
+                    if (error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                        resolve(collector.result());
+                    else
+                        reject(error);
                 }
             });
         };
@@ -966,21 +980,112 @@ function notifyBashOutput(callback, stream, text) {
     }
 }
 
+function createBashOutputNotifier(callback) {
+    const pending = {
+        stdout: '',
+        stderr: '',
+    };
+    let notifySourceId = 0;
+
+    const flush = () => {
+        notifySourceId = 0;
+
+        for (const stream of ['stdout', 'stderr']) {
+            const text = pending[stream];
+            pending[stream] = '';
+            notifyBashOutput(callback, stream, text);
+        }
+    };
+
+    return {
+        append(stream, text) {
+            if (!callback || !text)
+                return;
+
+            const combined = `${pending[stream] ?? ''}${text}`;
+            pending[stream] = combined.slice(-BASH_OUTPUT_NOTIFY_MAX_CHARS);
+
+            if (notifySourceId)
+                return;
+
+            notifySourceId = GLib.timeout_add(
+                GLib.PRIORITY_DEFAULT_IDLE,
+                BASH_OUTPUT_NOTIFY_INTERVAL_MS,
+                () => {
+                    flush();
+                    return GLib.SOURCE_REMOVE;
+                },
+            );
+        },
+        finish() {
+            if (notifySourceId) {
+                GLib.source_remove(notifySourceId);
+                notifySourceId = 0;
+            }
+
+            flush();
+        },
+    };
+}
+
+export function normalizeBashTimeoutSeconds(value) {
+    const seconds = Number.isFinite(value)
+        ? Math.round(value)
+        : DEFAULT_BASH_TIMEOUT_SECONDS;
+
+    return Math.min(MAX_BASH_TIMEOUT_SECONDS, Math.max(1, seconds));
+}
+
+function createBashSubprocess(command) {
+    const bashPath = bashProgram();
+    const setsidPath = setsidProgram();
+    const argv = setsidPath
+        ? [setsidPath, bashPath, '-lc', command]
+        : [bashPath, '-lc', command];
+
+    return {
+        isolatedProcessGroup: Boolean(setsidPath),
+        subprocess: Gio.Subprocess.new(
+            argv,
+            Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+        ),
+    };
+}
+
+function terminateBashSubprocess(subprocess, isolatedProcessGroup) {
+    const identifier = String(subprocess.get_identifier?.() ?? '');
+    const killPath = killProgram();
+
+    if (isolatedProcessGroup && killPath && /^\d+$/.test(identifier)) {
+        try {
+            Gio.Subprocess.new(
+                [killPath, '-KILL', '--', `-${identifier}`],
+                Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE,
+            );
+            return;
+        } catch (_error) {
+            // Fall through to terminating the direct child when process-group cleanup is unavailable.
+        }
+    }
+
+    subprocess.force_exit();
+}
+
 export async function runBashCommand(command, options = {}) {
     const normalizedCommand = String(command ?? '').trim();
 
     if (!normalizedCommand)
         throw userVisibleError('Bash command cannot be empty.');
 
-    const timeoutSeconds = Math.min(
-        DEFAULT_BASH_TIMEOUT_SECONDS,
-        Math.max(1, Math.round(options.timeoutSeconds ?? DEFAULT_BASH_TIMEOUT_SECONDS)),
-    );
+    const timeoutSeconds = normalizeBashTimeoutSeconds(options.timeoutSeconds);
     const externalCancellable = options.cancellable ?? null;
     let externalCancelHandlerId = 0;
     let timedOut = false;
     let cancelled = Boolean(externalCancellable?.is_cancelled?.());
     const usesSudo = commandUsesSudo(normalizedCommand);
+
+    if (cancelled)
+        return bashCancelledResult(normalizedCommand);
 
     if (usesSudo && await sudoNeedsPassword()) {
         if (typeof options.requestSudoPassword !== 'function')
@@ -1000,14 +1105,24 @@ export async function runBashCommand(command, options = {}) {
         sudoPassword = null;
     }
 
-    const subprocess = Gio.Subprocess.new(
-        [bashProgram(), '-lc', normalizedCommand],
-        Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
-    );
+    const { subprocess, isolatedProcessGroup } = createBashSubprocess(normalizedCommand);
+    const pipeCancellable = new Gio.Cancellable();
+    const outputNotifier = createBashOutputNotifier(options.onOutput);
+    let terminationRequested = false;
+
+    const terminateSubprocess = () => {
+        pipeCancellable.cancel();
+
+        if (terminationRequested)
+            return;
+
+        terminationRequested = true;
+        terminateBashSubprocess(subprocess, isolatedProcessGroup);
+    };
 
     const cancelSubprocess = () => {
         cancelled = true;
-        subprocess.force_exit();
+        terminateSubprocess();
     };
 
     if (externalCancellable) {
@@ -1020,16 +1135,16 @@ export async function runBashCommand(command, options = {}) {
     let timeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, timeoutSeconds, () => {
         timedOut = true;
         timeoutId = 0;
-        subprocess.force_exit();
+        terminateSubprocess();
         return GLib.SOURCE_REMOVE;
     });
 
     const stdoutPromise = readTextPipe(subprocess.get_stdout_pipe(), (text) => {
-        notifyBashOutput(options.onOutput, 'stdout', text);
-    });
+        outputNotifier.append('stdout', text);
+    }, pipeCancellable);
     const stderrPromise = readTextPipe(subprocess.get_stderr_pipe(), (text) => {
-        notifyBashOutput(options.onOutput, 'stderr', text);
-    });
+        outputNotifier.append('stderr', text);
+    }, pipeCancellable);
 
     try {
         const [, stdoutResult, stderrResult] = await Promise.all([
@@ -1057,6 +1172,8 @@ export async function runBashCommand(command, options = {}) {
             }),
         };
     } finally {
+        outputNotifier.finish();
+
         if (timeoutId)
             GLib.source_remove(timeoutId);
 

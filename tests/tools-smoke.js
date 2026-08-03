@@ -16,6 +16,7 @@ import {
     extractDuckDuckGoSearchResults,
     extractExaSearchResults,
     formatToolResultForTranscript,
+    normalizeBashTimeoutSeconds,
     parseToolRequest,
     runBashCommand,
     searchWeb,
@@ -328,5 +329,60 @@ if (!cancelledBashResult.cancelled || cancelledBashResult.exitStatus !== 130)
 
 if (!formatToolResultForTranscript(cancelledBashResult).includes('(cancelled)'))
     throw new Error('Cancelled bash result was not formatted as cancelled');
+
+if (normalizeBashTimeoutSeconds() !== 300
+    || normalizeBashTimeoutSeconds(60) !== 60
+    || normalizeBashTimeoutSeconds(1000) !== 300) {
+    throw new Error('Bash timeout normalization did not preserve the bounded heavy-task window');
+}
+
+let outputCallbackCount = 0;
+let uiHeartbeatCount = 0;
+const uiHeartbeatSourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT_IDLE, 10, () => {
+    uiHeartbeatCount++;
+    return GLib.SOURCE_CONTINUE;
+});
+const heavyOutputResult = await runBashCommand(
+    "yes '0123456789abcdef0123456789abcdef' | head -c 16777216",
+    {
+        onOutput: () => {
+            outputCallbackCount++;
+        },
+    },
+);
+GLib.source_remove(uiHeartbeatSourceId);
+
+if (heavyOutputResult.exitStatus !== 0)
+    throw new Error(`Heavy-output bash command failed: ${heavyOutputResult.output}`);
+
+if (outputCallbackCount > 8)
+    throw new Error(`Heavy bash output was not coalesced: ${outputCallbackCount} UI callbacks`);
+
+if (uiHeartbeatCount < 2)
+    throw new Error(`Heavy bash output starved the UI main context: ${uiHeartbeatCount} heartbeats`);
+
+const timeoutStartedAt = GLib.get_monotonic_time();
+const processTreeResult = await runBashCommand(
+    "sleep 5 & child=$!; printf '%s\\n' \"$child\"; wait",
+    { timeoutSeconds: 1 },
+);
+const timeoutElapsedMs = (GLib.get_monotonic_time() - timeoutStartedAt) / 1000;
+const childPid = processTreeResult.stdout.trim().split('\n')[0];
+
+await new Promise((resolve) => {
+    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+        resolve();
+        return GLib.SOURCE_REMOVE;
+    });
+});
+
+if (!processTreeResult.timedOut || processTreeResult.exitStatus !== 124)
+    throw new Error(`Timed-out bash process tree was not reported correctly: ${processTreeResult.output}`);
+
+if (timeoutElapsedMs > 2500)
+    throw new Error(`Timed-out bash process held its pipes for ${timeoutElapsedMs.toFixed(0)}ms`);
+
+if (/^\d+$/.test(childPid) && GLib.file_test(`/proc/${childPid}`, GLib.FileTest.EXISTS))
+    throw new Error(`Timed-out bash descendant ${childPid} was left running`);
 
 print('Cusco tools smoke passed');

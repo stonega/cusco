@@ -7,6 +7,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Removed the empty icon placeholders from the artifact Preview and Source tabs.
+- Kept Cusco responsive during output-heavy tool calls, gave shell tools a bounded five-minute window, and stopped timed-out command descendants from holding agent turns open.
+
 ## [0.5.31] - 2026-08-02
 
 ### Fixed

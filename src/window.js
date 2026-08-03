@@ -4175,7 +4175,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         try {
             const result = await this._tools.runRequest(request, {
                 providerId: conversation?.providerId ?? '',
-                timeoutSeconds: this._appSettings.responseTimeoutSeconds,
+                timeoutSeconds: request.name === 'bash'
+                    ? undefined
+                    : this._appSettings.responseTimeoutSeconds,
                 cancellable,
                 onOutput: (chunk) => this._appendToolOutputChunk(runningTool, chunk),
                 requestSudoPassword: request.name === 'bash'
@@ -5600,7 +5602,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         try {
             const result = await this._tools.runRequest(request, {
                 providerId: conversation.providerId,
-                timeoutSeconds: this._appSettings.responseTimeoutSeconds,
+                timeoutSeconds: request.name === 'bash'
+                    ? undefined
+                    : this._appSettings.responseTimeoutSeconds,
                 cancellable,
                 onOutput: (chunk) => this._appendToolOutputChunk(runningTool, chunk),
                 requestSudoPassword: request.name === 'bash'
@@ -8381,6 +8385,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         let autoScroll = true;
         let updatingScroll = false;
+        let scrollSourceId = 0;
 
         scroller.add_css_class('cusco-tool-output-preview');
         scroller.get_vadjustment().connect('value-changed', (adjustment) => {
@@ -8401,7 +8406,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (!shouldScroll)
                 return;
 
-            GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            if (scrollSourceId)
+                return;
+
+            scrollSourceId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                scrollSourceId = 0;
                 updatingScroll = true;
                 adjustment.set_value(Math.max(adjustment.get_lower(), adjustment.get_upper() - adjustment.get_page_size()));
                 updatingScroll = false;

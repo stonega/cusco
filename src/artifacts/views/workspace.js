@@ -208,15 +208,14 @@ export function createArtifactWorkspace(options = {}) {
     sourceShell.append(sourceToolbar);
     sourceShell.append(sourceContainer);
 
-    const viewStack = new Adw.ViewStack({
+    const viewStack = new Gtk.Stack({
         hexpand: true,
         vexpand: true,
     });
     viewStack.add_titled(previewContainer, 'preview', 'Preview');
     viewStack.add_titled(sourceShell, 'source', 'Source');
-    const viewSwitcher = new Adw.ViewSwitcher({
+    const viewSwitcher = new Gtk.StackSwitcher({
         stack: viewStack,
-        policy: Adw.ViewSwitcherPolicy.WIDE,
         halign: Gtk.Align.CENTER,
         margin_bottom: 6,
     });

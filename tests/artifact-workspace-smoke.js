@@ -91,6 +91,22 @@ if (Gtk.init_check()) {
         artifactManager: manager,
         artifactRegistry: registry,
     });
+    const workspaceWidgets = descendantWidgets(workspace);
+    const viewSwitcher = workspaceWidgets.find((widget) => widget instanceof Gtk.StackSwitcher);
+
+    if (!viewSwitcher)
+        throw new Error('Artifact workspace did not create its text-only view switcher');
+
+    const viewSwitcherWidgets = descendantWidgets(viewSwitcher);
+    const viewSwitcherLabels = viewSwitcherWidgets
+        .filter((widget) => widget instanceof Gtk.Label)
+        .map((label) => label.get_text());
+
+    if (!viewSwitcherLabels.includes('Preview') || !viewSwitcherLabels.includes('Source'))
+        throw new Error(`Artifact workspace view labels were missing: ${viewSwitcherLabels.join(', ')}`);
+
+    if (viewSwitcherWidgets.some((widget) => widget instanceof Gtk.Image))
+        throw new Error('Artifact workspace view switcher unexpectedly rendered tab icons');
 
     workspace.setConversation('conversation-1');
 
