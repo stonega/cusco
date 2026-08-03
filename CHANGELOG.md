@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.32] - 2026-08-03
+
 ### Fixed
 
 - Removed the empty icon placeholders from the artifact Preview and Source tabs.
@@ -225,7 +227,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.31...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.32...HEAD
+[0.5.32]: https://github.com/stonega/cusco/compare/v0.5.31...v0.5.32
 [0.5.31]: https://github.com/stonega/cusco/compare/v0.5.30...v0.5.31
 [0.5.30]: https://github.com/stonega/cusco/compare/v0.5.29...v0.5.30
 [0.5.29]: https://github.com/stonega/cusco/compare/v0.5.28...v0.5.29
