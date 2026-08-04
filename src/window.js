@@ -906,6 +906,7 @@ export const ModelPicker = GObject.registerClass({
         });
         this._modelPopover.set_child(scroller);
         this.set_popover(this._modelPopover);
+        this.add_css_class('cusco-selector-picker');
         this.add_css_class('cusco-model-picker');
     }
 
@@ -6791,6 +6792,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         picker.add_attribute(iconRenderer, 'gicon', PROVIDER_PICKER_ICON_COLUMN);
         picker.pack_start(textRenderer, true);
         picker.add_attribute(textRenderer, 'text', PROVIDER_PICKER_NAME_COLUMN);
+        picker.add_css_class('cusco-selector-picker');
 
         return picker;
     }
