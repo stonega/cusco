@@ -28,6 +28,30 @@ Cusco is still a development project, but the main local app surfaces are implem
 
 See [TODO.md](TODO.md) for the roadmap and [docs/user/getting-started.md](docs/user/getting-started.md) for workflow details.
 
+## Install on Fedora
+
+Cusco is available from the third-party [`stonegate/cusco` Fedora COPR repository](https://copr.fedorainfracloud.org/coprs/stonegate/cusco/) for supported Fedora releases and Rawhide on x86_64 and aarch64.
+
+Enable the repository and install Cusco:
+
+```sh
+sudo dnf copr enable stonegate/cusco
+sudo dnf install cusco
+```
+
+Future Cusco releases are delivered through normal Fedora updates. To update immediately:
+
+```sh
+sudo dnf upgrade cusco
+```
+
+To remove Cusco and disable its repository:
+
+```sh
+sudo dnf remove cusco
+sudo dnf copr disable stonegate/cusco
+```
+
 ## Requirements
 
 Install the GNOME JavaScript and build tooling for your distro.

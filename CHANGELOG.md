@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Added Fedora COPR packaging for supported Fedora releases and Rawhide on x86_64 and aarch64.
+
 ## [0.5.32] - 2026-08-03
 
 ### Fixed
