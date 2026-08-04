@@ -9,6 +9,12 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      copr_tag:
+        description: Existing release tag to submit to Fedora COPR
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -17,6 +23,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch'
 
     steps:
       - name: Check out repository
@@ -255,7 +262,14 @@ jobs:
     name: Publish Fedora COPR
     runs-on: ubuntu-latest
     needs: release
-    if: startsWith(github.ref, 'refs/tags/')
+    if: >-
+      ${{
+        always() &&
+        (
+          (startsWith(github.ref, 'refs/tags/') && needs.release.result == 'success') ||
+          github.event_name == 'workflow_dispatch'
+        )
+      }}
     container: fedora:latest
     timeout-minutes: 90
     permissions:
@@ -267,6 +281,8 @@ jobs:
 
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.copr_tag || github.ref }}
 
       - name: Configure COPR authentication
         env:
@@ -283,14 +299,16 @@ jobs:
           chmod 600 "$HOME/.config/copr"
 
       - name: Submit tagged release to COPR
+        env:
+          COPR_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.copr_tag || github.ref_name }}
         shell: bash
         run: |
-          version="${GITHUB_REF_NAME#v}"
-
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "COPR releases require a numeric semantic version tag." >&2
+          if [[ ! "$COPR_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "COPR releases require a v-prefixed numeric semantic version tag." >&2
             exit 1
           fi
+          version="${COPR_TAG#v}"
+
           if ! grep -Fq "version: '$version'" meson.build; then
             echo "Tag version $version does not match meson.build." >&2
             exit 1

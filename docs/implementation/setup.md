@@ -71,7 +71,8 @@ The repository must have a GitHub Actions secret named `COPR_CONFIG`. Sign in
 to the [Fedora COPR API page](https://copr.fedorainfracloud.org/api/), copy the
 complete generated configuration, and store it as the secret value. The
 workflow writes it to the COPR CLI configuration path only for the publishing
-job.
+job. To publish or retry an existing release, run the workflow manually and
+enter its `v*` tag in the `copr_tag` input.
 
 ## Schema Warnings During Install
 
