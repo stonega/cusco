@@ -1,6 +1,6 @@
 Name:           cusco
-Version:        0.5.32
-Release:        2%{?dist}
+Version:        0.5.33
+Release:        1%{?dist}
 Summary:        Native AI desktop workspace for GNOME
 
 License:        GPL-3.0-or-later
@@ -65,6 +65,9 @@ appstreamcli validate --no-net \
 %{_datadir}/metainfo/io.github.stonega.Cusco.appdata.xml
 
 %changelog
+* Tue Aug 04 2026 stone <xijieyin@gmail.com> - 0.5.33-1
+- Keep concurrent chat progress and controls attached to the correct chat
+
 * Tue Aug 04 2026 stone <xijieyin@gmail.com> - 0.5.32-2
 - Add the GTK build dependency required by the Meson GNOME install hook
 

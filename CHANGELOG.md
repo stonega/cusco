@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Added automatic Fedora COPR submission and build verification for tagged releases.
+
 ## [0.5.33] - 2026-08-04
 
 ### Added

@@ -250,3 +250,59 @@ jobs:
             --verify-tag \
             --title "$GITHUB_REF_NAME" \
             --notes-file release-notes.md
+
+  copr:
+    name: Publish Fedora COPR
+    runs-on: ubuntu-latest
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/')
+    container: fedora:latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+
+    steps:
+      - name: Install COPR tooling
+        run: dnf install -y copr-cli git
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure COPR authentication
+        env:
+          COPR_CONFIG: ${{ secrets.COPR_CONFIG }}
+        shell: bash
+        run: |
+          if [[ -z "$COPR_CONFIG" ]]; then
+            echo "The COPR_CONFIG repository secret is not configured." >&2
+            exit 1
+          fi
+
+          install -d -m 700 "$HOME/.config"
+          printf '%s\n' "$COPR_CONFIG" > "$HOME/.config/copr"
+          chmod 600 "$HOME/.config/copr"
+
+      - name: Submit tagged release to COPR
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "COPR releases require a numeric semantic version tag." >&2
+            exit 1
+          fi
+          if ! grep -Fq "version: '$version'" meson.build; then
+            echo "Tag version $version does not match meson.build." >&2
+            exit 1
+          fi
+
+          sed -i -E \
+            "s/^(Version:[[:space:]]*).*/\\1${version}/" \
+            cusco.spec
+          sed -i -E \
+            's/^(Release:[[:space:]]*).*/\11%{?dist}/' \
+            cusco.spec
+
+          grep -E '^Version:[[:space:]]*' cusco.spec
+          grep -E '^Release:[[:space:]]*' cusco.spec
+          copr-cli build stonegate/cusco cusco.spec

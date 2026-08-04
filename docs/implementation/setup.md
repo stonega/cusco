@@ -60,6 +60,19 @@ meson compile -C rpm-builddir
 DESTDIR="$PWD/rpm-root" meson install -C rpm-builddir --no-rebuild
 ```
 
+## Release Automation
+
+Pushing a `v*` tag builds and publishes the GitHub release artifacts, then
+submits `cusco.spec` to the `stonegate/cusco` Fedora COPR project. The COPR job
+derives the package version from the tag and waits for every configured chroot
+to finish, so a failed COPR build also fails the release workflow.
+
+The repository must have a GitHub Actions secret named `COPR_CONFIG`. Sign in
+to the [Fedora COPR API page](https://copr.fedorainfracloud.org/api/), copy the
+complete generated configuration, and store it as the secret value. The
+workflow writes it to the COPR CLI configuration path only for the publishing
+job.
+
 ## Schema Warnings During Install
 
 Cusco installs one GSettings schema, `io.github.stonega.Cusco.gschema.xml`,
