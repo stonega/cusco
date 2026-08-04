@@ -47,6 +47,16 @@
     color: alpha(@accent_color, 0.86);
 }
 
+.cusco-conversation-active-dot {
+    border-radius: 999px;
+    background-color: @accent_color;
+    box-shadow: 0 0 0 1px alpha(@window_bg_color, 0.72);
+}
+
+.cusco-high-contrast .cusco-conversation-active-dot {
+    box-shadow: 0 0 0 1px @window_fg_color;
+}
+
 .cusco-conversation-menu-button {
     min-width: 32px;
     min-height: 32px;

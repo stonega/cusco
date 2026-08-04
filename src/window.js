@@ -1112,6 +1112,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._sessionHookContexts = new Map();
         this._activeQuestionSession = null;
         this._pendingUserMessagesByConversation = new Map();
+        this._pendingConversationSendSourceId = 0;
         this._lastAssistantMessageView = null;
         this._pendingAssistantToolEntries = [];
         this.connect('close-request', () => {
@@ -1140,6 +1141,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (this._usageDisplaySourceId) {
                 GLib.Source.remove(this._usageDisplaySourceId);
                 this._usageDisplaySourceId = 0;
+            }
+
+            if (this._pendingConversationSendSourceId) {
+                GLib.Source.remove(this._pendingConversationSendSourceId);
+                this._pendingConversationSendSourceId = 0;
             }
 
             if (this._composerStyleManagerSignalId) {
@@ -1270,7 +1276,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         keyController.set_propagation_phase(Gtk.PropagationPhase.CAPTURE);
         keyController.connect('key-pressed', (_controller, keyval) => {
-            if (keyval === Gdk.KEY_Escape && this._computerUse.active) {
+            if (keyval === Gdk.KEY_Escape
+                && this._computerUse.active
+                && this._isConversationBusy(this._conversations.activeConversation?.id)) {
                 this._stopComputerUseAndReturn();
                 return true;
             }
@@ -1285,7 +1293,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 return true;
             }
 
-            if (keyval === Gdk.KEY_Escape && this._activeChatCancellable) {
+            if (keyval === Gdk.KEY_Escape && this._isConversationBusy(
+                this._conversations.activeConversation?.id,
+            )) {
                 this._stopActiveConversation();
                 return true;
             }
@@ -1757,6 +1767,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         const sendMessage = () => {
             const text = this._getComposerText().trim();
+            const conversationId = this._conversations.activeConversation?.id ?? null;
 
             if (this._activeQuestionSession) {
                 if (text)
@@ -1770,9 +1781,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (!text && !hasAttachments)
                 return;
 
-            if (this._activeChatCancellable) {
+            if (this._isConversationBusy(conversationId)) {
                 if (text) {
-                    this._enqueuePendingUserMessageWithHooks(text, references).then((message) => {
+                    this._enqueuePendingUserMessageWithHooks(text, references, conversationId).then((message) => {
                         if (message)
                             this._setComposerText('');
                     }).catch((error) => {
@@ -1785,10 +1796,24 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 return;
             }
 
+            if (this._activeChatCancellable) {
+                if (text) {
+                    const message = this._enqueuePendingUserMessage(text, references, conversationId);
+
+                    if (message) {
+                        this._setComposerText('');
+                        this._schedulePendingConversationSend();
+                    }
+                } else if (hasAttachments) {
+                    this._showToast('Attachments can be sent after the current response finishes.');
+                }
+                return;
+            }
+
             this._setComposerText('');
             this._sendMessage(text, references).catch((error) => {
                 logError(error, 'Failed to stream provider response');
-                this._appendSystemError(getProviderErrorMessage(error));
+                this._appendSystemError(getProviderErrorMessage(error), conversationId);
             });
         };
 
@@ -2052,7 +2077,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         } else {
             this._updateAttachmentLabel();
             this._renderPendingUserMessages();
-            this._syncComposerHint(Boolean(this._activeChatCancellable));
+            this._syncComposerHint(this._isConversationBusy(
+                this._conversations.activeConversation?.id,
+            ));
         }
 
         this._syncComposerPlaceholder();
@@ -3067,9 +3094,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _pendingConversationId() {
-        return this._activeTurnConversationId
-            ?? this._conversations.activeConversation?.id
-            ?? null;
+        return this._conversations.activeConversation?.id ?? null;
     }
 
     _getPendingUserMessages(conversationId) {
@@ -3096,7 +3121,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const messages = [...this._getPendingUserMessages(conversationId), message];
         this._pendingUserMessagesByConversation.set(conversationId, messages);
         this._renderPendingUserMessages();
-        this._syncComposerHint(Boolean(this._activeChatCancellable));
+        this._syncComposerHint(this._isConversationBusy(conversationId));
         return message;
     }
 
@@ -3300,7 +3325,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _syncComputerUseStatus(active) {
-        this._syncComposerHint(Boolean(this._activeChatCancellable), Boolean(active));
+        const isBusy = this._isConversationBusy(this._conversations.activeConversation?.id);
+        this._syncComposerHint(isBusy, isBusy && Boolean(active));
         this._syncAgentQuestionProgress();
     }
 
@@ -3735,9 +3761,45 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return messages;
     }
 
-    _handleQueuedUserMessageError(error) {
+    _handleQueuedUserMessageError(error, conversationId = null) {
         logError(error, 'Failed to send queued user message');
-        this._appendSystemError(getProviderErrorMessage(error));
+        this._appendSystemError(getProviderErrorMessage(error), conversationId);
+    }
+
+    async _preparePendingUserMessageHooks(conversation, cancellable) {
+        const pendingMessages = [...this._getPendingUserMessages(conversation.id)];
+        let changed = false;
+
+        for (const pendingMessage of pendingMessages) {
+            if (pendingMessage.hookTurnId)
+                continue;
+
+            const hookContextStart = this._activeHookContexts.length;
+            const allowed = await this._runUserPromptHooks(
+                conversation,
+                pendingMessage.content,
+                cancellable,
+            );
+
+            if (!allowed) {
+                const remainingMessages = this._getPendingUserMessages(conversation.id)
+                    .filter((message) => message.id !== pendingMessage.id);
+
+                if (remainingMessages.length > 0)
+                    this._pendingUserMessagesByConversation.set(conversation.id, remainingMessages);
+                else
+                    this._pendingUserMessagesByConversation.delete(conversation.id);
+                changed = true;
+                continue;
+            }
+
+            pendingMessage.hookContexts = this._activeHookContexts.slice(hookContextStart);
+            pendingMessage.hookTurnId = this._activeTurnId;
+            changed = true;
+        }
+
+        if (changed)
+            this._renderPendingUserMessages();
     }
 
     async _sendQueuedUserMessages(conversationId) {
@@ -3758,6 +3820,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         let shouldSendMore = false;
 
         try {
+            await this._preparePendingUserMessageHooks(conversation, cancellable);
             const messages = this._drainPendingUserMessages(conversation.id);
 
             if (messages.length === 0)
@@ -3779,11 +3842,37 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         if (shouldSendMore) {
             this._sendQueuedUserMessages(conversation.id).catch((error) => {
-                this._handleQueuedUserMessageError(error);
+                this._handleQueuedUserMessageError(error, conversation.id);
             });
         }
 
         return sentMessages;
+    }
+
+    _schedulePendingConversationSend() {
+        if (this._pendingConversationSendSourceId)
+            return;
+
+        this._pendingConversationSendSourceId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._pendingConversationSendSourceId = 0;
+
+            if (this._activeChatCancellable)
+                return GLib.SOURCE_REMOVE;
+
+            const nextConversationId = [...this._pendingUserMessagesByConversation.entries()]
+                .find(([conversationId, messages]) => (
+                    messages.length > 0
+                    && Boolean(this._conversations.getConversation(conversationId))
+                ))?.[0];
+
+            if (nextConversationId) {
+                this._sendQueuedUserMessages(nextConversationId).catch((error) => {
+                    this._handleQueuedUserMessageError(error, nextConversationId);
+                });
+            }
+
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     async _sendMessage(text, references = []) {
@@ -3862,7 +3951,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         if (shouldSendQueued) {
             this._sendQueuedUserMessages(conversation.id).catch((error) => {
-                this._handleQueuedUserMessageError(error);
+                this._handleQueuedUserMessageError(error, conversation.id);
             });
         }
     }
@@ -5065,7 +5154,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 }
                 assistantView.persist?.();
                 this._refreshConversationList();
-                this._renderActiveConversation();
+                if (this._isActiveConversationId(conversation.id))
+                    this._renderActiveConversation();
                 shouldSendQueued = ownsActiveTurn;
             }
         } catch (error) {
@@ -5100,7 +5190,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         if (shouldSendQueued) {
             this._sendQueuedUserMessages(conversation.id).catch((error) => {
-                this._handleQueuedUserMessageError(error);
+                this._handleQueuedUserMessageError(error, conversation.id);
             });
         }
 
@@ -5197,7 +5287,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 providerId: fallback.provider.id,
                 modelId: fallback.model?.id ?? '',
             });
-            this._syncProviderControls(conversation);
+            if (this._isActiveConversationId(conversation.id))
+                this._syncProviderControls(conversation);
             this._refreshConversationList();
 
             return await this._collectProviderResponse(
@@ -5472,8 +5563,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._scheduleUsageDisplayUpdate(conversation);
         this._scrollToBottom();
 
-        if (this._activeChatCancellable)
+        if (this._isActiveConversationId(conversation.id)
+            && this._isConversationBusy(conversation.id)) {
             this._setComposerBusy(true);
+        }
     }
 
     _parseAgentToolCallForRuntime(responseText, conversation, runtimeMessages) {
@@ -5815,12 +5908,18 @@ class CuscoWindow extends Adw.ApplicationWindow {
             ?? null;
         this._activeTurnId = GLib.uuid_string_random();
         this._activeHookContexts = [];
-        this._setComposerBusy(true);
+        this._setComposerBusy(this._isConversationBusy(
+            this._conversations.activeConversation?.id,
+        ));
+        this._refreshConversationList();
         return cancellable;
     }
 
     _finishActiveTurn(cancellable) {
         this._computerUse.finishTurn(cancellable);
+        const finishedConversationId = this._activeChatCancellable === cancellable
+            ? this._activeTurnConversationId
+            : null;
 
         if (this._activeChatCancellable === cancellable) {
             this._activeChatCancellable = null;
@@ -5829,7 +5928,18 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._activeHookContexts = [];
         }
 
-        this._setComposerBusy(false);
+        this._setComposerBusy(this._isConversationBusy(
+            this._conversations.activeConversation?.id,
+        ));
+        this._refreshConversationList();
+
+        if (finishedConversationId
+            && this._isActiveConversationId(finishedConversationId)
+            && this._conversationStack) {
+            this._renderActiveConversation({ forceRebuild: true });
+        }
+
+        this._schedulePendingConversationSend();
     }
 
     _stopActiveConversation() {
@@ -5846,6 +5956,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _isActiveConversationId(conversationId) {
         return this._conversations.activeConversation?.id === conversationId;
+    }
+
+    _isConversationBusy(conversationId) {
+        return Boolean(
+            conversationId
+            && this._activeChatCancellable
+            && this._activeTurnConversationId === conversationId
+        );
     }
 
     _addMessageIfActiveConversation(conversationId, message) {
@@ -6555,13 +6673,19 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
     }
 
-    _appendSystemError(text) {
-        const conversation = this._conversations.activeConversation;
+    _appendSystemError(text, conversationId = null) {
+        const conversation = conversationId
+            ? this._conversations.getConversation(conversationId)
+            : this._conversations.activeConversation;
 
-        if (conversation)
-            this._conversations.appendMessage(conversation.id, createMessage('system', text));
+        if (conversation) {
+            const message = createMessage('system', text);
+            this._conversations.appendMessage(conversation.id, message);
+            this._addMessageIfActiveConversation(conversation.id, message);
+        } else {
+            this._addMessage(text, 'system');
+        }
 
-        this._addMessage(text, 'system');
         this._updateUsageDisplay(conversation);
     }
 
@@ -7206,10 +7330,41 @@ class CuscoWindow extends Adw.ApplicationWindow {
         box.append(titleRow);
         box.append(subtitle);
 
-        const actions = this._createConversationMenuButton(conversation, hoverTarget ?? rowBox);
+        const activeDot = this._isConversationBusy(conversation.id)
+            ? new Gtk.Box({
+                width_request: 8,
+                height_request: 8,
+                halign: Gtk.Align.CENTER,
+                valign: Gtk.Align.CENTER,
+                can_target: false,
+            })
+            : null;
+        activeDot?.add_css_class('cusco-conversation-active-dot');
+        activeDot?.update_property(
+            [Gtk.AccessibleProperty.LABEL],
+            ['Response in progress'],
+        );
+
+        const actionsOverlay = new Gtk.Overlay({
+            valign: Gtk.Align.CENTER,
+            tooltip_text: activeDot ? 'Response in progress' : null,
+        });
+        const actions = this._createConversationMenuButton(
+            conversation,
+            hoverTarget ?? rowBox,
+            {
+                onVisibilityChanged: (menuVisible) => {
+                    activeDot?.set_visible(!menuVisible);
+                },
+            },
+        );
+        actionsOverlay.set_child(actions);
+
+        if (activeDot)
+            actionsOverlay.add_overlay(activeDot);
 
         rowBox.append(box);
-        rowBox.append(actions);
+        rowBox.append(actionsOverlay);
         rowBox._releaseConversationRow = () => {
             actions._releaseConversationMenu?.();
             rowBox._releaseConversationRow = null;
@@ -7217,7 +7372,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return rowBox;
     }
 
-    _createConversationMenuButton(conversation, hoverTarget) {
+    _createConversationMenuButton(conversation, hoverTarget, options = {}) {
         const menuButton = new Gtk.MenuButton({
             tooltip_text: 'Chat actions',
             valign: Gtk.Align.CENTER,
@@ -7273,6 +7428,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const setMenuVisible = (visible) => {
             menuButton.set_opacity(visible ? 1 : 0);
             menuButton.set_sensitive(visible);
+            options.onVisibilityChanged?.(visible);
         };
         let isHovered = false;
         const syncMenuVisibility = () => setMenuVisible(isHovered || popover.get_visible());
@@ -7290,6 +7446,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         hoverTarget.add_controller(motionController);
         setMenuVisible(false);
+        menuButton._setConversationMenuVisible = setMenuVisible;
         menuButton._releaseConversationMenu = () => {
             motionController.disconnect(enterSignalId);
             motionController.disconnect(leaveSignalId);
@@ -7301,6 +7458,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             popover.set_child(null);
             menuButton.set_popover(null);
+            menuButton._setConversationMenuVisible = null;
             menuButton._releaseConversationMenu = null;
         };
 
@@ -7593,7 +7751,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return null;
 
         const entry = this._conversationViewCache.get(conversation.id);
-        return entry?.fingerprint === this._conversationViewFingerprint(conversation)
+        return entry && (
+            entry.fingerprint === this._conversationViewFingerprint(conversation)
+            || this._isConversationBusy(conversation.id)
+        )
             ? entry
             : null;
     }
@@ -7635,7 +7796,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _trimConversationViewCache() {
-        while (this._conversationViewCache.size > MAX_CACHED_CONVERSATION_VIEWS) {
+        let attemptsRemaining = this._conversationViewCache.size;
+
+        while (this._conversationViewCache.size > MAX_CACHED_CONVERSATION_VIEWS
+            && attemptsRemaining > 0) {
             const oldest = this._conversationViewCache.entries().next().value;
 
             if (!oldest)
@@ -7643,8 +7807,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             const [conversationId, entry] = oldest;
 
-            if (conversationId === this._renderedConversationId) {
+            if (conversationId === this._renderedConversationId
+                || this._isConversationBusy(conversationId)) {
                 this._touchConversationView(entry);
+                attemptsRemaining -= 1;
                 continue;
             }
 
@@ -7765,6 +7931,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 this._closeArtifactWorkspace();
             }
         }
+        this._syncProviderControls(conversation);
+        this._setComposerBusy(this._isConversationBusy(conversation?.id));
         const cachedEntry = options.forceRebuild
             ? null
             : this._getCachedConversationView(conversation);
@@ -7776,7 +7944,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         this._cancelScheduledConversationRender();
         this._captureCurrentConversationView();
-        this._syncProviderControls(conversation);
         this._renderPendingUserMessages(conversation);
 
         if (cachedEntry) {
@@ -7842,7 +8009,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._windowTitle.set_subtitle(`${usage.messages} messages`);
         this._syncChatStatisticsPopover(conversation);
         this._syncComposerUsageChart(usage, conversation);
-        this._syncComposerHint(Boolean(this._activeChatCancellable));
+        this._syncComposerHint(this._isConversationBusy(conversation?.id));
     }
 
     _scheduleUsageDisplayUpdate(conversation) {

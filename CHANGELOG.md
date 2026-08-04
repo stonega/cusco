@@ -10,6 +10,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 
 - Added Fedora COPR packaging for supported Fedora releases and Rawhide on x86_64 and aarch64.
+- Added an active status dot in each working chat's sidebar menu position, yielding to the chat menu on hover.
+
+### Fixed
+
+- Kept each chat's running indicator, elapsed timer, model controls, and queued messages attached to the correct chat when switching or creating a chat during a response.
 
 ## [0.5.32] - 2026-08-03
 

@@ -105,10 +105,75 @@ await windowPrototype._syncCronJobsWithConversations.call(test.harness, { refres
 if (test.calls.refresh !== 1)
     throw new Error('A newly linked cron conversation did not refresh the conversation list');
 
+const runningCancellable = {};
+const runningConversation = { id: 'running-chat' };
+const newConversation = { id: 'new-chat' };
+const runtimeHarness = {
+    _activeChatCancellable: runningCancellable,
+    _activeTurnConversationId: runningConversation.id,
+    _conversations: { activeConversation: newConversation },
+    _isConversationBusy: windowPrototype._isConversationBusy,
+};
+
+if (!runtimeHarness._isConversationBusy(runningConversation.id)
+    || runtimeHarness._isConversationBusy(newConversation.id)
+    || windowPrototype._pendingConversationId.call(runtimeHarness) !== newConversation.id) {
+    throw new Error('Running and queued state was not scoped to its owning conversation');
+}
+
+const runningView = { fingerprint: 'stale-after-stream-start' };
+const cacheHarness = {
+    ...runtimeHarness,
+    _conversationViewCache: new Map([[runningConversation.id, runningView]]),
+    _conversationViewFingerprint: () => 'current-stream-fingerprint',
+};
+
+if (windowPrototype._getCachedConversationView.call(cacheHarness, runningConversation) !== runningView) {
+    throw new Error('A live conversation discarded its Working row and elapsed timer view');
+}
+
+cacheHarness._activeChatCancellable = null;
+
+if (windowPrototype._getCachedConversationView.call(cacheHarness, runningConversation) !== null)
+    throw new Error('A completed conversation reused a genuinely stale cached view');
+
+const busyUiStates = [];
+const renderHarness = {
+    ...runtimeHarness,
+    _migrateWelcomeConversation() {},
+    _migrateLegacyArtifacts() {},
+    _artifactWorkspace: null,
+    _syncArtifactWorkspaceButton() {},
+    _artifactSplitView: null,
+    _syncProviderControls() {},
+    _setComposerBusy(isBusy) {
+        busyUiStates.push(isBusy);
+    },
+    _getCachedConversationView: () => ({ conversationId: newConversation.id }),
+    _cancelScheduledConversationRender() {},
+    _captureCurrentConversationView() {},
+    _renderPendingUserMessages() {},
+    _syncEmptyConversationState() {},
+    _touchConversationView() {},
+    _activateConversationView() {},
+    _updateUsageDisplay() {},
+    _scrollToBottom() {},
+    _isConversationBusy: windowPrototype._isConversationBusy,
+};
+
+windowPrototype._renderActiveConversation.call(renderHarness);
+
+if (busyUiStates.at(-1) !== false)
+    throw new Error('A new chat inherited disabled model and provider controls from a running chat');
+
 if (Gtk.init_check()) {
+    let busyConversationId = '';
     const widgetHarness = {
         _isCronConversation() {
             return false;
+        },
+        _isConversationBusy(conversationId) {
+            return conversationId === busyConversationId;
         },
         _renameConversation() {},
         _archiveConversation() {},
@@ -132,7 +197,8 @@ if (Gtk.init_check()) {
         conversationType: 'chat',
         cronJobId: '',
     });
-    const menuButton = row.get_last_child();
+    const actionsOverlay = row.get_last_child();
+    const menuButton = actionsOverlay.get_child();
     const container = new Gtk.Box();
 
     container.append(row);
@@ -147,6 +213,40 @@ if (Gtk.init_check()) {
 
     if (menuButton.get_popover())
         throw new Error('Conversation list row cleanup retained its action popover');
+
+    busyConversationId = 'working-conversation';
+    const workingRow = windowPrototype._createConversationRow.call(widgetHarness, {
+        id: busyConversationId,
+        title: 'Working conversation',
+        createdAt: '2026-08-04T00:00:00.000Z',
+        updatedAt: '2026-08-04T00:00:00.000Z',
+        conversationType: 'chat',
+        cronJobId: '',
+    });
+    const workingActionsOverlay = workingRow.get_last_child();
+    const workingMenuButton = workingActionsOverlay.get_child();
+    const activeDot = workingActionsOverlay.get_last_child();
+
+    if (activeDot === workingMenuButton
+        || !activeDot.has_css_class('cusco-conversation-active-dot')
+        || !activeDot.get_visible()
+        || workingMenuButton.get_opacity() !== 0) {
+        throw new Error('Working chat did not show an active dot in the hidden menu position');
+    }
+
+    workingMenuButton._setConversationMenuVisible(true);
+
+    if (activeDot.get_visible() || workingMenuButton.get_opacity() !== 1)
+        throw new Error('Hovering a working chat did not replace its active dot with the menu button');
+
+    workingMenuButton._setConversationMenuVisible(false);
+
+    if (!activeDot.get_visible() || workingMenuButton.get_opacity() !== 0)
+        throw new Error('Leaving a working chat did not restore its active dot');
+
+    const workingContainer = new Gtk.Box();
+    workingContainer.append(workingRow);
+    windowPrototype._clearConversationListRow.call(widgetHarness, workingContainer);
 }
 
 print('Cusco window background sync smoke passed');
