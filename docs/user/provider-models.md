@@ -30,7 +30,7 @@ support keep the chat picker disabled.
 | OpenAI | `gpt-5.6-sol` | `gpt-5.5`, `gpt-5.4-mini` | `Off`, `Auto`, `Low`, `Medium`, `High` |
 | OpenAI | `gpt-5.6-sol` | `gpt-4.1` | None |
 | Anthropic | `claude-sonnet-5` | `claude-fable-5` | `Low`, `Medium`, `High`, `X-High`, `Max` |
-| Anthropic | `claude-sonnet-5` | `claude-opus-4-8`, `claude-sonnet-5` | `Off`, `Low`, `Medium`, `High`, `X-High`, `Max` |
+| Anthropic | `claude-sonnet-5` | `claude-opus-5`, `claude-sonnet-5` | `Off`, `Low`, `Medium`, `High`, `X-High`, `Max` |
 | Anthropic | `claude-sonnet-5` | `claude-haiku-4-5` | `Off`, `Auto`, `Low`, `Medium`, `High` |
 | Google Gemini | `gemini-3.6-flash` | `gemini-3.6-flash`, `gemini-3.5-flash-lite` | `Minimal`, `Auto`, `Low`, `Medium`, `High` |
 | Google Gemini | `gemini-3.6-flash` | `gemini-3.1-pro-preview` | `Auto`, `Low`, `Medium`, `High` |
@@ -67,7 +67,7 @@ from the built-in model metadata.
 | OpenAI | `gpt-5.4-mini` | 400K tokens |
 | OpenAI | `gpt-4.1` | 1M tokens |
 | Anthropic | `claude-fable-5` | 1M tokens |
-| Anthropic | `claude-opus-4-8` | 1M tokens |
+| Anthropic | `claude-opus-5` | 1M tokens |
 | Anthropic | `claude-sonnet-5` | 1M tokens |
 | Anthropic | `claude-haiku-4-5` | 200K tokens |
 | Google Gemini | `gemini-3.6-flash` | 1,048,576 tokens |
@@ -121,9 +121,9 @@ models that use its OpenAI-compatible image generation endpoint.
   accessible URLs per request; private, local, authenticated, and paywalled
   URLs are not available to the provider tool.
 - Anthropic is intentionally limited to `claude-fable-5`,
-  `claude-opus-4-8`, `claude-sonnet-5`, and
+  `claude-opus-5`, `claude-sonnet-5`, and
   `claude-haiku-4-5`. Fable 5 uses always-on adaptive thinking and
-  cannot expose `Off`; Opus 4.8 and Sonnet 5 can disable adaptive thinking.
+  cannot expose `Off`; Opus 5 and Sonnet 5 can disable adaptive thinking.
   Their explicit effort levels are sent in `output_config`, default to `High`,
   and support `X-High` and `Max`. Haiku 4.5 continues to use manual
   extended-thinking budgets and does not support those two higher efforts.
@@ -159,9 +159,9 @@ models that use its OpenAI-compatible image generation endpoint.
 
 | Provider | Model | Details | Thinking levels |
 |---|---|---|---|
-| Anthropic | `claude-fable-5` | Anthropic's most capable model for long-running agents and demanding reasoning. Context 1M. | `Low`, `Medium`, `High`, `X-High`, `Max` |
-| Anthropic | `claude-opus-4-8` | Advanced model for complex agentic coding and enterprise work. Context 1M. | `Off`, `Low`, `Medium`, `High`, `X-High`, `Max` |
-| Anthropic | `claude-sonnet-5` | Best balance of speed and intelligence for production workloads. Context 1M. | `Off`, `Low`, `Medium`, `High`, `X-High`, `Max` |
+| Anthropic | `claude-fable-5` | Next-generation intelligence for long-running agents. Context 1M. | `Low`, `Medium`, `High`, `X-High`, `Max` |
+| Anthropic | `claude-opus-5` | For complex agentic coding and enterprise work. Context 1M. | `Off`, `Low`, `Medium`, `High`, `X-High`, `Max` |
+| Anthropic | `claude-sonnet-5` | The best combination of speed and intelligence. Context 1M. | `Off`, `Low`, `Medium`, `High`, `X-High`, `Max` |
 | Anthropic | `claude-haiku-4-5` | Fastest Claude model with near-frontier intelligence. Context 200K. | `Off`, `Auto`, `Low`, `Medium`, `High` |
 | Google Gemini | `gemini-3.6-flash` | Stable Gemini model balancing speed and intelligence for agentic and multimodal tasks. | `Minimal`, `Auto`, `Low`, `Medium`, `High` |
 | Google Gemini | `gemini-3.5-flash-lite` | Low-latency, cost-effective multimodal model for high-throughput agentic workflows and document parsing. | `Minimal`, `Auto`, `Low`, `Medium`, `High` |

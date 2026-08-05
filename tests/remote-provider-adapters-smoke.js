@@ -477,7 +477,7 @@ assertEqual(anthropicThinkingBody.output_config.effort, 'low', 'Anthropic output
 assertEqual(hasOwn(anthropicThinkingBody.thinking, 'effort'), false, 'Anthropic effort is not nested in thinking');
 assertEqual(anthropicThinkingBody.thinking.display, 'summarized', 'Anthropic thinking display');
 assertEqual(anthropicThinkingBody.max_tokens, 12288, 'Anthropic custom max tokens');
-const anthropicXHighThinkingBody = buildAnthropicMessagesBody(messages, 'claude-opus-4-8', {
+const anthropicXHighThinkingBody = buildAnthropicMessagesBody(messages, 'claude-opus-5', {
     model: {
         thinking: {
             api: 'anthropic-adaptive',
@@ -487,8 +487,8 @@ const anthropicXHighThinkingBody = buildAnthropicMessagesBody(messages, 'claude-
     },
     thinkingLevel: 'xhigh',
 });
-assertEqual(anthropicXHighThinkingBody.thinking.type, 'adaptive', 'Claude Opus 4.8 adaptive thinking');
-assertEqual(anthropicXHighThinkingBody.output_config.effort, 'xhigh', 'Claude Opus 4.8 xhigh effort');
+assertEqual(anthropicXHighThinkingBody.thinking.type, 'adaptive', 'Claude Opus 5 adaptive thinking');
+assertEqual(anthropicXHighThinkingBody.output_config.effort, 'xhigh', 'Claude Opus 5 xhigh effort');
 const anthropicThinkingOffBody = buildAnthropicMessagesBody(messages, 'claude-sonnet-5', {
     model: {
         thinking: {

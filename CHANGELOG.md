@@ -11,6 +11,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Added automatic Fedora COPR submission and build verification for tagged releases.
 
+### Changed
+
+- Updated Anthropic's built-in model catalog to Claude Fable 5, Opus 5, Sonnet 5, and Haiku 4.5.
+
 ### Fixed
 
 - Kept disabled provider and model selectors opaque while a chat response is running.

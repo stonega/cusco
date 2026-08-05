@@ -389,7 +389,7 @@ const PROVIDER_MODEL_ID_ALIASES = {
 const PROVIDER_SUPPORTED_MODEL_IDS = {
     anthropic: new Set([
         'claude-fable-5',
-        'claude-opus-4-8',
+        'claude-opus-5',
         'claude-sonnet-5',
         'claude-haiku-4-5',
     ]),
@@ -556,21 +556,21 @@ const ANTHROPIC_MODEL_METADATA = {
     'claude-fable-5': {
         id: 'claude-fable-5',
         name: 'Claude Fable 5',
-        description: 'Anthropic\'s most capable model for long-running agents and demanding reasoning.',
+        description: 'Next-generation intelligence for long-running agents.',
         contextWindowTokens: 1000000,
         thinking: ANTHROPIC_ALWAYS_ON_ADAPTIVE_THINKING,
     },
-    'claude-opus-4-8': {
-        id: 'claude-opus-4-8',
-        name: 'Claude Opus 4.8',
-        description: 'Advanced model for complex agentic coding and enterprise work.',
+    'claude-opus-5': {
+        id: 'claude-opus-5',
+        name: 'Claude Opus 5',
+        description: 'For complex agentic coding and enterprise work.',
         contextWindowTokens: 1000000,
         thinking: ANTHROPIC_ADAPTIVE_THINKING,
     },
     'claude-sonnet-5': {
         id: 'claude-sonnet-5',
         name: 'Claude Sonnet 5',
-        description: 'Best balance of speed and intelligence for production workloads.',
+        description: 'The best combination of speed and intelligence.',
         contextWindowTokens: 1000000,
         thinking: ANTHROPIC_ADAPTIVE_THINKING,
     },
@@ -719,7 +719,7 @@ const PROVIDER_MODEL_CONTEXT_WINDOW_TOKENS = {
     },
     anthropic: {
         'claude-fable-5': 1000000,
-        'claude-opus-4-8': 1000000,
+        'claude-opus-5': 1000000,
         'claude-sonnet-5': 1000000,
         'claude-haiku-4-5': 200000,
     },
@@ -982,7 +982,7 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         defaultModelId: 'claude-sonnet-5',
         models: [
             { ...ANTHROPIC_MODEL_METADATA['claude-fable-5'] },
-            { ...ANTHROPIC_MODEL_METADATA['claude-opus-4-8'] },
+            { ...ANTHROPIC_MODEL_METADATA['claude-opus-5'] },
             { ...ANTHROPIC_MODEL_METADATA['claude-sonnet-5'] },
             { ...ANTHROPIC_MODEL_METADATA['claude-haiku-4-5'] },
         ],

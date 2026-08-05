@@ -177,7 +177,7 @@ if (defaultStore.resolve('anthropic', 'claude-haiku-4-5-20251001').model.id !== 
 const anthropicProvider = defaultStore.getProvider('anthropic');
 const expectedAnthropicModelIds = [
     'claude-fable-5',
-    'claude-opus-4-8',
+    'claude-opus-5',
     'claude-sonnet-5',
     'claude-haiku-4-5',
 ];
@@ -191,7 +191,7 @@ if (defaultStore.getDefaultModel('anthropic').id !== 'claude-sonnet-5')
 if (defaultStore.getThinkingLevels('anthropic', 'claude-fable-5').join(',') !== 'low,medium,high,xhigh,max')
     throw new Error('Claude Fable 5 should expose always-on adaptive thinking efforts');
 
-for (const modelId of ['claude-opus-4-8', 'claude-sonnet-5']) {
+for (const modelId of ['claude-opus-5', 'claude-sonnet-5']) {
     if (defaultStore.getThinkingLevels('anthropic', modelId).join(',') !== 'off,low,medium,high,xhigh,max')
         throw new Error(`${modelId} should expose adaptive thinking and every supported effort`);
 
