@@ -9088,14 +9088,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 return;
 
             workingRow = this._createAgentWorkingRow(startedAt);
-            wrapper.append(workingRow);
+            bubble.append(workingRow);
         };
         const finishWorking = () => {
             if (!workingRow)
                 return;
 
             workingRow.stop?.();
-            wrapper.remove(workingRow);
+            bubble.remove(workingRow);
             workingRow = null;
         };
 

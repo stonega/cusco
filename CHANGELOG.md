@@ -14,6 +14,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Changed
 
 - Updated Anthropic's built-in model catalog to Claude Fable 5, Opus 5, Sonnet 5, and Haiku 4.5.
+- Moved the live agent working timer inside the assistant message surface.
 
 ### Fixed
 
