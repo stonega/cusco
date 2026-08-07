@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.34] - 2026-08-07
+
 ### Added
 
 - Added automatic Fedora COPR submission and build verification for tagged releases.
@@ -252,7 +254,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.33...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.34...HEAD
+[0.5.34]: https://github.com/stonega/cusco/compare/v0.5.33...v0.5.34
 [0.5.33]: https://github.com/stonega/cusco/compare/v0.5.32...v0.5.33
 [0.5.32]: https://github.com/stonega/cusco/compare/v0.5.31...v0.5.32
 [0.5.31]: https://github.com/stonega/cusco/compare/v0.5.30...v0.5.31
