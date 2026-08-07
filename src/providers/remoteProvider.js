@@ -206,7 +206,18 @@ function imageDataUrl(image) {
     return `data:${image.mimeType};base64,${image.data}`;
 }
 
-function providerMessages(messages) {
+function assistantHasProviderPayload(message, options = {}) {
+    if (messageContent(message) || messageToolCalls(message).length > 0)
+        return true;
+
+    if (options.includeImages !== false && imageAttachments(message).length > 0)
+        return true;
+
+    return options.includeGeminiProviderParts === true
+        && messageGeminiProviderParts(message).length > 0;
+}
+
+function providerMessages(messages, options = {}) {
     let hasUserMessage = false;
 
     return messages.filter((message) => {
@@ -224,7 +235,9 @@ function providerMessages(messages) {
         if (message.role === 'tool')
             return hasUserMessage;
 
-        return hasUserMessage && message.role === 'assistant';
+        return hasUserMessage
+            && message.role === 'assistant'
+            && assistantHasProviderPayload(message, options);
     });
 }
 
@@ -1325,7 +1338,7 @@ export function openAiCompatibleMessages(messages, options = {}) {
     const includeImages = providerSupportsImageAttachments(options.provider ?? options.config);
     const output = [];
 
-    for (const message of providerMessages(messages)) {
+    for (const message of providerMessages(messages, { includeImages })) {
         const toolCalls = messageToolCalls(message);
 
         if (message.role === 'assistant' && toolCalls.length > 0) {
@@ -1425,7 +1438,9 @@ export function anthropicPayloadMessages(messages) {
 }
 
 export function geminiPayload(messages) {
-    const normalizedMessages = providerMessages(messages);
+    const normalizedMessages = providerMessages(messages, {
+        includeGeminiProviderParts: true,
+    });
     const systemMessages = normalizedMessages
         .filter((message) => message.role === 'system')
         .map(messageContent)

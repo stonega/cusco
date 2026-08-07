@@ -18,6 +18,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Stopped empty assistant placeholders from tool-use history being sent to providers, preventing strict APIs such as Kimi from rejecting continued chats.
 - Kept disabled provider and model selectors opaque while a chat response is running.
 
 ## [0.5.33] - 2026-08-04

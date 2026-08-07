@@ -146,6 +146,28 @@ const parallelNativeToolMessages = [
         toolName: 'computer_list',
     },
 ];
+const emptyAssistantHistoryMessages = [
+    createMessage('user', 'Use the system calculator.'),
+    createMessage('assistant', '', {
+        usage: {
+            inputTokens: 12,
+            outputTokens: 0,
+            totalTokens: 12,
+        },
+    }),
+    createMessage('system', 'Calculator result\n\n12 * 12 = 144'),
+    createMessage('assistant', '', {
+        metadata: {
+            geminiProviderParts: [{
+                functionCall: {
+                    name: 'computer_step',
+                    args: { actions: [{ action: 'keypress', keys: ['1'] }] },
+                },
+            }],
+        },
+    }),
+    createMessage('user', 'Try again.'),
+];
 
 const openAiBody = buildOpenAiResponsesBody(messages, 'gpt-test');
 assertEqual(openAiBody.model, 'gpt-test', 'OpenAI model');
@@ -279,6 +301,9 @@ const chatBody = buildOpenAiCompatibleChatBody(messages, 'chat-test');
 assertEqual(chatBody.messages[0].role, 'system', 'OpenAI-compatible system role');
 assertEqual(chatBody.max_tokens, 8192, 'OpenAI-compatible default max tokens');
 assertEqual(chatBody.stream, false, 'OpenAI-compatible stream flag');
+const strictChatHistoryBody = buildOpenAiCompatibleChatBody(emptyAssistantHistoryMessages, 'kimi-test');
+assertEqual(strictChatHistoryBody.messages.length, 3, 'OpenAI-compatible omitted empty assistant history');
+assertEqual(strictChatHistoryBody.messages.some((message) => message.role === 'assistant'), false, 'OpenAI-compatible has no empty assistant messages');
 const chatImageBody = buildOpenAiCompatibleChatBody(imageMessages, 'chat-test');
 assertEqual(chatImageBody.messages[0].content[0].type, 'text', 'OpenAI-compatible image prompt text part');
 assertEqual(chatImageBody.messages[0].content[1].type, 'image_url', 'OpenAI-compatible image part');
