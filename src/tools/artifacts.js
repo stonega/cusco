@@ -179,22 +179,24 @@ function artifactSummary(artifact, revision) {
 }
 
 export function createArtifactTools(artifactManager, options = {}) {
-    const currentConversationId = () => String(options.getConversationId?.() ?? '').trim();
-    const requiredConversationId = () => {
-        const conversationId = currentConversationId();
+    const currentConversationId = (runOptions = {}) => String(
+        runOptions.conversationId ?? options.getConversationId?.() ?? '',
+    ).trim();
+    const requiredConversationId = (runOptions = {}) => {
+        const conversationId = currentConversationId(runOptions);
 
         if (!conversationId)
             throw new Error('Artifact tools require an active conversation.');
 
         return conversationId;
     };
-    const requireScopedArtifact = (artifactId) => {
+    const requireScopedArtifact = (artifactId, runOptions = {}) => {
         const artifact = artifactManager.getArtifact(artifactId);
 
         if (!artifact)
             throw new Error(`Artifact does not exist: ${artifactId}`);
 
-        if (artifact.originConversationId !== requiredConversationId())
+        if (artifact.originConversationId !== requiredConversationId(runOptions))
             throw new Error(`Artifact is not available in the current conversation: ${artifactId}`);
 
         return artifact;
@@ -254,7 +256,7 @@ export function createArtifactTools(artifactManager, options = {}) {
             },
             permissionPolicy: TOOL_PERMISSION_ALLOW,
             concurrencySafe: false,
-            run(input) {
+            run(input, runOptions = {}) {
                 const spec = decodeArtifactInput(parseJsonInput(input, 'Create artifact'));
                 validateChartArtifactInput(spec);
                 const created = artifactManager.createArtifact({
@@ -262,7 +264,7 @@ export function createArtifactTools(artifactManager, options = {}) {
                     capabilities: safeCapabilities(spec.capabilities),
                     generatedBy: 'assistant',
                 }, {
-                    originConversationId: requiredConversationId(),
+                    originConversationId: requiredConversationId(runOptions),
                     createdBy: 'assistant',
                 });
                 const summary = artifactSummary(created.artifact, created.revision);
@@ -310,9 +312,9 @@ export function createArtifactTools(artifactManager, options = {}) {
             },
             permissionPolicy: TOOL_PERMISSION_ALLOW,
             concurrencySafe: false,
-            run(input) {
+            run(input, runOptions = {}) {
                 const spec = decodeArtifactInput(parseJsonInput(input, 'Update artifact'));
-                requireScopedArtifact(spec.artifactId);
+                requireScopedArtifact(spec.artifactId, runOptions);
                 const updated = artifactManager.updateArtifact(spec.artifactId, spec, {
                     createdBy: 'assistant',
                 });
@@ -341,9 +343,9 @@ export function createArtifactTools(artifactManager, options = {}) {
             },
             permissionPolicy: TOOL_PERMISSION_ALLOW,
             concurrencySafe: true,
-            run(input) {
+            run(input, runOptions = {}) {
                 const spec = parseJsonInput(input, 'Read artifact');
-                requireScopedArtifact(spec.artifactId);
+                requireScopedArtifact(spec.artifactId, runOptions);
                 const resolved = artifactManager.getArtifactRevision(spec.artifactId, spec.revisionId);
 
                 if (!resolved)
@@ -386,10 +388,10 @@ export function createArtifactTools(artifactManager, options = {}) {
             },
             permissionPolicy: TOOL_PERMISSION_ALLOW,
             concurrencySafe: true,
-            run(input) {
+            run(input, runOptions = {}) {
                 const spec = parseJsonInput(input || '{}', 'List artifacts');
                 const artifacts = artifactManager.listArtifacts({
-                    conversationId: requiredConversationId(),
+                    conversationId: requiredConversationId(runOptions),
                     includeArchived: Boolean(spec.includeArchived),
                 });
                 return {
@@ -421,18 +423,23 @@ export function createArtifactTools(artifactManager, options = {}) {
             },
             permissionPolicy: TOOL_PERMISSION_ALLOW,
             concurrencySafe: false,
-            run(input) {
+            run(input, runOptions = {}) {
                 const spec = parseJsonInput(input, 'Present artifact');
-                requireScopedArtifact(spec.artifactId);
+                const artifact = requireScopedArtifact(spec.artifactId, runOptions);
                 const resolved = artifactManager.getArtifactRevision(spec.artifactId, spec.revisionId);
 
                 if (!resolved)
                     throw new Error(`Artifact revision does not exist: ${spec.artifactId}`);
 
                 const reference = artifactReferenceFor(resolved.artifact, resolved.revision.id);
-                options.onPresent?.(reference);
+                const presentedImmediately = options.onPresent?.(reference, {
+                    conversationId: artifact.originConversationId,
+                }) !== false;
                 return {
-                    output: `Presented artifact ${resolved.artifact.title}.`,
+                    output: presentedImmediately
+                        ? `Presented artifact ${resolved.artifact.title}.`
+                        : `Queued artifact ${resolved.artifact.title} for presentation when its chat is opened.`,
+                    presented: presentedImmediately,
                     artifacts: [reference],
                 };
             },

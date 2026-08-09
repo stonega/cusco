@@ -1564,12 +1564,34 @@ if (recoveryStep.verification.coordinateMissCount !== 1
     throw new Error('A region observation did not unlock a safer coordinate retry');
 }
 if (!computerUse.active
+    || !computerUse.isTurnActive(turnCancellable)
+    || computerUse.isTurnActive(new Gio.Cancellable())
     || activeStates.length !== balancedActiveStateCount + 1
     || activeStates.at(-1) !== true) {
     throw new Error(`Computer-use indicator did not stay active for the turn: ${activeStates.join(',')}`);
 }
-if (!computerUse.finishTurn(turnCancellable) || computerUse.active)
+const competingTurnCancellable = new Gio.Cancellable();
+let competingTurnRejected = false;
+
+try {
+    await computerUse.act(
+        { action: 'keypress', windowId: '42', keys: ['Tab'] },
+        { cancellable: competingTurnCancellable },
+    );
+} catch (error) {
+    competingTurnRejected = String(error.userMessage ?? error.message).includes('another chat');
+}
+
+if (!competingTurnRejected
+    || !computerUse.isTurnActive(turnCancellable)
+    || computerUse.isTurnActive(competingTurnCancellable)) {
+    throw new Error('A second chat replaced the active computer-use turn owner');
+}
+if (!computerUse.finishTurn(turnCancellable)
+    || computerUse.active
+    || computerUse.isTurnActive(turnCancellable)) {
     throw new Error('Computer-use turn did not finish cleanly');
+}
 if (activeStates.length !== balancedActiveStateCount + 2 || activeStates.at(-1) !== false)
     throw new Error(`Computer-use turn state did not balance: ${activeStates.join(',')}`);
 assertBalancedStateTransitions(activeStates, 'Computer-use turn state');

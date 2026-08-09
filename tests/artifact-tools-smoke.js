@@ -28,6 +28,7 @@ const tools = createArtifactTools(manager, {
     getConversationId: () => 'conversation-1',
     onPresent: (reference) => {
         presentedReference = reference;
+        return false;
     },
 });
 const createTool = toolByName(tools, 'artifact_create');
@@ -49,6 +50,18 @@ assert(created, 'Create tool did not persist an artifact');
 assert(created.artifact.originConversationId === 'conversation-1', 'Create tool lost the conversation owner');
 assert(created.artifact.capabilities.includes('scripts'), 'Create tool lost the scripts capability');
 assert(!created.artifact.capabilities.includes('network'), 'Create tool granted network access');
+
+const concurrentCreateResult = createTool.run(JSON.stringify({
+    title: 'Concurrent chat artifact',
+    kind: 'document',
+    content: 'owned by the second chat',
+}), { conversationId: 'conversation-2' });
+const concurrentCreated = manager.resolveReference(concurrentCreateResult.artifacts[0]);
+
+assert(
+    concurrentCreated?.artifact.originConversationId === 'conversation-2',
+    'Concurrent artifact tool execution used another chat as its owner',
+);
 
 const updateResult = toolByName(tools, 'artifact_update').run(JSON.stringify({
     artifactId: reference.artifactId,
@@ -157,10 +170,14 @@ try {
 
 assert(rejectedCrossConversationRead, 'Artifact read crossed the conversation boundary');
 
-toolByName(tools, 'artifact_present').run(JSON.stringify({
+const presentResult = toolByName(tools, 'artifact_present').run(JSON.stringify({
     artifactId: updatedReference.artifactId,
     revisionId: updatedReference.revisionId,
 }));
 assert(presentedReference?.revisionId === updatedReference.revisionId, 'Present tool did not emit its reference');
+assert(
+    presentResult.presented === false && presentResult.output.startsWith('Queued artifact'),
+    'Present tool reported success after the UI deferred a background artifact',
+);
 
 print('Cusco artifact tools smoke passed');

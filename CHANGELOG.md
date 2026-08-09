@@ -10,6 +10,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 
 - Passed exact local file-attachment paths to Agent tools so models no longer guess incorrect locations for PDFs and other files.
+- Let new chats send immediately while other chats keep responding without sharing attachments, questions, tools, or UI state, and limited queued-message previews to one ellipsized line.
 
 ## [0.5.34] - 2026-08-07
 

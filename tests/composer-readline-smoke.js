@@ -226,7 +226,7 @@ const historyConversation = {
     ],
 };
 const historyWindow = {
-    _activeQuestionSession: null,
+    _activeQuestionSessionsByConversation: new Map(),
     _composerBuffer: historyBuffer,
     _composerHistory: null,
     _composerReferences: [],
@@ -245,6 +245,7 @@ const historyWindow = {
         historyBuffer.set_text(text, -1);
         historyBuffer.place_cursor(historyBuffer.get_end_iter());
     },
+    _activeQuestionSessionForConversation: CuscoWindow.prototype._activeQuestionSessionForConversation,
     _handleComposerHistoryKey: CuscoWindow.prototype._handleComposerHistoryKey,
     _navigateComposerHistory: CuscoWindow.prototype._navigateComposerHistory,
 };

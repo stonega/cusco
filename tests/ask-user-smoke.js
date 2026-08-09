@@ -48,6 +48,7 @@ const tool = manager.getTool('ask_user');
 
 if (tool.permissionPolicy !== 'allow'
     || tool.requiresPermission
+    || !tool.concurrencySafe
     || tool.inputSchema?.properties?.questions?.maxItems < 2) {
     throw new Error('Ask User tool metadata is invalid');
 }
@@ -68,14 +69,24 @@ if (formatAskUserAnswers(null) !== '{\n  "answers": null\n}')
 const restoredDrafts = [];
 const questionModeStates = [];
 const questionHarness = {
-    _activeQuestionSession: null,
+    _activeQuestionSessionsByConversation: new Map(),
+    _composerDraftsByConversation: new Map(),
+    _pendingAttachments: [],
+    _conversations: { activeConversation: { id: 'conversation-1' } },
     _composerReferences: [],
     _getComposerText: () => 'preserved draft',
     _getComposerReferences: () => [{ kind: 'file', value: '/tmp/note.txt' }],
     _setQuestionComposerMode: (active) => questionModeStates.push(active),
     _setComposerText: (text, options = {}) => restoredDrafts.push({ text, options }),
+    _updateAttachmentLabel: () => {},
     _showActiveAgentQuestion: () => {},
     focusComposer: () => {},
+    _activeQuestionSessionForConversation: CuscoWindow.prototype._activeQuestionSessionForConversation,
+    _composerDraftSnapshot: CuscoWindow.prototype._composerDraftSnapshot,
+    _applyComposerDraft: CuscoWindow.prototype._applyComposerDraft,
+    _activateAgentQuestionSessionUi: CuscoWindow.prototype._activateAgentQuestionSessionUi,
+    _deactivateAgentQuestionSessionUi: CuscoWindow.prototype._deactivateAgentQuestionSessionUi,
+    _syncAgentQuestionComposerMode: CuscoWindow.prototype._syncAgentQuestionComposerMode,
     _requestAgentQuestions: CuscoWindow.prototype._requestAgentQuestions,
     _submitAgentQuestionAnswer: CuscoWindow.prototype._submitAgentQuestionAnswer,
     _finishAgentQuestions: CuscoWindow.prototype._finishAgentQuestions,
@@ -84,7 +95,7 @@ const answerPromise = questionHarness._requestAgentQuestions(normalized);
 
 questionHarness._submitAgentQuestionAnswer('Markdown');
 
-if (questionHarness._activeQuestionSession?.index !== 1)
+if (questionHarness._activeQuestionSessionForConversation('conversation-1')?.index !== 1)
     throw new Error('Ask User did not advance to the next question');
 
 questionHarness._submitAgentQuestionAnswer('Current conversation');
@@ -110,17 +121,54 @@ const cancellablePromise = questionHarness._requestAgentQuestions(
     { cancellable },
 );
 
-if (!questionHarness._activeQuestionSession || questionModeStates.at(-1) !== true)
+if (!questionHarness._activeQuestionSessionForConversation('conversation-1')
+    || questionModeStates.at(-1) !== true) {
     throw new Error('Ask User did not enter composer mode with a Gio.Cancellable');
+}
 
 cancellable.cancel();
 const cancelled = await cancellablePromise;
 
 if (cancelled.answers !== null
     || !cancelled.cancelled
-    || questionHarness._activeQuestionSession
+    || questionHarness._activeQuestionSessionForConversation('conversation-1')
     || questionModeStates.at(-1) !== false) {
     throw new Error('Ask User did not leave composer mode after Gio.Cancellable cancellation');
 }
+
+questionHarness._conversations.activeConversation = { id: 'conversation-1' };
+const foregroundQuestionPromise = questionHarness._requestAgentQuestions(
+    normalized.slice(0, 1),
+    { conversationId: 'conversation-1' },
+);
+const backgroundQuestionPromise = questionHarness._requestAgentQuestions(
+    normalized.slice(0, 1),
+    { conversationId: 'conversation-2' },
+);
+
+if (questionHarness._activeQuestionSessionsByConversation.size !== 2
+    || questionHarness._activeQuestionSessionForConversation('conversation-2')?.uiActive) {
+    throw new Error('A background chat replaced the active chat composer with its question');
+}
+
+questionHarness._submitAgentQuestionAnswer('Markdown');
+const foregroundAnswers = await foregroundQuestionPromise;
+
+if (foregroundAnswers.answers?.format !== 'Markdown')
+    throw new Error('The foreground Ask User response lost its conversation owner');
+
+questionHarness._conversations.activeConversation = { id: 'conversation-2' };
+questionHarness._syncAgentQuestionComposerMode();
+
+if (!questionHarness._activeQuestionSessionForConversation('conversation-2')?.uiActive
+    || questionModeStates.at(-1) !== true) {
+    throw new Error('Selecting a background chat did not reveal its pending question');
+}
+
+questionHarness._submitAgentQuestionAnswer('Markdown');
+const backgroundAnswers = await backgroundQuestionPromise;
+
+if (backgroundAnswers.answers?.format !== 'Markdown')
+    throw new Error('Background chat question did not remain scoped to its conversation');
 
 print('Cusco Ask User smoke passed');

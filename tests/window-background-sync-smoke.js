@@ -1,3 +1,5 @@
+import GLib from 'gi://GLib?version=2.0';
+import Gio from 'gi://Gio?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
 
 import { CuscoWindow } from '../src/window.js';
@@ -109,8 +111,14 @@ const runningCancellable = {};
 const runningConversation = { id: 'running-chat' };
 const newConversation = { id: 'new-chat' };
 const runtimeHarness = {
-    _activeChatCancellable: runningCancellable,
-    _activeTurnConversationId: runningConversation.id,
+    _activeTurnsByConversation: new Map([[
+        runningConversation.id,
+        {
+            cancellable: runningCancellable,
+            turnId: 'running-turn',
+            hookContexts: [],
+        },
+    ]]),
     _conversations: { activeConversation: newConversation },
     _isConversationBusy: windowPrototype._isConversationBusy,
 };
@@ -120,6 +128,63 @@ if (!runtimeHarness._isConversationBusy(runningConversation.id)
     || windowPrototype._pendingConversationId.call(runtimeHarness) !== newConversation.id) {
     throw new Error('Running and queued state was not scoped to its owning conversation');
 }
+
+const firstTurnCancellable = {};
+const secondTurnCancellable = {};
+const concurrentTurnHarness = {
+    _activeTurnsByConversation: new Map(),
+    _conversations: { activeConversation: newConversation },
+    _setComposerBusy() {},
+    _refreshConversationList() {},
+    _isConversationBusy: windowPrototype._isConversationBusy,
+};
+
+if (windowPrototype._beginActiveTurn.call(
+    concurrentTurnHarness,
+    runningConversation.id,
+    firstTurnCancellable,
+) !== firstTurnCancellable
+    || windowPrototype._beginActiveTurn.call(
+        concurrentTurnHarness,
+        newConversation.id,
+        secondTurnCancellable,
+    ) !== secondTurnCancellable
+    || !concurrentTurnHarness._isConversationBusy(runningConversation.id)
+    || !concurrentTurnHarness._isConversationBusy(newConversation.id)) {
+    throw new Error('A running response prevented a new chat from sending immediately');
+}
+
+const scheduledConversationIds = [];
+const pendingScheduleHarness = {
+    _pendingConversationSendSourceId: 0,
+    _pendingUserMessagesByConversation: new Map([
+        ['queued-chat-1', [{}]],
+        ['queued-chat-2', [{}]],
+    ]),
+    _conversations: {
+        getConversation(conversationId) {
+            return { id: conversationId };
+        },
+    },
+    _isConversationBusy() {
+        return false;
+    },
+    _sendQueuedUserMessages(conversationId) {
+        scheduledConversationIds.push(conversationId);
+        return Promise.resolve(true);
+    },
+    _handleQueuedUserMessageError() {},
+};
+windowPrototype._schedulePendingConversationSend.call(pendingScheduleHarness);
+await new Promise((resolve) => {
+    GLib.timeout_add(GLib.PRIORITY_LOW, 0, () => {
+        resolve();
+        return GLib.SOURCE_REMOVE;
+    });
+});
+
+if (scheduledConversationIds.join(',') !== 'queued-chat-1,queued-chat-2')
+    throw new Error('Ready queued chats were not resumed independently');
 
 const runningView = { fingerprint: 'stale-after-stream-start' };
 const cacheHarness = {
@@ -132,20 +197,23 @@ if (windowPrototype._getCachedConversationView.call(cacheHarness, runningConvers
     throw new Error('A live conversation discarded its Working row and elapsed timer view');
 }
 
-cacheHarness._activeChatCancellable = null;
+cacheHarness._activeTurnsByConversation.clear();
 
 if (windowPrototype._getCachedConversationView.call(cacheHarness, runningConversation) !== null)
     throw new Error('A completed conversation reused a genuinely stale cached view');
 
 const busyUiStates = [];
+const followLatestStates = [];
 const renderHarness = {
     ...runtimeHarness,
+    _renderedConversationId: 'previous-chat',
     _migrateWelcomeConversation() {},
     _migrateLegacyArtifacts() {},
     _artifactWorkspace: null,
     _syncArtifactWorkspaceButton() {},
     _artifactSplitView: null,
     _syncProviderControls() {},
+    _syncAgentQuestionComposerMode() {},
     _setComposerBusy(isBusy) {
         busyUiStates.push(isBusy);
     },
@@ -158,6 +226,9 @@ const renderHarness = {
     _activateConversationView() {},
     _updateUsageDisplay() {},
     _scrollToBottom() {},
+    _setFollowLatestMessage(enabled) {
+        followLatestStates.push(enabled);
+    },
     _isConversationBusy: windowPrototype._isConversationBusy,
 };
 
@@ -165,6 +236,124 @@ windowPrototype._renderActiveConversation.call(renderHarness);
 
 if (busyUiStates.at(-1) !== false)
     throw new Error('A new chat inherited disabled model and provider controls from a running chat');
+
+if (followLatestStates.at(-1) !== false)
+    throw new Error('Switching chats retained another response\'s auto-follow state');
+
+let composerText = 'draft for chat A';
+const composerSelectionHarness = {
+    _composerDraftsByConversation: new Map([['chat-b', {
+        text: 'draft for chat B',
+        references: [],
+        attachments: [],
+    }]]),
+    _activeQuestionSessionsByConversation: new Map(),
+    _pendingAttachments: [{ name: 'a.txt', path: '/tmp/a.txt' }],
+    _composerReferences: [{ kind: 'file', value: '/tmp/a.txt' }],
+    _conversations: {
+        activeConversation: { id: 'chat-a' },
+        selectConversation(conversationId) {
+            this.activeConversation = { id: conversationId };
+            return this.activeConversation;
+        },
+    },
+    _getComposerText: () => composerText,
+    _getComposerReferences() {
+        return this._composerReferences;
+    },
+    _setComposerText(text) {
+        composerText = text;
+    },
+    _updateAttachmentLabel() {},
+    _setFollowLatestMessage() {},
+    _setQuestionComposerMode() {},
+    _activeQuestionSessionForConversation: windowPrototype._activeQuestionSessionForConversation,
+    _deactivateAgentQuestionSessionUi: windowPrototype._deactivateAgentQuestionSessionUi,
+    _composerDraftSnapshot: windowPrototype._composerDraftSnapshot,
+    _captureComposerDraft: windowPrototype._captureComposerDraft,
+    _prepareComposerForConversationChange: windowPrototype._prepareComposerForConversationChange,
+    _applyComposerDraft: windowPrototype._applyComposerDraft,
+};
+windowPrototype._selectConversation.call(composerSelectionHarness, 'chat-b');
+
+if (composerText !== 'draft for chat B'
+    || composerSelectionHarness._composerDraftsByConversation.get('chat-a')?.text !== 'draft for chat A'
+    || composerSelectionHarness._composerDraftsByConversation.get('chat-a')?.attachments?.length !== 1) {
+    throw new Error('Conversation switching did not preserve independent composer drafts and attachments');
+}
+
+let resolveDeletedTurn;
+let deletedConversation = false;
+const deletionCancellable = new Gio.Cancellable();
+const deletionHarness = {
+    _conversationsPendingDeletion: new Set(),
+    _pendingUserMessagesByConversation: new Map([['delete-chat', [{}]]]),
+    _activeTurnsByConversation: new Map([['delete-chat', {
+        cancellable: deletionCancellable,
+        finished: new Promise((resolve) => {
+            resolveDeletedTurn = resolve;
+        }),
+    }]]),
+    _composerDraftsByConversation: new Map([['delete-chat', {}]]),
+    _pendingArtifactPresentationsByConversation: new Map([['delete-chat', {}]]),
+    _conversations: {
+        activeConversation: { id: 'other-chat' },
+        conversations: [{ id: 'other-chat' }],
+        getConversation(conversationId) {
+            return conversationId === 'delete-chat' && !deletedConversation
+                ? { id: conversationId }
+                : null;
+        },
+        deleteConversation() {
+            deletedConversation = true;
+        },
+    },
+    _finishAgentQuestions() {},
+    _isActiveConversationId: windowPrototype._isActiveConversationId,
+    _refreshConversationList() {},
+    _renderActiveConversation() {},
+};
+const deletion = windowPrototype._deleteConversationAfterStopping.call(
+    deletionHarness,
+    'delete-chat',
+);
+await Promise.resolve();
+
+if (!deletionCancellable.is_cancelled() || deletedConversation)
+    throw new Error('Deleting a busy background chat did not wait for its turn cleanup');
+
+resolveDeletedTurn();
+await deletion;
+
+if (!deletedConversation
+    || deletionHarness._composerDraftsByConversation.has('delete-chat')
+    || deletionHarness._pendingArtifactPresentationsByConversation.has('delete-chat')) {
+    throw new Error('Deleting a stopped background chat left conversation-owned state behind');
+}
+
+const computerOwnerCancellable = new Gio.Cancellable();
+const selectedChatCancellable = new Gio.Cancellable();
+const computerStopHarness = {
+    _activeTurnsByConversation: new Map([
+        ['computer-chat', { cancellable: computerOwnerCancellable }],
+        ['selected-chat', { cancellable: selectedChatCancellable }],
+    ]),
+    _computerUse: {
+        activeTurnCancellable: computerOwnerCancellable,
+        stop() {
+            computerOwnerCancellable.cancel();
+            return true;
+        },
+    },
+    _activeTurnEntryForCancellable: windowPrototype._activeTurnEntryForCancellable,
+    present() {},
+    focusComposer() {},
+    _showToast() {},
+};
+windowPrototype._stopComputerUseAndReturn.call(computerStopHarness);
+
+if (!computerOwnerCancellable.is_cancelled() || selectedChatCancellable.is_cancelled())
+    throw new Error('Emergency computer stop cancelled the selected unrelated chat');
 
 if (Gtk.init_check()) {
     let busyConversationId = '';
@@ -179,6 +368,10 @@ if (Gtk.init_check()) {
         _archiveConversation() {},
         _exportConversation() {},
         _confirmDeleteConversation() {},
+        _composerReferenceStyles() {
+            return {};
+        },
+        _removePendingUserMessage() {},
         _createConversationMenuItem(...args) {
             return windowPrototype._createConversationMenuItem.call(this, ...args);
         },
@@ -189,6 +382,17 @@ if (Gtk.init_check()) {
             return windowPrototype._clearBox.call(this, ...args);
         },
     };
+    const queuedCard = windowPrototype._createPendingUserMessageCard.call(widgetHarness, {
+        id: 'queued-message',
+        conversationId: 'conversation-1',
+        content: 'First queued line\nSecond queued line',
+        references: [],
+    });
+    const queuedLabel = queuedCard.get_first_child()?.get_next_sibling?.();
+
+    if (queuedLabel?.get_lines() !== 1 || !queuedLabel.get_single_line_mode())
+        throw new Error('Queued message previews were not limited to one UI line');
+
     const row = windowPrototype._createConversationRow.call(widgetHarness, {
         id: 'conversation-1',
         title: 'Conversation',

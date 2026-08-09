@@ -149,7 +149,7 @@ export function createAskUserTool(requestUserInput) {
         },
         permissionPolicy: 'allow',
         requiresPermission: false,
-        concurrencySafe: false,
+        concurrencySafe: true,
         run: async (input, options = {}) => {
             const questions = normalizeAskUserQuestions(input);
             const response = await requestUserInput(questions, options);
