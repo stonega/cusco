@@ -64,6 +64,7 @@ function requestJson(message) {
 const server = new Soup.Server();
 let sawNativeTools = false;
 let rateLimitedRequestCount = 0;
+let requestTimeoutRequestCount = 0;
 
 GLib.setenv('NO_PROXY', '127.0.0.1,localhost', true);
 GLib.setenv('no_proxy', '127.0.0.1,localhost', true);
@@ -102,6 +103,29 @@ server.add_handler('/v1/rate-limited', (_server, message) => {
         error: {
             message: 'Rate limit exceeded',
         },
+    });
+});
+
+server.add_handler('/v1/request-timeout', (_server, message) => {
+    requestTimeoutRequestCount++;
+
+    if (requestTimeoutRequestCount === 1) {
+        setJsonErrorResponse(message, Soup.Status.REQUEST_TIMEOUT, {
+            error: {
+                message: 'Upstream response stream timed out',
+            },
+        });
+        return;
+    }
+
+    setJsonResponse(message, {
+        choices: [
+            {
+                message: {
+                    content: 'Recovered after HTTP 408',
+                },
+            },
+        ],
     });
 });
 
@@ -172,7 +196,27 @@ if (listening) {
         if (!sawRateLimitError)
             throw new Error('429 response did not fail the provider request');
 
-        assertEqual(rateLimitedRequestCount, 1, 'HTTP errors are not retried');
+        assertEqual(rateLimitedRequestCount, 1, 'HTTP 429 errors are not retried');
+
+        const requestTimeoutProvider = new OpenAiCompatibleChatProvider({
+            ...config,
+            name: 'Request Timeout Provider',
+            chatPath: '/request-timeout',
+        });
+        const requestTimeoutStatuses = [];
+        let requestTimeoutText = '';
+
+        for await (const chunk of requestTimeoutProvider.streamChat([createMessage('user', 'Hello')], { timeoutSeconds: 5 })) {
+            if (chunk?.type === 'status')
+                requestTimeoutStatuses.push(chunk.text);
+            else
+                requestTimeoutText += chunk;
+        }
+
+        assertEqual(requestTimeoutRequestCount, 2, 'HTTP 408 retry request count');
+        assertEqual(requestTimeoutStatuses.length, 1, 'HTTP 408 retry status count');
+        assertEqual(requestTimeoutStatuses[0], 'Request timed out. Retrying 1/5\u2026', 'HTTP 408 retry status');
+        assertEqual(requestTimeoutText, 'Recovered after HTTP 408', 'HTTP 408 recovered response');
     } finally {
         server.disconnect();
     }

@@ -78,6 +78,12 @@ function createUserVisibleError(message, userMessage = message) {
     return error;
 }
 
+function createHttpStatusError(message, status) {
+    const error = createUserVisibleError(message);
+    error.httpStatus = status;
+    return error;
+}
+
 function isGioError(error, code) {
     return typeof error?.matches === 'function' && error.matches(Gio.IOErrorEnum, code);
 }
@@ -116,6 +122,10 @@ export function isNetworkError(error) {
 function isRetryableInterruptedResponse(error) {
     return isTransientTlsError(error)
         || RETRYABLE_INTERRUPTED_RESPONSE_IO_ERRORS.some((code) => isGioError(error, code));
+}
+
+function isRetryableHttpError(error) {
+    return error?.httpStatus === Soup.Status.REQUEST_TIMEOUT;
 }
 
 function isCancelled(cancellable) {
@@ -460,7 +470,7 @@ async function postJson(url, headers, body, options = {}) {
 
     if (status < 200 || status >= 300) {
         const messageText = responseJson?.error?.message ?? responseJson?.message ?? responseText;
-        throw createUserVisibleError(`${providerName} request failed (${status}): ${messageText}`);
+        throw createHttpStatusError(`${providerName} request failed (${status}): ${messageText}`, status);
     }
 
     return responseJson;
@@ -2253,18 +2263,22 @@ class RemoteProvider extends ChatProvider {
                     // send_and_read_async does not expose response bytes until the
                     // complete JSON body is available. A dropped TLS connection can
                     // therefore be replayed safely even after headers were received.
-                    const canReplayInterruptedResponse = !error?.providerResponseStarted
+                    const retryableHttpError = isRetryableHttpError(error);
+                    const canReplayInterruptedResponse = retryableHttpError
+                        || !error?.providerResponseStarted
                         || isRetryableInterruptedResponse(error);
                     const shouldReconnect = reconnectAttempt < MAX_NETWORK_RECONNECTS
                         && !isCancelled(options.cancellable)
                         && canReplayInterruptedResponse
-                        && isNetworkError(error);
+                        && (retryableHttpError || isNetworkError(error));
 
                     if (!shouldReconnect)
                         throw error;
 
                     reconnectAttempt++;
-                    const statusPrefix = error?.providerResponseStarted
+                    const statusPrefix = retryableHttpError
+                        ? 'Request timed out. Retrying'
+                        : error?.providerResponseStarted
                         ? 'Connection interrupted. Retrying'
                         : 'Reconnecting';
                     yield {
