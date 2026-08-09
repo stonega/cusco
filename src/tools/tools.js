@@ -94,6 +94,14 @@ function userVisibleError(message) {
     return error;
 }
 
+function cancelledOperationError() {
+    return new GLib.Error(
+        Gio.io_error_quark(),
+        Gio.IOErrorEnum.CANCELLED,
+        'The tool request was cancelled.',
+    );
+}
+
 function truncateText(text, maxChars = MAX_TOOL_OUTPUT_CHARS) {
     const source = String(text ?? '');
 
@@ -1250,6 +1258,7 @@ export class ToolManager {
     constructor(options = {}) {
         this._registeredTools = new Map();
         this._searchConfig = options.searchConfig ?? (() => ({}));
+        this._exclusiveToolTail = Promise.resolve();
     }
 
     registerTool(tool) {
@@ -1359,10 +1368,80 @@ export class ToolManager {
         return this.createRequest(match[1], match[2]);
     }
 
+    _runExclusiveTool(operation, options = {}) {
+        const cancellable = options.cancellable ?? null;
+
+        if (cancellable?.is_cancelled?.())
+            return Promise.reject(cancelledOperationError());
+
+        const previousRun = this._exclusiveToolTail;
+        let started = false;
+        let cancelHandlerId = 0;
+        const run = previousRun.then(() => {
+            if (cancellable?.is_cancelled?.())
+                throw cancelledOperationError();
+
+            started = true;
+            if (cancelHandlerId) {
+                cancellable.disconnect(cancelHandlerId);
+                cancelHandlerId = 0;
+            }
+            return operation();
+        });
+        this._exclusiveToolTail = run.then(
+            () => undefined,
+            () => undefined,
+        );
+
+        if (!cancellable)
+            return run;
+
+        let returned = false;
+        return new Promise((resolve, reject) => {
+            cancelHandlerId = cancellable.connect(() => {
+                if (started || returned)
+                    return;
+
+                returned = true;
+                reject(cancelledOperationError());
+            });
+
+            run.then((result) => {
+                if (returned)
+                    return;
+
+                returned = true;
+                resolve(result);
+            }, (error) => {
+                if (returned)
+                    return;
+
+                returned = true;
+                reject(error);
+            });
+        }).finally(() => {
+            if (cancelHandlerId)
+                cancellable.disconnect(cancelHandlerId);
+        });
+    }
+
+    _runToolWithConcurrency(tool, operation, options = {}) {
+        if (tool.concurrencySafe)
+            return operation();
+
+        return this._runExclusiveTool(operation, options);
+    }
+
     async runRequest(request, options = {}) {
         if (this._registeredTools.has(request.name)) {
             const tool = this._registeredTools.get(request.name);
-            const result = await tool.run(request.input, options);
+            let result;
+
+            result = await this._runToolWithConcurrency(
+                tool,
+                () => tool.run(request.input, options),
+                options,
+            );
 
             if (result && typeof result === 'object' && !Array.isArray(result)) {
                 return {
@@ -1395,13 +1474,18 @@ export class ToolManager {
             const searchConfig = typeof this._searchConfig === 'function'
                 ? this._searchConfig()
                 : this._searchConfig;
+            const result = await this._runToolWithConcurrency(
+                BUILT_IN_TOOLS.search,
+                () => searchWeb(request.input, {
+                    ...(searchConfig ?? {}),
+                    ...options,
+                }),
+                options,
+            );
 
             return {
                 ...request,
-                ...(await searchWeb(request.input, {
-                    ...(searchConfig ?? {}),
-                    ...options,
-                })),
+                ...result,
             };
         }
         case 'file_list':
@@ -1417,7 +1501,11 @@ export class ToolManager {
         case 'bash':
             return {
                 ...request,
-                ...(await runBashCommand(request.input, options)),
+                ...(await this._runToolWithConcurrency(
+                    BUILT_IN_TOOLS.bash,
+                    () => runBashCommand(request.input, options),
+                    options,
+                )),
             };
         default:
             throw userVisibleError(`Unknown tool: ${request.name}`);

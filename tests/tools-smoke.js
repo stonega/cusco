@@ -174,6 +174,144 @@ const calcResult = await manager.runRequest(parseToolRequest('/calc 10 / 2 + 7')
 if (calcResult.output !== '12')
     throw new Error(`Tool manager calculator result was wrong: ${calcResult.output}`);
 
+let releaseFirstExclusiveTool;
+let markFirstExclusiveToolStarted;
+let activeExclusiveTools = 0;
+let maximumActiveExclusiveTools = 0;
+const firstExclusiveToolStarted = new Promise((resolve) => {
+    markFirstExclusiveToolStarted = resolve;
+});
+manager.registerTool({
+    name: 'exclusive_test',
+    label: 'Exclusive test',
+    permissionPolicy: 'allow',
+    concurrencySafe: false,
+    async run(input) {
+        activeExclusiveTools += 1;
+        maximumActiveExclusiveTools = Math.max(maximumActiveExclusiveTools, activeExclusiveTools);
+
+        if (input === 'first') {
+            markFirstExclusiveToolStarted();
+            await new Promise((resolve) => {
+                releaseFirstExclusiveTool = resolve;
+            });
+        }
+
+        activeExclusiveTools -= 1;
+        return input;
+    },
+});
+const firstExclusiveRun = manager.runRequest(manager.createRequest('exclusive_test', 'first'));
+await firstExclusiveToolStarted;
+const secondExclusiveCancellable = new Gio.Cancellable();
+const secondExclusiveRun = manager.runRequest(
+    manager.createRequest('exclusive_test', 'second'),
+    { cancellable: secondExclusiveCancellable },
+);
+await Promise.resolve();
+
+if (maximumActiveExclusiveTools !== 1 || activeExclusiveTools !== 1)
+    throw new Error('Conversation turns ran an exclusive registered tool concurrently');
+
+secondExclusiveCancellable.cancel();
+const secondExclusiveCancelled = await secondExclusiveRun.then(
+    () => false,
+    (error) => error.matches?.(Gio.io_error_quark(), Gio.IOErrorEnum.CANCELLED) ?? false,
+);
+
+if (!secondExclusiveCancelled || activeExclusiveTools !== 1)
+    throw new Error('A cancelled conversation kept waiting for an exclusive registered tool');
+
+releaseFirstExclusiveTool();
+await firstExclusiveRun;
+await manager.runRequest(manager.createRequest('exclusive_test', 'third'));
+
+if (maximumActiveExclusiveTools !== 1)
+    throw new Error('Exclusive registered tool serialization was not preserved');
+
+let releaseInFlightTool;
+let markInFlightToolStarted;
+const inFlightToolStarted = new Promise((resolve) => {
+    markInFlightToolStarted = resolve;
+});
+manager.registerTool({
+    name: 'inflight_cancel_test',
+    label: 'In-flight cancellation test',
+    permissionPolicy: 'allow',
+    concurrencySafe: false,
+    async run() {
+        markInFlightToolStarted();
+        await new Promise((resolve) => {
+            releaseInFlightTool = resolve;
+        });
+        return 'settled';
+    },
+});
+const inFlightCancellable = new Gio.Cancellable();
+let inFlightSettled = false;
+const inFlightRun = manager.runRequest(
+    manager.createRequest('inflight_cancel_test', ''),
+    { cancellable: inFlightCancellable },
+).finally(() => {
+    inFlightSettled = true;
+});
+await inFlightToolStarted;
+inFlightCancellable.cancel();
+await Promise.resolve();
+
+if (inFlightSettled)
+    throw new Error('Cancellation detached an already-started exclusive tool from its caller');
+
+releaseInFlightTool();
+const inFlightResult = await inFlightRun;
+
+if (inFlightResult.output !== 'settled')
+    throw new Error('An already-started exclusive tool did not report its final result');
+
+let releaseBuiltInSearch;
+let markBuiltInSearchStarted;
+let registeredAfterSearchStarted = false;
+const builtInSearchStarted = new Promise((resolve) => {
+    markBuiltInSearchStarted = resolve;
+});
+const builtInManager = new ToolManager({
+    searchConfig: () => ({
+        id: 'duckduckgo',
+        fetcher: async () => {
+            markBuiltInSearchStarted();
+            await new Promise((resolve) => {
+                releaseBuiltInSearch = resolve;
+            });
+            return duckDuckGoFixture;
+        },
+    }),
+});
+builtInManager.registerTool({
+    name: 'registered_after_search',
+    label: 'Registered after search',
+    permissionPolicy: 'allow',
+    concurrencySafe: false,
+    async run() {
+        registeredAfterSearchStarted = true;
+        return 'done';
+    },
+});
+const builtInSearchRun = builtInManager.runRequest(
+    builtInManager.createRequest('search', 'serialized search'),
+);
+await builtInSearchStarted;
+const registeredAfterSearchRun = builtInManager.runRequest(
+    builtInManager.createRequest('registered_after_search', ''),
+);
+await Promise.resolve();
+
+if (registeredAfterSearchStarted)
+    throw new Error('A built-in non-concurrency-safe tool bypassed the exclusive tool queue');
+
+releaseBuiltInSearch();
+await builtInSearchRun;
+await registeredAfterSearchRun;
+
 if (!formatToolResultForTranscript(calcResult).includes('Calculator result'))
     throw new Error('Tool result transcript formatting failed');
 

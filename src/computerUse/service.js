@@ -960,6 +960,14 @@ export class ComputerUseService {
         return this._activeCount > 0 || this._activeTurnCancellable !== null;
     }
 
+    get activeTurnCancellable() {
+        return this._activeTurnCancellable;
+    }
+
+    isTurnActive(cancellable) {
+        return Boolean(cancellable && this._activeTurnCancellable === cancellable);
+    }
+
     _getProxy() {
         if (this._proxy)
             return this._proxy;
@@ -1128,6 +1136,12 @@ export class ComputerUseService {
         await this._register();
         const cancellable = options.cancellable ?? new Gio.Cancellable();
         const wasActive = this.active;
+
+        if (options.cancellable
+            && this._activeTurnCancellable
+            && this._activeTurnCancellable !== cancellable) {
+            throw createUserError('Computer use is active in another chat. Stop or finish it before continuing here.');
+        }
 
         if (options.cancellable)
             this._activeTurnCancellable = cancellable;
