@@ -12,6 +12,11 @@ const initialCodeTheme = availableCodeThemes.find((option) => option.id !== DEFA
 const nextCodeTheme = availableCodeThemes.find((option) => option.id !== initialCodeTheme)?.id
     ?? initialCodeTheme;
 
+const defaultAppSettings = new AppSettingsStore({ settings: null });
+
+if (defaultAppSettings.responseTimeoutSeconds !== 300)
+    throw new Error(`Default response timeout is incorrect: ${defaultAppSettings.responseTimeoutSeconds}`);
+
 class MemorySettings {
     constructor({ booleans = {}, uints = {}, strings = {} } = {}) {
         this._booleans = { ...booleans };

@@ -11,8 +11,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Added a Usage dashboard with selectable date ranges, daily token activity, cache and output metrics, reporting coverage, and provider/model breakdowns.
 
+### Changed
+
+- Streamed model output from OpenAI, Anthropic, Gemini, and compatible providers as it arrives, with stable native Markdown formatting for incomplete responses.
+- Sized model output budgets from each model's configured limit and remaining context, with a 16,384-token default for custom and discovered models.
+- Increased the default provider response timeout from 45 seconds to 300 seconds.
+
 ### Fixed
 
+- Prevented incomplete or output-limited native tool-call batches from executing, and allowed one bounded corrective response before stopping safely.
 - Retried provider requests that receive HTTP 408 responses instead of ending the chat immediately.
 
 ## [0.5.35] - 2026-08-09

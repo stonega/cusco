@@ -3,10 +3,14 @@ import Gio from 'gi://Gio?version=2.0';
 import Soup from 'gi://Soup?version=3.0';
 
 import {
+    AnthropicMessagesProvider,
     discoverOpenAiCompatibleModels,
+    GeminiGenerateContentProvider,
     isNetworkError,
     isTransientTlsError,
     OpenAiCompatibleChatProvider,
+    OpenAiResponsesProvider,
+    ServerSentEventDecoder,
 } from '../src/providers/remoteProvider.js';
 import { createMessage } from '../src/providers/provider.js';
 
@@ -61,8 +65,99 @@ function requestJson(message) {
     return JSON.parse(new TextDecoder().decode(message.get_request_body().flatten().get_data()));
 }
 
+function setEventStreamResponse(message, chunks) {
+    const responseBody = message.get_response_body();
+    let chunkIndex = 0;
+    let finished = false;
+
+    message.set_status(Soup.Status.OK, null);
+    message.get_response_headers().replace('Content-Type', 'text/event-stream');
+    message.get_response_headers().set_encoding(Soup.Encoding.CHUNKED);
+    responseBody.set_accumulate(false);
+    message.connect('finished', () => {
+        finished = true;
+    });
+
+    const appendChunk = () => {
+        if (finished)
+            return GLib.SOURCE_REMOVE;
+
+        responseBody.append_bytes(new GLib.Bytes(new TextEncoder().encode(chunks[chunkIndex])));
+        chunkIndex++;
+
+        if (chunkIndex === chunks.length) {
+            responseBody.complete();
+            message.unpause();
+            return GLib.SOURCE_REMOVE;
+        }
+
+        message.unpause();
+        return GLib.SOURCE_CONTINUE;
+    };
+
+    appendChunk();
+    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 30, appendChunk);
+}
+
+const fragmentedDecoder = new ServerSentEventDecoder();
+let fragmentedEvents = fragmentedDecoder.push('event: message\r\ndata: {"text":"hel');
+fragmentedEvents.push(...fragmentedDecoder.push('lo"}\r\n\r\n'));
+assertEqual(fragmentedEvents.length, 1, 'Fragmented SSE event count');
+assertEqual(fragmentedEvents[0].event, 'message', 'Fragmented SSE event name');
+assertEqual(fragmentedEvents[0].data, '{"text":"hello"}', 'Fragmented SSE event data');
+
+const standardDecoder = new ServerSentEventDecoder();
+const standardEvents = standardDecoder.push('\uFEFF: keepalive\revent: message\rdata: first\rdata: second\r\revent: stale\r\rdata: final\r\r');
+standardEvents.push(...standardDecoder.finish());
+assertEqual(standardEvents.length, 2, 'Standard SSE boundary event count');
+assertEqual(standardEvents[0].event, 'message', 'CR-only SSE event name');
+assertEqual(standardEvents[0].data, 'first\nsecond', 'Multiline SSE data');
+assertEqual(standardEvents[1].event, '', 'SSE event name resets without data');
+assertEqual(standardEvents[1].data, 'final', 'UTF-8 BOM and comment handling');
+
+async function collectStreamChunks(provider) {
+    const chunks = [];
+
+    for await (const chunk of provider.streamChat([createMessage('user', 'Stream this')], {
+        timeoutSeconds: 5,
+    }))
+        chunks.push(chunk);
+
+    return chunks;
+}
+
+function textChunks(chunks) {
+    return chunks.filter((chunk) => typeof chunk === 'string');
+}
+
+function resolvedText(chunks) {
+    let text = '';
+
+    for (const chunk of chunks) {
+        if (typeof chunk === 'string')
+            text += chunk;
+        else if (chunk?.type === 'text')
+            text = chunk.replace ? String(chunk.text ?? '') : text + String(chunk.text ?? '');
+    }
+
+    return text;
+}
+
+async function collectTextChunks(provider) {
+    return textChunks(await collectStreamChunks(provider));
+}
+
+function eventData(data) {
+    return `data: ${JSON.stringify(data)}\n\n`;
+}
+
 const server = new Soup.Server();
 let sawNativeTools = false;
+let sawStreamingRequest = false;
+let sawStreamingUsageRequest = false;
+let interruptedStreamRequestCount = 0;
+let interruptedBeforeOutputRequestCount = 0;
+let strictStreamingRequestAccepted = false;
 let rateLimitedRequestCount = 0;
 let requestTimeoutRequestCount = 0;
 
@@ -95,6 +190,191 @@ server.add_handler('/v1/chat/completions', (_server, message) => {
             },
         ],
     });
+});
+
+server.add_handler('/v1/chat/streaming', (_server, message) => {
+    const request = requestJson(message);
+    sawStreamingRequest = request.stream === true;
+    sawStreamingUsageRequest = request.stream_options?.include_usage === true;
+    setEventStreamResponse(message, [
+        eventData({ choices: [{ delta: { content: 'Hello ' }, finish_reason: null }] }),
+        eventData({
+            choices: [{
+                delta: {
+                    content: 'world',
+                    tool_calls: [{
+                        index: 0,
+                        id: 'call-1',
+                        type: 'function',
+                        function: { name: 'calc', arguments: '{"expression":"' },
+                    }],
+                },
+                finish_reason: null,
+            }],
+        }),
+        eventData({
+            choices: [{
+                delta: {
+                    tool_calls: [{
+                        index: 0,
+                        function: { arguments: '2+2"}' },
+                    }],
+                },
+                finish_reason: 'tool_calls',
+            }],
+            usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+        }),
+        'data: [DONE]\n\n',
+    ]);
+});
+
+server.add_handler('/v1/chat/truncated-tool', (_server, message) => {
+    setEventStreamResponse(message, [
+        eventData({
+            choices: [{
+                delta: {
+                    tool_calls: [{
+                        index: 0,
+                        id: 'call-truncated-stream',
+                        type: 'function',
+                        function: { name: 'artifact_create', arguments: '{"content":"' },
+                    }],
+                },
+                finish_reason: null,
+            }],
+        }),
+        eventData({
+            choices: [{
+                delta: {
+                    tool_calls: [{
+                        index: 0,
+                        function: { arguments: 'unfinished' },
+                    }],
+                },
+                finish_reason: 'length',
+            }],
+        }),
+        'data: [DONE]\n\n',
+    ]);
+});
+
+server.add_handler('/v1/chat/output-limited-tool', (_server, message) => {
+    setEventStreamResponse(message, [
+        eventData({
+            choices: [{
+                delta: {
+                    tool_calls: [{
+                        index: 0,
+                        id: 'call-output-limited-stream',
+                        type: 'function',
+                        function: { name: 'artifact_create', arguments: '{"content":"complete"}' },
+                    }],
+                },
+                finish_reason: 'length',
+            }],
+        }),
+        'data: [DONE]\n\n',
+    ]);
+});
+
+server.add_handler('/v1/chat/interrupted', (_server, message) => {
+    interruptedStreamRequestCount++;
+    setEventStreamResponse(message, [
+        eventData({ choices: [{ delta: { content: 'partial' }, finish_reason: null }] }),
+    ]);
+});
+
+server.add_handler('/v1/chat/interrupted-before-output', (_server, message) => {
+    interruptedBeforeOutputRequestCount++;
+
+    if (interruptedBeforeOutputRequestCount === 1) {
+        setEventStreamResponse(message, [
+            eventData({ choices: [{ delta: { role: 'assistant' }, finish_reason: null }] }),
+        ]);
+        return;
+    }
+
+    setEventStreamResponse(message, [
+        eventData({ choices: [{ delta: { content: 'Recovered before output' }, finish_reason: 'stop' }] }),
+        'data: [DONE]\n\n',
+    ]);
+});
+
+server.add_handler('/v1/chat/final-reconciliation', (_server, message) => {
+    setEventStreamResponse(message, [
+        eventData({ choices: [{ delta: { content: 'Answer ' }, finish_reason: null }] }),
+        eventData({
+            choices: [{ delta: {}, finish_reason: 'stop' }],
+            web_search: [{ title: 'Documentation', url: 'https://example.com/docs' }],
+        }),
+        'data: [DONE]\n\n',
+    ]);
+});
+
+server.add_handler('/v1/chat/strict-streaming', (_server, message) => {
+    const request = requestJson(message);
+
+    if (Object.hasOwn(request, 'stream_options')) {
+        setJsonErrorResponse(message, Soup.Status.BAD_REQUEST, {
+            error: { message: 'Unknown field: stream_options' },
+        });
+        return;
+    }
+
+    strictStreamingRequestAccepted = true;
+    setEventStreamResponse(message, [
+        eventData({ choices: [{ delta: { content: 'Strict stream accepted' }, finish_reason: 'stop' }] }),
+        'data: [DONE]\n\n',
+    ]);
+});
+
+server.add_handler('/v1/responses', (_server, message) => {
+    const request = requestJson(message);
+
+    if (request.stream !== true)
+        throw new Error('OpenAI Responses request did not enable streaming');
+
+    setEventStreamResponse(message, [
+        'event: response.created\ndata: {"type":"response.created","response":{"id":"resp-test","output":[]}}\n\n',
+        'event: response.reasoning_summary_text.delta\ndata: {"type":"response.reasoning_summary_text.delta","delta":"OpenAI thought"}\n\n',
+        'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"OpenAI "}\n\n',
+        'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"stream"}\n\n',
+        'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp-test","status":"completed","output":[{"type":"reasoning","summary":[{"type":"summary_text","text":"OpenAI thought"}]},{"type":"message","content":[{"type":"output_text","text":"OpenAI stream"}]}],"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}\n\n',
+    ]);
+});
+
+server.add_handler('/v1/messages', (_server, message) => {
+    const request = requestJson(message);
+
+    if (request.stream !== true)
+        throw new Error('Anthropic request did not enable streaming');
+
+    setEventStreamResponse(message, [
+        'event: message_start\ndata: {"type":"message_start","message":{"id":"msg-test","content":[],"usage":{"input_tokens":3,"output_tokens":0}}}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Anthropic"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool-1","name":"calc","input":{}}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"expression\\":\\"2+2\\"}"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"stream"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":2}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":3,"content_block":{"type":"thinking","thinking":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":3,"delta":{"type":"thinking_delta","thinking":"Anthropic thought"}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":3,"delta":{"type":"signature_delta","signature":"signature-1"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":3}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ]);
+});
+
+server.add_handler('/v1/models/local-model:streamGenerateContent', (_server, message) => {
+    setEventStreamResponse(message, [
+        'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Gemini thought","thought":true}]}}]}\n\n',
+        'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Gemini "}]}}]}\n\n',
+        'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"stream"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2,"totalTokenCount":5}}\n\n',
+    ]);
 });
 
 server.add_handler('/v1/rate-limited', (_server, message) => {
@@ -171,6 +451,199 @@ if (listening) {
 
         assertEqual(text, 'Local provider response', 'Streamed provider text');
         assertEqual(sawNativeTools, true, 'Native tool definitions were sent');
+
+        const streamingProvider = new OpenAiCompatibleChatProvider({
+            ...config,
+            name: 'Streaming Provider',
+            chatPath: '/chat/streaming',
+            supportsStreamUsageOptions: true,
+        });
+        const streamingEvents = await collectStreamChunks(streamingProvider);
+        const streamingChunks = textChunks(streamingEvents);
+        const streamingUsage = streamingEvents.find((chunk) => chunk?.type === 'usage');
+        const streamingToolCalls = streamingEvents.find((chunk) => chunk?.type === 'tool_calls');
+
+        assertEqual(sawStreamingRequest, true, 'Streaming request flag');
+        assertEqual(sawStreamingUsageRequest, true, 'Streaming usage request flag');
+        assertEqual(streamingChunks.length, 2, 'Network stream chunk count');
+        assertEqual(streamingChunks[0], 'Hello ', 'First network stream chunk');
+        assertEqual(streamingChunks[1], 'world', 'Second network stream chunk');
+        assertEqual(streamingUsage?.usage?.totalTokens, 6, 'Network stream usage');
+        assertEqual(streamingToolCalls?.toolCalls?.[0]?.name, 'calc', 'Network stream tool name');
+        assertEqual(
+            streamingToolCalls?.toolCalls?.[0]?.input,
+            '{"expression":"2+2"}',
+            'Network stream fragmented tool input',
+        );
+        assertEqual(streamingToolCalls?.integrity?.status, 'valid', 'Network stream valid tool integrity');
+
+        const truncatedToolProvider = new OpenAiCompatibleChatProvider({
+            ...config,
+            name: 'Truncated Tool Provider',
+            chatPath: '/chat/truncated-tool',
+        });
+        const truncatedToolEvents = await collectStreamChunks(truncatedToolProvider);
+        const truncatedToolChunk = truncatedToolEvents.find(chunk => chunk?.type === 'tool_calls');
+
+        assertEqual(truncatedToolChunk?.integrity?.status, 'truncated', 'Network stream truncated tool integrity');
+        assertEqual(truncatedToolChunk?.toolCalls?.length, 1, 'Network stream truncated tool preservation');
+        assertEqual(truncatedToolChunk?.toolCalls?.[0]?.argumentsValid, false, 'Network stream truncated arguments validity');
+        assertEqual(truncatedToolChunk?.toolCalls?.[0]?.input, '', 'Network stream truncated arguments are not executable');
+        assertEqual(
+            truncatedToolChunk?.toolCalls?.[0]?.rawArguments,
+            '{"content":"unfinished',
+            'Network stream truncated raw arguments',
+        );
+
+        const outputLimitedToolProvider = new OpenAiCompatibleChatProvider({
+            ...config,
+            name: 'Output Limited Tool Provider',
+            chatPath: '/chat/output-limited-tool',
+        });
+        const outputLimitedToolEvents = await collectStreamChunks(outputLimitedToolProvider);
+        const outputLimitedToolChunk = outputLimitedToolEvents.find(chunk => chunk?.type === 'tool_calls');
+
+        assertEqual(outputLimitedToolChunk?.integrity?.status, 'output_limited', 'Network stream parseable output-limit integrity');
+        assertEqual(outputLimitedToolChunk?.toolCalls?.[0]?.argumentsValid, true, 'Network stream parseable output-limit arguments');
+
+        const interruptedProvider = new OpenAiCompatibleChatProvider({
+            ...config,
+            name: 'Interrupted Streaming Provider',
+            chatPath: '/chat/interrupted',
+        });
+        let interruptedText = '';
+        let interruptedError = null;
+
+        try {
+            for await (const chunk of interruptedProvider.streamChat([createMessage('user', 'Interrupt this')], {
+                timeoutSeconds: 5,
+            })) {
+                if (typeof chunk === 'string')
+                    interruptedText += chunk;
+            }
+        } catch (error) {
+            interruptedError = error;
+        }
+
+        assertEqual(interruptedText, 'partial', 'Interrupted stream preserves partial text');
+        assertEqual(interruptedStreamRequestCount, 1, 'Interrupted stream is not replayed after output');
+
+        if (!interruptedError?.userMessage?.includes('ended before completion'))
+            throw new Error(`Interrupted stream error was not user-visible: ${interruptedError?.userMessage}`);
+
+        const interruptedBeforeOutputProvider = new OpenAiCompatibleChatProvider({
+            ...config,
+            name: 'Interrupted Before Output Provider',
+            chatPath: '/chat/interrupted-before-output',
+        });
+        const interruptedBeforeOutputEvents = await collectStreamChunks(interruptedBeforeOutputProvider);
+
+        assertEqual(
+            interruptedBeforeOutputRequestCount,
+            2,
+            'Interrupted stream before output retries once',
+        );
+        assertEqual(
+            interruptedBeforeOutputEvents.filter((chunk) => chunk?.type === 'status').length,
+            1,
+            'Interrupted stream before output reconnect status',
+        );
+        assertEqual(
+            resolvedText(interruptedBeforeOutputEvents),
+            'Recovered before output',
+            'Interrupted stream before output recovery text',
+        );
+
+        const reconciliationProvider = new OpenAiCompatibleChatProvider({
+            ...config,
+            name: 'Final Reconciliation Provider',
+            chatPath: '/chat/final-reconciliation',
+        });
+        const reconciliationEvents = await collectStreamChunks(reconciliationProvider);
+        const reconciliationReplacement = reconciliationEvents.find((chunk) => chunk?.replace === true);
+
+        assertEqual(
+            resolvedText(reconciliationEvents),
+            'Answer\n\nSources:\n- [Documentation](https://example.com/docs)',
+            'Authoritative final text replaces a mismatched stream',
+        );
+        assertEqual(reconciliationReplacement?.type, 'text', 'Authoritative text replacement chunk');
+
+        const strictStreamingProvider = new OpenAiCompatibleChatProvider({
+            ...config,
+            name: 'Strict Streaming Provider',
+            chatPath: '/chat/strict-streaming',
+        });
+        assertEqual(
+            (await collectTextChunks(strictStreamingProvider)).join(''),
+            'Strict stream accepted',
+            'Strict OpenAI-compatible stream response',
+        );
+        assertEqual(strictStreamingRequestAccepted, true, 'Strict stream omitted unsupported options');
+
+        const openAiResponsesProvider = new OpenAiResponsesProvider({
+            ...config,
+            name: 'OpenAI Responses Provider',
+        });
+        const openAiEvents = await collectStreamChunks(openAiResponsesProvider);
+        const openAiChunks = textChunks(openAiEvents);
+
+        assertEqual(openAiChunks.join(''), 'OpenAI stream', 'OpenAI Responses streamed text');
+        assertEqual(openAiChunks.length, 2, 'OpenAI Responses network chunk count');
+        assertEqual(
+            openAiEvents.find((chunk) => chunk?.type === 'reasoning')?.text,
+            'OpenAI thought',
+            'OpenAI Responses streamed reasoning',
+        );
+        assertEqual(
+            openAiEvents.find((chunk) => chunk?.type === 'usage')?.usage?.totalTokens,
+            5,
+            'OpenAI Responses stream usage',
+        );
+
+        const anthropicProvider = new AnthropicMessagesProvider({
+            ...config,
+            name: 'Anthropic Provider',
+        });
+        const anthropicEvents = await collectStreamChunks(anthropicProvider);
+        const anthropicChunks = textChunks(anthropicEvents);
+        const anthropicUsage = anthropicEvents.find((chunk) => chunk?.type === 'usage');
+        const anthropicToolCalls = anthropicEvents.find((chunk) => chunk?.type === 'tool_calls');
+
+        assertEqual(anthropicChunks.join(''), 'Anthropic\nstream', 'Anthropic streamed text blocks');
+        assertEqual(anthropicChunks.length, 2, 'Anthropic network chunk count');
+        assertEqual(anthropicUsage?.usage?.totalTokens, 5, 'Anthropic stream usage');
+        assertEqual(
+            anthropicEvents.find((chunk) => chunk?.type === 'reasoning')?.text,
+            'Anthropic thought',
+            'Anthropic streamed reasoning',
+        );
+        assertEqual(anthropicToolCalls?.toolCalls?.[0]?.name, 'calc', 'Anthropic stream tool name');
+        assertEqual(
+            anthropicToolCalls?.toolCalls?.[0]?.input,
+            '{"expression":"2+2"}',
+            'Anthropic fragmented tool input',
+        );
+
+        const geminiProvider = new GeminiGenerateContentProvider({
+            ...config,
+            name: 'Gemini Provider',
+        });
+        const geminiEvents = await collectStreamChunks(geminiProvider);
+        const geminiChunks = textChunks(geminiEvents);
+
+        assertEqual(geminiChunks.join(''), 'Gemini stream', 'Gemini streamed text');
+        assertEqual(geminiChunks.length, 2, 'Gemini network chunk count');
+        assertEqual(
+            geminiEvents.find((chunk) => chunk?.type === 'reasoning')?.text,
+            'Gemini thought',
+            'Gemini streamed reasoning',
+        );
+        assertEqual(
+            geminiEvents.find((chunk) => chunk?.type === 'usage')?.usage?.totalTokens,
+            5,
+            'Gemini stream usage',
+        );
 
         const rateLimitedProvider = new OpenAiCompatibleChatProvider({
             ...config,

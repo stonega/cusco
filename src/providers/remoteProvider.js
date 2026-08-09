@@ -4,16 +4,20 @@ import Soup from 'gi://Soup?version=3.0';
 
 import { ChatProvider } from './provider.js';
 import {
+    createOutputCapacityError,
     DEFAULT_MAX_CONTINUATION_TURNS,
+    estimateRequestInputTokens,
     normalizeMaxOutputTokens,
+    resolveEffectiveMaxOutputTokens,
 } from './outputLimits.js';
 import { getThinkingCapability, normalizeThinkingLevel } from './thinking.js';
 import { normalizeTokenUsage } from './usage.js';
 
 const DISPLAY_STREAM_DELAY_MS = 10;
-const DEFAULT_REQUEST_TIMEOUT_SECONDS = 45;
+const DEFAULT_REQUEST_TIMEOUT_SECONDS = 300;
 const MAX_NETWORK_RECONNECTS = 5;
 const NETWORK_RECONNECT_DELAY_MS = 250;
+const RESPONSE_READ_CHUNK_BYTES = 16 * 1024;
 const CONTINUATION_PROMPT = [
     'Continue exactly where your previous assistant message stopped.',
     'Do not repeat completed text.',
@@ -84,6 +88,13 @@ function createHttpStatusError(message, status) {
     return error;
 }
 
+function createInterruptedStreamError(providerName) {
+    const error = createUserVisibleError(`${providerName} response stream ended before completion.`);
+    error.providerResponseStarted = true;
+    error.retryableInterruptedResponse = true;
+    return error;
+}
+
 function isGioError(error, code) {
     return typeof error?.matches === 'function' && error.matches(Gio.IOErrorEnum, code);
 }
@@ -120,7 +131,8 @@ export function isNetworkError(error) {
 }
 
 function isRetryableInterruptedResponse(error) {
-    return isTransientTlsError(error)
+    return error?.retryableInterruptedResponse === true
+        || isTransientTlsError(error)
         || RETRYABLE_INTERRUPTED_RESPONSE_IO_ERRORS.some((code) => isGioError(error, code));
 }
 
@@ -325,6 +337,15 @@ function toolArguments(input) {
     }
 }
 
+function toolArgumentsForHistory(call) {
+    if (call?.argumentsValid === false
+        && Object.hasOwn(call, 'rawArguments')) {
+        return String(call.rawArguments ?? '');
+    }
+
+    return toolArguments(call?.input);
+}
+
 function toolInputObject(input) {
     try {
         const parsed = JSON.parse(toolArguments(input));
@@ -355,6 +376,41 @@ function normalizeUrl(baseUrl, path) {
 
 function encodeJsonBody(body) {
     return new GLib.Bytes(new TextEncoder().encode(JSON.stringify(body)));
+}
+
+function createJsonPostRequest(url, headers, body, { stream = false } = {}) {
+    const request = Soup.Message.new('POST', url);
+    request.request_headers.append('Content-Type', 'application/json');
+
+    if (stream)
+        request.request_headers.append('Accept', 'text/event-stream');
+
+    for (const [name, value] of Object.entries(headers))
+        request.request_headers.append(name, value);
+
+    request.set_request_body_from_bytes('application/json', encodeJsonBody(body));
+    return request;
+}
+
+function parseJsonResponse(responseText) {
+    try {
+        return JSON.parse(responseText);
+    } catch (_error) {
+        return null;
+    }
+}
+
+function decorateProviderRequestError(error, providerName, timeoutSeconds) {
+    if (isGioError(error, Gio.IOErrorEnum.CANCELLED))
+        error.userMessage = `${providerName} request was cancelled.`;
+    else if (isGioError(error, Gio.IOErrorEnum.TIMED_OUT))
+        error.userMessage = `${providerName} did not respond within ${timeoutSeconds} seconds.`;
+    else if (isTransientTlsError(error))
+        error.userMessage = `${providerName} could not establish a secure connection. Try again.`;
+    else if (isNetworkError(error))
+        error.userMessage = `${providerName} could not connect. Check your network and try again.`;
+
+    return error;
 }
 
 function isLoopbackHost(host) {
@@ -391,6 +447,196 @@ function sendAndRead(session, message, cancellable) {
             }
         });
     });
+}
+
+function send(session, message, cancellable) {
+    return new Promise((resolve, reject) => {
+        session.send_async(message, GLib.PRIORITY_DEFAULT, cancellable, (_session, result) => {
+            try {
+                resolve(session.send_finish(result));
+            } catch (error) {
+                reject(error);
+            }
+        });
+    });
+}
+
+function readBytes(stream, cancellable) {
+    return new Promise((resolve, reject) => {
+        stream.read_bytes_async(
+            RESPONSE_READ_CHUNK_BYTES,
+            GLib.PRIORITY_DEFAULT,
+            cancellable,
+            (_stream, result) => {
+                try {
+                    resolve(stream.read_bytes_finish(result));
+                } catch (error) {
+                    reject(error);
+                }
+            },
+        );
+    });
+}
+
+function utf8SequenceLength(byte) {
+    if ((byte & 0x80) === 0)
+        return 1;
+
+    if ((byte & 0xE0) === 0xC0)
+        return 2;
+
+    if ((byte & 0xF0) === 0xE0)
+        return 3;
+
+    if ((byte & 0xF8) === 0xF0)
+        return 4;
+
+    return 1;
+}
+
+function completeUtf8PrefixLength(bytes) {
+    let sequenceStart = bytes.length - 1;
+    let continuationBytes = 0;
+
+    while (sequenceStart >= 0
+        && continuationBytes < 3
+        && (bytes[sequenceStart] & 0xC0) === 0x80) {
+        continuationBytes++;
+        sequenceStart--;
+    }
+
+    if (sequenceStart < 0)
+        return 0;
+
+    const availableBytes = bytes.length - sequenceStart;
+    return utf8SequenceLength(bytes[sequenceStart]) > availableBytes
+        ? sequenceStart
+        : bytes.length;
+}
+
+function combineByteChunks(prefix, suffix) {
+    if (prefix.length === 0)
+        return suffix;
+
+    const combined = new Uint8Array(prefix.length + suffix.length);
+    combined.set(prefix);
+    combined.set(suffix, prefix.length);
+    return combined;
+}
+
+async function* readResponseStream(stream, cancellable) {
+    const decoder = new TextDecoder();
+    let pendingBytes = new Uint8Array(0);
+
+    for (;;) {
+        const bytes = await readBytes(stream, cancellable);
+
+        if (bytes.get_size() === 0)
+            break;
+
+        const combined = combineByteChunks(pendingBytes, bytes.get_data());
+        const prefixLength = completeUtf8PrefixLength(combined);
+        const chunk = decoder.decode(combined.subarray(0, prefixLength));
+        pendingBytes = combined.slice(prefixLength);
+
+        if (chunk)
+            yield chunk;
+    }
+
+    const finalChunk = pendingBytes.length > 0 ? decoder.decode(pendingBytes) : '';
+
+    if (finalChunk)
+        yield finalChunk;
+}
+
+async function readResponseText(stream, cancellable) {
+    const parts = [];
+
+    for await (const chunk of readResponseStream(stream, cancellable))
+        parts.push(chunk);
+
+    return parts.join('');
+}
+
+export class ServerSentEventDecoder {
+    constructor() {
+        this._lineBuffer = '';
+        this._eventName = '';
+        this._dataLines = [];
+        this._atStart = true;
+    }
+
+    _dispatch(events) {
+        if (this._dataLines.length === 0) {
+            this._eventName = '';
+            return;
+        }
+
+        events.push({
+            event: this._eventName,
+            data: this._dataLines.join('\n'),
+        });
+        this._eventName = '';
+        this._dataLines = [];
+    }
+
+    _consumeLine(line, events) {
+        if (!line) {
+            this._dispatch(events);
+            return;
+        }
+
+        if (line.startsWith(':'))
+            return;
+
+        const separator = line.indexOf(':');
+        const field = separator < 0 ? line : line.slice(0, separator);
+        let value = separator < 0 ? '' : line.slice(separator + 1);
+
+        if (value.startsWith(' '))
+            value = value.slice(1);
+
+        if (field === 'event')
+            this._eventName = value;
+        else if (field === 'data')
+            this._dataLines.push(value);
+    }
+
+    push(chunk) {
+        let text = String(chunk ?? '');
+
+        if (this._atStart && text) {
+            this._atStart = false;
+
+            if (text.startsWith('\uFEFF'))
+                text = text.slice(1);
+        }
+
+        this._lineBuffer += text;
+        const events = [];
+        let newlineIndex = this._lineBuffer.search(/[\r\n]/);
+
+        while (newlineIndex >= 0) {
+            const newline = this._lineBuffer[newlineIndex];
+
+            if (newline === '\r' && newlineIndex === this._lineBuffer.length - 1)
+                break;
+
+            const newlineLength = newline === '\r' && this._lineBuffer[newlineIndex + 1] === '\n'
+                ? 2
+                : 1;
+            const line = this._lineBuffer.slice(0, newlineIndex);
+            this._lineBuffer = this._lineBuffer.slice(newlineIndex + newlineLength);
+            this._consumeLine(line, events);
+            newlineIndex = this._lineBuffer.search(/[\r\n]/);
+        }
+
+        return events;
+    }
+
+    finish() {
+        return this.push('\n\n');
+    }
 }
 
 async function sendRequest(url, timeoutSeconds, cancellable, createMessage) {
@@ -434,37 +680,18 @@ async function postJson(url, headers, body, options = {}) {
     let message;
 
     try {
-        ({ bytes, message } = await sendRequest(url, timeoutSeconds, cancellable, () => {
-            const request = Soup.Message.new('POST', url);
-            request.request_headers.append('Content-Type', 'application/json');
-
-            for (const [name, value] of Object.entries(headers))
-                request.request_headers.append(name, value);
-
-            request.set_request_body_from_bytes('application/json', encodeJsonBody(body));
-            return request;
-        }));
+        ({ bytes, message } = await sendRequest(
+            url,
+            timeoutSeconds,
+            cancellable,
+            () => createJsonPostRequest(url, headers, body),
+        ));
     } catch (error) {
-        if (isGioError(error, Gio.IOErrorEnum.CANCELLED))
-            error.userMessage = `${providerName} request was cancelled.`;
-        else if (isGioError(error, Gio.IOErrorEnum.TIMED_OUT))
-            error.userMessage = `${providerName} did not respond within ${timeoutSeconds} seconds.`;
-        else if (isTransientTlsError(error))
-            error.userMessage = `${providerName} could not establish a secure connection. Try again.`;
-        else if (isNetworkError(error))
-            error.userMessage = `${providerName} could not connect. Check your network and try again.`;
-
-        throw error;
+        throw decorateProviderRequestError(error, providerName, timeoutSeconds);
     }
 
     const responseText = new TextDecoder().decode(bytes.get_data());
-    let responseJson = null;
-
-    try {
-        responseJson = JSON.parse(responseText);
-    } catch (_error) {
-        responseJson = null;
-    }
+    const responseJson = parseJsonResponse(responseText);
 
     const status = responseStatusCode(message);
 
@@ -474,6 +701,91 @@ async function postJson(url, headers, body, options = {}) {
     }
 
     return responseJson;
+}
+
+async function* postJsonStream(url, headers, body, options = {}) {
+    const {
+        cancellable = null,
+        providerName = 'Provider',
+        timeoutSeconds = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    } = options;
+    const session = createSession(url, timeoutSeconds);
+    const message = createJsonPostRequest(url, headers, body, { stream: true });
+    let inputStream = null;
+
+    try {
+        inputStream = await send(session, message, cancellable);
+        const status = responseStatusCode(message);
+
+        if (status < 200 || status >= 300) {
+            const responseText = await readResponseText(inputStream, cancellable);
+            const responseJson = parseJsonResponse(responseText);
+
+            const messageText = responseJson?.error?.message ?? responseJson?.message ?? responseText;
+            throw createHttpStatusError(`${providerName} request failed (${status}): ${messageText}`, status);
+        }
+
+        const eventDecoder = new ServerSentEventDecoder();
+        const unframedResponseParts = [];
+        let sawEvent = false;
+
+        const parseEvents = function* (events) {
+            for (const event of events) {
+                sawEvent = true;
+
+                if (event.data === '[DONE]') {
+                    yield { event: event.event, data: null, done: true };
+                    continue;
+                }
+
+                try {
+                    yield {
+                        event: event.event,
+                        data: JSON.parse(event.data),
+                        done: false,
+                    };
+                } catch (_error) {
+                    throw createUserVisibleError(`${providerName} returned a malformed streaming event.`);
+                }
+            }
+        };
+
+        for await (const chunk of readResponseStream(inputStream, cancellable)) {
+            if (!sawEvent)
+                unframedResponseParts.push(chunk);
+
+            const events = eventDecoder.push(chunk);
+
+            for (const event of parseEvents(events))
+                yield event;
+
+            if (sawEvent)
+                unframedResponseParts.length = 0;
+        }
+
+        for (const event of parseEvents(eventDecoder.finish()))
+            yield event;
+
+        const unframedResponse = unframedResponseParts.join('');
+
+        if (!sawEvent && unframedResponse.trim()) {
+            try {
+                yield { event: '', data: JSON.parse(unframedResponse), done: false };
+            } catch (_error) {
+                throw createUserVisibleError(`${providerName} returned malformed JSON instead of a streaming response.`);
+            }
+        }
+    } catch (error) {
+        error.providerResponseStarted = responseStatusCode(message) > 0;
+
+        throw decorateProviderRequestError(error, providerName, timeoutSeconds);
+    } finally {
+        try {
+            inputStream?.close(null);
+        } catch (_error) {
+            // The stream may already be closed after EOF or cancellation.
+        }
+    }
 }
 
 async function getJson(url, headers, options = {}) {
@@ -540,30 +852,61 @@ async function* displayStream(text, cancellable = null) {
 
 function normalizeProviderResponse(response) {
     if (typeof response === 'string')
-        return { text: response, reasoning: '', toolCalls: [], serverToolResults: [], providerParts: [] };
+        return {
+            text: response,
+            reasoning: '',
+            toolCalls: [],
+            toolCallIntegrity: { status: 'valid', reason: '' },
+            serverToolResults: [],
+            providerParts: [],
+        };
 
     if (!response || typeof response !== 'object')
-        return { text: '', reasoning: '', toolCalls: [], serverToolResults: [], providerParts: [] };
+        return {
+            text: '',
+            reasoning: '',
+            toolCalls: [],
+            toolCallIntegrity: { status: 'valid', reason: '' },
+            serverToolResults: [],
+            providerParts: [],
+        };
+
+    const toolCalls = Array.isArray(response.toolCalls)
+        ? response.toolCalls.map((toolCall) => {
+            const thoughtSignature = toolCall?.thoughtSignature ?? toolCall?.thought_signature;
+
+            return {
+                id: String(toolCall?.id ?? ''),
+                name: String(toolCall?.name ?? '').trim(),
+                input: String(toolCall?.input ?? ''),
+                argumentsValid: toolCall?.argumentsValid !== false,
+                ...(Object.hasOwn(toolCall ?? {}, 'rawArguments')
+                    ? { rawArguments: String(toolCall.rawArguments ?? '') }
+                    : {}),
+                ...(typeof thoughtSignature === 'string' && thoughtSignature
+                    ? { thoughtSignature }
+                    : {}),
+            };
+        })
+        : [];
+    const suppliedIntegrityStatus = String(response.toolCallIntegrity?.status ?? '');
+    const allowedIntegrityStatuses = new Set(['valid', 'truncated', 'output_limited', 'malformed']);
+    const integrityStatus = allowedIntegrityStatuses.has(suppliedIntegrityStatus)
+        ? suppliedIntegrityStatus
+        : toolCalls.some((toolCall) => !toolCall.name || !toolCall.argumentsValid)
+            ? 'malformed'
+            : 'valid';
 
     return {
         text: String(response.text ?? ''),
         reasoning: String(response.reasoning ?? ''),
         usage: normalizeTokenUsage(response.usage),
         finishReason: String(response.finishReason ?? ''),
-        toolCalls: Array.isArray(response.toolCalls)
-            ? response.toolCalls.map((toolCall) => {
-                const thoughtSignature = toolCall?.thoughtSignature ?? toolCall?.thought_signature;
-
-                return {
-                    id: String(toolCall?.id ?? ''),
-                    name: String(toolCall?.name ?? '').trim(),
-                    input: String(toolCall?.input ?? ''),
-                    ...(typeof thoughtSignature === 'string' && thoughtSignature
-                        ? { thoughtSignature }
-                        : {}),
-                };
-            }).filter((toolCall) => toolCall.name)
-            : [],
+        toolCalls,
+        toolCallIntegrity: {
+            status: integrityStatus,
+            reason: String(response.toolCallIntegrity?.reason ?? ''),
+        },
         serverToolResults: Array.isArray(response.serverToolResults)
             ? response.serverToolResults.map((result) => ({
                 name: ['x_search', 'google_maps', 'url_context'].includes(result?.name)
@@ -615,6 +958,31 @@ function continuationMessages(messages, assistantText) {
             content: CONTINUATION_PROMPT,
         },
     ];
+}
+
+function requestOptionsWithEffectiveOutputBudget(messages, options, providerConfig = null) {
+    const configuredMaxOutputTokens = normalizeMaxOutputTokens(options.model?.maxOutputTokens);
+    const provider = options.provider ?? options.config ?? providerConfig;
+    const toolApiFormat = providerToolApiFormat(provider);
+    const requestTools = requestToolConfiguration({ ...options, provider }, toolApiFormat).tools;
+    const estimatedInputTokens = estimateRequestInputTokens(messages, requestTools);
+    const maxOutputTokens = resolveEffectiveMaxOutputTokens({
+        configuredMaxOutputTokens,
+        callMaxOutputTokens: options.maxOutputTokens,
+        contextWindowTokens: options.model?.contextWindowTokens,
+        estimatedInputTokens,
+    });
+
+    if (maxOutputTokens <= 0) {
+        throw createOutputCapacityError(
+            'This conversation has no room for another response. Compact the conversation and try again.',
+        );
+    }
+
+    return {
+        ...options,
+        maxOutputTokens,
+    };
 }
 
 function joinTextParts(parts) {
@@ -884,28 +1252,94 @@ function zaiNativeSearchToolDefinitions(configuration) {
     }];
 }
 
-function parseToolArgumentsInput(argumentsText) {
-    const text = String(argumentsText ?? '').trim();
+function requestToolConfiguration(options = {}, api = '') {
+    const nativeSearch = nativeSearchConfiguration(options, api);
+    const clientTools = clientToolsForSearchConfiguration(options.tools, nativeSearch);
+    let tools;
 
-    if (!text)
-        return '';
+    if (api === 'openai-responses') {
+        tools = [
+            ...openAiNativeSearchToolDefinitions(nativeSearch),
+            ...openAiResponsesToolDefinitions(clientTools),
+        ];
+    } else if (api === 'zai-chat-completions') {
+        tools = [
+            ...zaiNativeSearchToolDefinitions(nativeSearch),
+            ...openAiCompatibleToolDefinitions(clientTools),
+        ];
+    } else if (api === 'anthropic-messages') {
+        tools = [
+            ...anthropicNativeSearchToolDefinitions(nativeSearch),
+            ...anthropicToolDefinitions(clientTools),
+        ];
+    } else if (api === 'gemini-generate-content') {
+        tools = [
+            ...geminiNativeSearchToolDefinitions(nativeSearch),
+            ...geminiToolDefinitions(clientTools),
+        ];
+    } else {
+        tools = options.tools ?? [];
+    }
+
+    return { nativeSearch, clientTools, tools };
+}
+
+function providerToolApiFormat(provider) {
+    return provider?.apiFormat === 'openai-chat-completions'
+        ? 'zai-chat-completions'
+        : String(provider?.apiFormat ?? '');
+}
+
+function parseToolArguments(argumentsText) {
+    const rawArguments = String(argumentsText ?? '');
+    const text = rawArguments.trim();
 
     try {
         const parsed = JSON.parse(text);
+        let input;
 
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
             const keys = Object.keys(parsed);
 
             if (keys.length === 1 && Object.hasOwn(parsed, 'input'))
-                return String(parsed.input ?? '');
-
-            return JSON.stringify(parsed);
+                input = String(parsed.input ?? '');
+            else
+                input = JSON.stringify(parsed);
+        } else {
+            input = String(parsed ?? '');
         }
 
-        return String(parsed ?? '');
+        return {
+            input,
+            argumentsValid: true,
+        };
     } catch (_error) {
-        return text;
+        return {
+            input: '',
+            rawArguments,
+            argumentsValid: false,
+        };
     }
+}
+
+function classifyNativeToolCallIntegrity(toolCalls, finishReason) {
+    if (toolCalls.length === 0)
+        return { status: 'valid', reason: '' };
+
+    const hasIncompleteCall = toolCalls.some((toolCall) => (
+        !toolCall.name || !toolCall.argumentsValid
+    ));
+
+    if (stoppedForMaxOutput(finishReason)) {
+        return hasIncompleteCall
+            ? { status: 'truncated', reason: 'max_output_with_incomplete_tool_call' }
+            : { status: 'output_limited', reason: 'max_output_with_tool_calls' };
+    }
+
+    if (hasIncompleteCall)
+        return { status: 'malformed', reason: 'invalid_tool_call_arguments' };
+
+    return { status: 'valid', reason: '' };
 }
 
 function toolInputFromValue(value) {
@@ -1255,14 +1689,18 @@ function appendSearchSources(text, serverToolResults) {
 export function extractOpenAiToolCalls(response) {
     const outputCalls = (response?.output ?? [])
         .filter((item) => item?.type === 'function_call')
-        .map((item) => ({
-            id: String(item.call_id ?? item.id ?? ''),
-            name: String(item.name ?? '').trim(),
-            input: parseToolArgumentsInput(item.arguments),
-        }));
+        .map((item) => {
+            const parsedArguments = parseToolArguments(item.arguments);
+
+            return {
+                id: String(item.call_id ?? item.id ?? ''),
+                name: String(item.name ?? '').trim(),
+                ...parsedArguments,
+            };
+        });
     const chatCalls = extractChatCompletionToolCalls(response);
 
-    return [...outputCalls, ...chatCalls].filter((toolCall) => toolCall.name);
+    return [...outputCalls, ...chatCalls];
 }
 
 export function extractChatCompletionToolCalls(response) {
@@ -1278,17 +1716,14 @@ export function extractChatCompletionToolCalls(response) {
         .map((toolCall) => {
             const call = toolCall.function ?? toolCall;
             const name = String(call?.name ?? '').trim();
-
-            if (!name)
-                return null;
+            const parsedArguments = parseToolArguments(call?.arguments);
 
             return {
                 id: String(toolCall.id ?? ''),
                 name,
-                input: parseToolArgumentsInput(call.arguments),
+                ...parsedArguments,
             };
-        })
-        .filter(Boolean);
+        });
 }
 
 export function extractAnthropicToolCalls(response) {
@@ -1350,7 +1785,7 @@ export function openAiMessages(messages) {
                     type: 'function_call',
                     call_id: toolCallId(call, index),
                     name: call.name,
-                    arguments: toolArguments(call.input),
+                    arguments: toolArgumentsForHistory(call),
                 });
             });
             continue;
@@ -1400,7 +1835,7 @@ export function openAiCompatibleMessages(messages, options = {}) {
                     type: 'function',
                     function: {
                         name: call.name,
-                        arguments: toolArguments(call.input),
+                        arguments: toolArgumentsForHistory(call),
                     },
                 })),
             });
@@ -1811,6 +2246,9 @@ export function buildOpenAiResponsesBody(messages, modelId, options = {}) {
         max_output_tokens: normalizeMaxOutputTokens(options.maxOutputTokens),
     };
 
+    if (options.stream === true)
+        body.stream = true;
+
     const provider = options.provider ?? options.config;
     const reasoning = buildOpenAiReasoningConfig(provider, options.model, options.thinkingLevel)
         ?? buildOpenAiCompatibleThinkingConfig(provider, options.model, options.thinkingLevel)?.reasoning;
@@ -1818,12 +2256,7 @@ export function buildOpenAiResponsesBody(messages, modelId, options = {}) {
     if (reasoning)
         body.reasoning = reasoning;
 
-    const nativeSearch = nativeSearchConfiguration(options, 'openai-responses');
-    const clientTools = clientToolsForSearchConfiguration(options.tools, nativeSearch);
-    const tools = [
-        ...openAiNativeSearchToolDefinitions(nativeSearch),
-        ...openAiResponsesToolDefinitions(clientTools),
-    ];
+    const { nativeSearch, tools } = requestToolConfiguration(options, 'openai-responses');
 
     if (tools.length > 0) {
         body.tools = tools;
@@ -1848,16 +2281,15 @@ export function buildOpenAiCompatibleChatBody(messages, modelId, options = {}) {
             messagesWithLocalAttachmentPaths(messages, options.tools),
             options,
         ),
-        stream: false,
+        stream: options.stream === true,
     };
+
+    if (options.stream === true && provider?.supportsStreamUsageOptions === true)
+        body.stream_options = { include_usage: true };
+
     body[maxOutputTokensParameter] = normalizeMaxOutputTokens(options.maxOutputTokens);
     const thinking = buildOpenAiCompatibleThinkingConfig(provider, options.model, options.thinkingLevel);
-    const nativeSearch = nativeSearchConfiguration(options, 'zai-chat-completions');
-    const clientTools = clientToolsForSearchConfiguration(options.tools, nativeSearch);
-    const tools = [
-        ...zaiNativeSearchToolDefinitions(nativeSearch),
-        ...openAiCompatibleToolDefinitions(clientTools),
-    ];
+    const { tools } = requestToolConfiguration(options, 'zai-chat-completions');
 
     if (thinking)
         Object.assign(body, thinking);
@@ -1885,6 +2317,9 @@ export function buildAnthropicMessagesBody(messages, modelId, options = {}) {
         messages: conversationMessages,
     };
 
+    if (options.stream === true)
+        body.stream = true;
+
     if (system)
         body.system = system;
 
@@ -1894,16 +2329,15 @@ export function buildAnthropicMessagesBody(messages, modelId, options = {}) {
         if (thinkingConfig.outputConfig)
             body.output_config = thinkingConfig.outputConfig;
 
-        if (Number.isFinite(body.thinking.budget_tokens) && body.thinking.budget_tokens >= body.max_tokens)
-            body.max_tokens = body.thinking.budget_tokens + 1024;
+        if (Number.isFinite(body.thinking.budget_tokens)
+            && body.thinking.budget_tokens + 1024 > body.max_tokens) {
+            throw createOutputCapacityError(
+                'The selected thinking level does not fit in the available response capacity. Compact the conversation or choose a lower thinking level.',
+            );
+        }
     }
 
-    const nativeSearch = nativeSearchConfiguration(options, 'anthropic-messages');
-    const clientTools = clientToolsForSearchConfiguration(options.tools, nativeSearch);
-    const tools = [
-        ...anthropicNativeSearchToolDefinitions(nativeSearch),
-        ...anthropicToolDefinitions(clientTools),
-    ];
+    const { tools } = requestToolConfiguration(options, 'anthropic-messages');
 
     if (tools.length > 0)
         body.tools = tools;
@@ -1922,12 +2356,10 @@ export function buildGeminiGenerateContentBody(messages, options = {}) {
     if (thinking)
         payload.generationConfig.thinkingConfig = thinking;
 
-    const nativeSearch = nativeSearchConfiguration(options, 'gemini-generate-content');
-    const clientTools = clientToolsForSearchConfiguration(options.tools, nativeSearch);
-    const tools = [
-        ...geminiNativeSearchToolDefinitions(nativeSearch),
-        ...geminiToolDefinitions(clientTools),
-    ];
+    const { nativeSearch, clientTools, tools } = requestToolConfiguration(
+        options,
+        'gemini-generate-content',
+    );
 
     if (tools.length > 0)
         payload.tools = tools;
@@ -1988,12 +2420,16 @@ export function extractOpenAiResponse(response, options = {}) {
         options.provider?.nativeSearch?.tools ?? options.nativeSearchTools ?? [],
     );
 
+    const finishReason = extractOpenAiFinishReason(response);
+    const toolCalls = extractOpenAiToolCalls(response);
+
     return {
         text: appendSearchSources(extractOpenAiText(response), serverToolResults),
         reasoning: extractOpenAiReasoning(response),
         usage: extractOpenAiUsage(response),
-        finishReason: extractOpenAiFinishReason(response),
-        toolCalls: extractOpenAiToolCalls(response),
+        finishReason,
+        toolCalls,
+        toolCallIntegrity: classifyNativeToolCallIntegrity(toolCalls, finishReason),
         serverToolResults,
     };
 }
@@ -2021,13 +2457,16 @@ export function extractChatCompletionFinishReason(response) {
 
 export function extractChatCompletionResponse(response) {
     const serverToolResults = extractChatCompletionServerToolResults(response);
+    const finishReason = extractChatCompletionFinishReason(response);
+    const toolCalls = extractChatCompletionToolCalls(response);
 
     return {
         text: appendSearchSources(extractChatCompletionText(response), serverToolResults),
         reasoning: extractChatCompletionReasoning(response),
         usage: extractChatCompletionUsage(response),
-        finishReason: extractChatCompletionFinishReason(response),
-        toolCalls: extractChatCompletionToolCalls(response),
+        finishReason,
+        toolCalls,
+        toolCallIntegrity: classifyNativeToolCallIntegrity(toolCalls, finishReason),
         serverToolResults,
     };
 }
@@ -2105,6 +2544,465 @@ export function extractGeminiResponse(response) {
     };
 }
 
+function streamEventError(providerName, event) {
+    const error = event?.error ?? event?.response?.error;
+    const message = error?.message ?? (typeof event?.message === 'string' ? event.message : '');
+
+    if (!error && !message)
+        return null;
+
+    return createUserVisibleError(
+        `${providerName} streaming request failed: ${message ?? 'Unknown provider error'}`,
+    );
+}
+
+function streamedText(value) {
+    if (typeof value === 'string')
+        return value;
+
+    if (!Array.isArray(value))
+        return '';
+
+    return value.map((part) => part?.text ?? part?.content ?? '').join('');
+}
+
+function appendIndexedToolCall(toolCalls, delta, fallbackIndex) {
+    const index = Number.isInteger(delta?.index) ? delta.index : fallbackIndex;
+    const current = toolCalls[index] ?? {
+        idParts: [],
+        type: 'function',
+        nameParts: [],
+        argumentParts: [],
+    };
+    const functionDelta = delta?.function ?? delta;
+
+    current.idParts.push(String(delta?.id ?? ''));
+    current.type = delta?.type ?? current.type;
+    current.nameParts.push(String(functionDelta?.name ?? ''));
+    current.argumentParts.push(String(functionDelta?.arguments ?? ''));
+    toolCalls[index] = current;
+}
+
+function finalizedIndexedToolCalls(toolCalls) {
+    return toolCalls.map((toolCall) => ({
+        id: toolCall.idParts.join(''),
+        type: toolCall.type,
+        function: {
+            name: toolCall.nameParts.join(''),
+            arguments: toolCall.argumentParts.join(''),
+        },
+    }));
+}
+
+class OpenAiResponsesStreamState {
+    constructor(providerName) {
+        this.providerName = providerName;
+        this.response = { output: [] };
+        this.textParts = [];
+        this.terminal = false;
+    }
+
+    push(event, done = false) {
+        const deltas = [];
+
+        if (done)
+            return deltas;
+
+        const error = streamEventError(this.providerName, event);
+
+        if (error || event?.type === 'response.failed' || event?.type === 'error')
+            throw error ?? createUserVisibleError(`${this.providerName} streaming request failed.`);
+
+        if (event?.response && (event.type === 'response.created' || event.type === 'response.in_progress'))
+            this.response = { ...this.response, ...event.response };
+
+        if (event?.type === 'response.output_item.done' && event.item) {
+            const index = Number.isInteger(event.output_index)
+                ? event.output_index
+                : this.response.output.length;
+            this.response.output[index] = event.item;
+        }
+
+        if (event?.type === 'response.output_text.delta' || event?.type === 'response.refusal.delta') {
+            const text = String(event.delta ?? '');
+            this.textParts.push(text);
+
+            if (text)
+                deltas.push({ type: 'text', text });
+        }
+
+        if (event?.type === 'response.reasoning_summary_text.delta'
+            || event?.type === 'response.reasoning_text.delta') {
+            const text = String(event.delta ?? '');
+
+            if (text)
+                deltas.push({ type: 'reasoning', text });
+        }
+
+        if (event?.type === 'response.completed' || event?.type === 'response.incomplete') {
+            this.response = event.response ?? this.response;
+            this.terminal = true;
+        } else if (!event?.type && (event?.output || event?.output_text)) {
+            this.response = event;
+            this.terminal = true;
+        }
+
+        return deltas;
+    }
+
+    finish() {
+        if (!this.terminal)
+            throw createInterruptedStreamError(this.providerName);
+
+        if (!extractOpenAiText(this.response) && this.textParts.length > 0)
+            this.response.output_text = this.textParts.join('');
+
+        return this.response;
+    }
+}
+
+class ChatCompletionStreamState {
+    constructor(providerName) {
+        this.providerName = providerName;
+        this.response = {
+            choices: [{
+                message: { content: '', reasoning_content: '', tool_calls: [] },
+                finish_reason: '',
+            }],
+        };
+        this.textParts = [];
+        this.reasoningParts = [];
+        this.toolCallParts = [];
+        this.functionCallParts = null;
+        this.receivedCompleteResponse = false;
+        this.terminal = false;
+    }
+
+    push(event, done = false) {
+        const deltas = [];
+
+        if (done) {
+            this.terminal = true;
+            return deltas;
+        }
+
+        const error = streamEventError(this.providerName, event);
+
+        if (error)
+            throw error;
+
+        if (event?.choices?.[0]?.message) {
+            this.response = event;
+            this.receivedCompleteResponse = true;
+            this.terminal = true;
+            return deltas;
+        }
+
+        if (event?.usage)
+            this.response.usage = event.usage;
+
+        if (Array.isArray(event?.web_search))
+            this.response.web_search = event.web_search;
+
+        const choice = event?.choices?.[0];
+
+        if (!choice)
+            return deltas;
+
+        const targetChoice = this.response.choices[0];
+        const delta = choice.delta ?? {};
+        const text = streamedText(delta.content);
+        const reasoning = streamedText(
+            delta.reasoning_content ?? delta.reasoning ?? delta.reasoning_summary,
+        );
+
+        this.textParts.push(text);
+        this.reasoningParts.push(reasoning);
+
+        if (text)
+            deltas.push({ type: 'text', text });
+
+        if (reasoning)
+            deltas.push({ type: 'reasoning', text: reasoning });
+
+        for (const [index, toolCall] of (delta.tool_calls ?? []).entries())
+            appendIndexedToolCall(this.toolCallParts, toolCall, index);
+
+        if (delta.function_call) {
+            this.functionCallParts ??= { name: [], arguments: [] };
+            this.functionCallParts.name.push(String(delta.function_call.name ?? ''));
+            this.functionCallParts.arguments.push(String(delta.function_call.arguments ?? ''));
+        }
+
+        if (choice.finish_reason) {
+            targetChoice.finish_reason = choice.finish_reason;
+            this.terminal = true;
+        }
+
+        return deltas;
+    }
+
+    finish() {
+        if (!this.terminal)
+            throw createInterruptedStreamError(this.providerName);
+
+        if (!this.receivedCompleteResponse) {
+            const targetMessage = this.response.choices[0].message;
+            targetMessage.content = this.textParts.join('');
+            targetMessage.reasoning_content = this.reasoningParts.join('');
+            targetMessage.tool_calls = finalizedIndexedToolCalls(this.toolCallParts);
+
+            if (this.functionCallParts) {
+                targetMessage.function_call = {
+                    name: this.functionCallParts.name.join(''),
+                    arguments: this.functionCallParts.arguments.join(''),
+                };
+            }
+        }
+
+        return this.response;
+    }
+}
+
+class AnthropicStreamState {
+    constructor(providerName) {
+        this.providerName = providerName;
+        this.response = { content: [], usage: {} };
+        this.terminal = false;
+        this.textBlocksWithOutput = new Set();
+    }
+
+    _appendTextDelta(index, text, deltas) {
+        if (!text)
+            return;
+
+        const firstDeltaForBlock = !this.textBlocksWithOutput.has(index);
+        const separator = firstDeltaForBlock && this.textBlocksWithOutput.size > 0 ? '\n' : '';
+
+        this.textBlocksWithOutput.add(index);
+        deltas.push({ type: 'text', text: separator + text });
+    }
+
+    _finalizeBlock(block) {
+        if (!block)
+            return;
+
+        if (block._textParts) {
+            block.text = block._textParts.join('');
+            delete block._textParts;
+        }
+
+        if (block._thinkingParts) {
+            block.thinking = block._thinkingParts.join('');
+            delete block._thinkingParts;
+        }
+
+        if (block._signatureParts) {
+            block.signature = block._signatureParts.join('');
+            delete block._signatureParts;
+        }
+
+        if (block._streamedInputParts) {
+            const inputJson = block._streamedInputParts.join('');
+
+            try {
+                block.input = JSON.parse(inputJson || '{}');
+            } catch (_error) {
+                throw createUserVisibleError(`${this.providerName} returned malformed tool input.`);
+            }
+
+            delete block._streamedInputParts;
+        }
+    }
+
+    push(event, done = false) {
+        const deltas = [];
+
+        if (done)
+            return deltas;
+
+        const error = streamEventError(this.providerName, event);
+
+        if (error || event?.type === 'error')
+            throw error ?? createUserVisibleError(`${this.providerName} streaming request failed.`);
+
+        if (event?.type === 'message_start') {
+            this.response = {
+                ...this.response,
+                ...event.message,
+                content: [...(event.message?.content ?? [])],
+                usage: { ...this.response.usage, ...(event.message?.usage ?? {}) },
+            };
+        } else if (event?.type === 'content_block_start') {
+            const block = event.content_block;
+            const text = block?.type === 'text' ? String(block.text ?? '') : '';
+            const reasoning = block?.type === 'thinking' ? String(block.thinking ?? '') : '';
+            const targetBlock = { ...block };
+
+            if (block?.type === 'text') {
+                targetBlock._textParts = [text];
+                targetBlock.text = '';
+            } else if (block?.type === 'thinking') {
+                targetBlock._thinkingParts = [reasoning];
+                targetBlock._signatureParts = [String(block.signature ?? '')];
+                targetBlock.thinking = '';
+                targetBlock.signature = '';
+            }
+
+            this.response.content[event.index] = targetBlock;
+
+            this._appendTextDelta(event.index, text, deltas);
+
+            if (reasoning)
+                deltas.push({ type: 'reasoning', text: reasoning });
+        } else if (event?.type === 'content_block_delta') {
+            const block = this.response.content[event.index] ?? {};
+            const delta = event.delta ?? {};
+
+            if (delta.type === 'text_delta') {
+                const text = String(delta.text ?? '');
+                block._textParts ??= [String(block.text ?? '')];
+                block._textParts.push(text);
+                block.text = '';
+
+                this._appendTextDelta(event.index, text, deltas);
+            } else if (delta.type === 'thinking_delta') {
+                const reasoning = String(delta.thinking ?? '');
+                block._thinkingParts ??= [String(block.thinking ?? '')];
+                block._thinkingParts.push(reasoning);
+                block.thinking = '';
+
+                if (reasoning)
+                    deltas.push({ type: 'reasoning', text: reasoning });
+            } else if (delta.type === 'input_json_delta') {
+                block._streamedInputParts ??= [];
+                block._streamedInputParts.push(String(delta.partial_json ?? ''));
+            } else if (delta.type === 'signature_delta') {
+                block._signatureParts ??= [String(block.signature ?? '')];
+                block._signatureParts.push(String(delta.signature ?? ''));
+                block.signature = '';
+            }
+
+            this.response.content[event.index] = block;
+        } else if (event?.type === 'content_block_stop') {
+            const block = this.response.content[event.index];
+            this._finalizeBlock(block);
+        } else if (event?.type === 'message_delta') {
+            Object.assign(this.response, event.delta ?? {});
+            this.response.usage = { ...this.response.usage, ...(event.usage ?? {}) };
+        } else if (event?.type === 'message_stop') {
+            this.terminal = true;
+        } else if (event?.type === 'message' || (!event?.type && Array.isArray(event?.content))) {
+            this.response = event;
+            this.terminal = true;
+        }
+
+        return deltas;
+    }
+
+    finish() {
+        if (!this.terminal)
+            throw createInterruptedStreamError(this.providerName);
+
+        for (const block of this.response.content ?? [])
+            this._finalizeBlock(block);
+
+        return this.response;
+    }
+}
+
+function appendGeminiPart(parts, part) {
+    const lastPart = parts[parts.length - 1];
+
+    if (typeof part?.text === 'string'
+        && !part.functionCall
+        && !part.function_call
+        && typeof lastPart?.text === 'string'
+        && Boolean(lastPart.thought) === Boolean(part.thought)) {
+        lastPart._textParts ??= [lastPart.text];
+        lastPart._textParts.push(part.text);
+
+        if (part.thoughtSignature ?? part.thought_signature)
+            lastPart.thoughtSignature = part.thoughtSignature ?? part.thought_signature;
+
+        return;
+    }
+
+    parts.push({
+        ...part,
+        ...(typeof part?.text === 'string' ? { _textParts: [part.text] } : {}),
+    });
+}
+
+function finalizeGeminiParts(parts) {
+    for (const part of parts) {
+        if (!part?._textParts)
+            continue;
+
+        part.text = part._textParts.join('');
+        delete part._textParts;
+    }
+}
+
+class GeminiStreamState {
+    constructor(providerName) {
+        this.providerName = providerName;
+        this.response = { candidates: [{ content: { parts: [] } }] };
+        this.terminal = false;
+    }
+
+    push(event, done = false) {
+        const deltas = [];
+
+        if (done)
+            return deltas;
+
+        const error = streamEventError(this.providerName, event);
+
+        if (error)
+            throw error;
+
+        if (event?.usageMetadata)
+            this.response.usageMetadata = event.usageMetadata;
+
+        const candidate = event?.candidates?.[0];
+
+        if (!candidate)
+            return deltas;
+
+        const targetCandidate = this.response.candidates[0];
+        const targetParts = targetCandidate.content.parts;
+
+        for (const part of candidate.content?.parts ?? []) {
+            const text = String(part?.text ?? '');
+
+            if (text)
+                deltas.push({ type: part.thought ? 'reasoning' : 'text', text });
+
+            appendGeminiPart(targetParts, part);
+        }
+
+        for (const [key, value] of Object.entries(candidate)) {
+            if (key !== 'content')
+                targetCandidate[key] = value;
+        }
+
+        if (candidate.finishReason ?? candidate.finish_reason)
+            this.terminal = true;
+
+        return deltas;
+    }
+
+    finish() {
+        if (!this.terminal)
+            throw createInterruptedStreamError(this.providerName);
+
+        finalizeGeminiParts(this.response.candidates?.[0]?.content?.parts ?? []);
+
+        return this.response;
+    }
+}
+
 function normalizeDiscoveredModel(item) {
     const rawId = item?.id ?? item?.name;
 
@@ -2125,12 +3023,21 @@ function normalizeDiscoveredModel(item) {
         item.maxInputTokens,
         item.max_input_tokens,
     ].map(Number).find((tokens) => Number.isFinite(tokens) && tokens > 0);
+    const maxOutputTokens = [
+        item.maxOutputTokens,
+        item.max_output_tokens,
+        item.maxTokens,
+        item.max_tokens,
+        item.outputTokenLimit,
+        item.output_token_limit,
+    ].map(Number).find((tokens) => Number.isFinite(tokens) && tokens > 0);
 
     return {
         id,
         name: String(name).replace(/^models\//, ''),
         description: item.description ?? 'Discovered model.',
         ...(contextWindowTokens ? { contextWindowTokens: Math.round(contextWindowTokens) } : {}),
+        maxOutputTokens: normalizeMaxOutputTokens(maxOutputTokens),
     };
 }
 
@@ -2246,31 +3153,73 @@ class RemoteProvider extends ChatProvider {
     async *streamChat(messages, options = {}) {
         let requestMessages = messages;
         let assistantText = '';
+        let assistantReasoning = '';
         const maxContinuationTurns = normalizeMaxContinuationTurns(options.maxContinuationTurns);
+        const prototype = Object.getPrototypeOf(this);
+        const hasOwnBufferedCompletion = Object.hasOwn(prototype, '_complete');
+        const hasOwnStreamingCompletion = Object.hasOwn(prototype, '_streamComplete');
+        const useStreamingTransport = typeof this._streamComplete === 'function'
+            && (hasOwnStreamingCompletion || !hasOwnBufferedCompletion);
 
         for (let turn = 0; turn <= maxContinuationTurns; turn++) {
             let response;
+            const streamedTextParts = [];
+            const streamedReasoningParts = [];
+            const requestOptions = requestOptionsWithEffectiveOutputBudget(
+                requestMessages,
+                options,
+                this._config,
+            );
 
             for (let reconnectAttempt = 0; ; ) {
+                let emittedResponseContent = false;
+
                 try {
-                    response = normalizeProviderResponse(await this._complete(
-                        requestMessages,
-                        options.model?.id ?? this._config.defaultModelId,
-                        options,
-                    ));
+                    if (useStreamingTransport) {
+                        for await (const chunk of this._streamComplete(
+                            requestMessages,
+                            options.model?.id ?? this._config.defaultModelId,
+                            requestOptions,
+                        )) {
+                            if (chunk?.type === 'response') {
+                                response = normalizeProviderResponse(chunk.response);
+                            } else if (chunk?.type === 'reasoning') {
+                                const reasoning = String(chunk.text ?? '');
+                                streamedReasoningParts.push(reasoning);
+                                emittedResponseContent ||= Boolean(reasoning);
+                                yield { type: 'reasoning', text: reasoning };
+                            } else {
+                                const text = String(chunk?.text ?? chunk ?? '');
+                                streamedTextParts.push(text);
+                                emittedResponseContent ||= Boolean(text);
+
+                                if (text)
+                                    yield text;
+                            }
+                        }
+
+                        if (!response)
+                            throw createUserVisibleError(`${this.name} response stream did not include a final response.`);
+                    } else {
+                        response = normalizeProviderResponse(await this._complete(
+                            requestMessages,
+                            options.model?.id ?? this._config.defaultModelId,
+                            requestOptions,
+                        ));
+                    }
+
                     break;
                 } catch (error) {
-                    // send_and_read_async does not expose response bytes until the
-                    // complete JSON body is available. A dropped TLS connection can
-                    // therefore be replayed safely even after headers were received.
                     const retryableHttpError = isRetryableHttpError(error);
+                    const retryableInterruptedResponse = isRetryableInterruptedResponse(error);
                     const canReplayInterruptedResponse = retryableHttpError
                         || !error?.providerResponseStarted
-                        || isRetryableInterruptedResponse(error);
+                        || retryableInterruptedResponse;
                     const shouldReconnect = reconnectAttempt < MAX_NETWORK_RECONNECTS
                         && !isCancelled(options.cancellable)
+                        && !emittedResponseContent
                         && canReplayInterruptedResponse
-                        && (retryableHttpError || isNetworkError(error));
+                        && (retryableHttpError || retryableInterruptedResponse || isNetworkError(error));
 
                     if (!shouldReconnect)
                         throw error;
@@ -2292,8 +3241,13 @@ class RemoteProvider extends ChatProvider {
                 }
             }
 
+            const streamedText = streamedTextParts.join('');
+            const streamedReasoning = streamedReasoningParts.join('');
+
             if (!response.text
+                && !streamedText
                 && !response.reasoning
+                && !streamedReasoning
                 && !response.usage
                 && response.toolCalls.length === 0
                 && response.serverToolResults.length === 0) {
@@ -2307,12 +3261,37 @@ class RemoteProvider extends ChatProvider {
                 };
             }
 
-            if (response.reasoning) {
+            let turnReasoning;
+
+            if (response.reasoning.startsWith(streamedReasoning)) {
+                const remainingReasoning = response.reasoning.slice(streamedReasoning.length);
+                turnReasoning = streamedReasoning + remainingReasoning;
+
+                if (remainingReasoning) {
+                    yield {
+                        type: 'reasoning',
+                        text: remainingReasoning,
+                    };
+                }
+            } else if (streamedReasoning) {
+                turnReasoning = response.reasoning;
                 yield {
                     type: 'reasoning',
-                    text: response.reasoning,
+                    text: assistantReasoning + response.reasoning,
+                    replace: true,
                 };
+            } else {
+                turnReasoning = response.reasoning;
+
+                if (response.reasoning) {
+                    yield {
+                        type: 'reasoning',
+                        text: response.reasoning,
+                    };
+                }
             }
+
+            assistantReasoning += turnReasoning;
 
             if (response.providerParts.length > 0) {
                 yield {
@@ -2332,20 +3311,48 @@ class RemoteProvider extends ChatProvider {
                 };
             }
 
-            if (response.text) {
-                assistantText += response.text;
-                yield* displayStream(response.text, options.cancellable ?? null);
+            let turnText;
+
+            if (response.text.startsWith(streamedText)) {
+                const remainingText = response.text.slice(streamedText.length);
+                turnText = streamedText + remainingText;
+
+                if (remainingText) {
+                    if (useStreamingTransport)
+                        yield remainingText;
+                    else
+                        yield* displayStream(remainingText, options.cancellable ?? null);
+                }
+            } else if (streamedText) {
+                turnText = response.text;
+                yield {
+                    type: 'text',
+                    text: assistantText + response.text,
+                    replace: true,
+                };
+            } else {
+                turnText = response.text;
+
+                if (response.text) {
+                    if (useStreamingTransport)
+                        yield response.text;
+                    else
+                        yield* displayStream(response.text, options.cancellable ?? null);
+                }
             }
+
+            assistantText += turnText;
 
             if (response.toolCalls.length > 0) {
                 yield {
                     type: 'tool_calls',
                     toolCalls: response.toolCalls,
+                    integrity: response.toolCallIntegrity,
                 };
                 return;
             }
 
-            if (!response.text
+            if (!turnText
                 || !stoppedForMaxOutput(response.finishReason)
                 || turn >= maxContinuationTurns
                 || isCancelled(options.cancellable)) {
@@ -2358,6 +3365,34 @@ class RemoteProvider extends ChatProvider {
 }
 
 export class OpenAiResponsesProvider extends RemoteProvider {
+    async *_streamComplete(messages, modelId, options = {}) {
+        const state = new OpenAiResponsesStreamState(this.name);
+
+        for await (const event of postJsonStream(
+            normalizeUrl(this._config.baseUrl, '/responses'),
+            { Authorization: `Bearer ${getApiKey(this._config)}` },
+            buildOpenAiResponsesBody(messages, modelId, {
+                provider: this._config,
+                model: options.model,
+                tools: options.tools,
+                disableNativeSearch: options.disableNativeSearch,
+                thinkingLevel: options.thinkingLevel,
+                maxOutputTokens: options.maxOutputTokens,
+                stream: true,
+            }),
+            {
+                cancellable: options.cancellable ?? null,
+                providerName: this.name,
+                timeoutSeconds: options.timeoutSeconds,
+            },
+        )) {
+            for (const delta of state.push(event.data, event.done))
+                yield delta;
+        }
+
+        yield { type: 'response', response: extractOpenAiResponse(state.finish(), options) };
+    }
+
     async _complete(messages, modelId, options = {}) {
         const response = await postJson(
             normalizeUrl(this._config.baseUrl, '/responses'),
@@ -2382,6 +3417,34 @@ export class OpenAiResponsesProvider extends RemoteProvider {
 }
 
 export class OpenAiCompatibleChatProvider extends RemoteProvider {
+    async *_streamComplete(messages, modelId, options = {}) {
+        const state = new ChatCompletionStreamState(this.name);
+
+        for await (const event of postJsonStream(
+            normalizeUrl(this._config.baseUrl, this._config.chatPath ?? '/chat/completions'),
+            { Authorization: `Bearer ${getApiKey(this._config)}` },
+            buildOpenAiCompatibleChatBody(messages, modelId, {
+                provider: this._config,
+                model: options.model,
+                tools: options.tools,
+                disableNativeSearch: options.disableNativeSearch,
+                thinkingLevel: options.thinkingLevel,
+                maxOutputTokens: options.maxOutputTokens,
+                stream: true,
+            }),
+            {
+                cancellable: options.cancellable ?? null,
+                providerName: this.name,
+                timeoutSeconds: options.timeoutSeconds,
+            },
+        )) {
+            for (const delta of state.push(event.data, event.done))
+                yield delta;
+        }
+
+        yield { type: 'response', response: extractChatCompletionResponse(state.finish()) };
+    }
+
     async _complete(messages, modelId, options = {}) {
         const response = await postJson(
             normalizeUrl(this._config.baseUrl, this._config.chatPath ?? '/chat/completions'),
@@ -2406,6 +3469,37 @@ export class OpenAiCompatibleChatProvider extends RemoteProvider {
 }
 
 export class AnthropicMessagesProvider extends RemoteProvider {
+    async *_streamComplete(messages, modelId, options = {}) {
+        const state = new AnthropicStreamState(this.name);
+
+        for await (const event of postJsonStream(
+            normalizeUrl(this._config.baseUrl, '/messages'),
+            {
+                'x-api-key': getApiKey(this._config),
+                'anthropic-version': '2023-06-01',
+            },
+            buildAnthropicMessagesBody(messages, modelId, {
+                provider: this._config,
+                model: options.model,
+                tools: options.tools,
+                disableNativeSearch: options.disableNativeSearch,
+                thinkingLevel: options.thinkingLevel,
+                maxOutputTokens: options.maxOutputTokens,
+                stream: true,
+            }),
+            {
+                cancellable: options.cancellable ?? null,
+                providerName: this.name,
+                timeoutSeconds: options.timeoutSeconds,
+            },
+        )) {
+            for (const delta of state.push(event.data, event.done))
+                yield delta;
+        }
+
+        yield { type: 'response', response: extractAnthropicResponse(state.finish()) };
+    }
+
     async _complete(messages, modelId, options = {}) {
         const response = await postJson(
             normalizeUrl(this._config.baseUrl, '/messages'),
@@ -2433,6 +3527,29 @@ export class AnthropicMessagesProvider extends RemoteProvider {
 }
 
 export class GeminiGenerateContentProvider extends RemoteProvider {
+    async *_streamComplete(messages, modelId, options = {}) {
+        const url = `${normalizeUrl(this._config.baseUrl, `/models/${modelId}:streamGenerateContent`)}?alt=sse&key=${encodeURIComponent(getApiKey(this._config))}`;
+        const state = new GeminiStreamState(this.name);
+
+        for await (const event of postJsonStream(url, {}, buildGeminiGenerateContentBody(messages, {
+            provider: this._config,
+            model: options.model,
+            tools: options.tools,
+            disableNativeSearch: options.disableNativeSearch,
+            thinkingLevel: options.thinkingLevel,
+            maxOutputTokens: options.maxOutputTokens,
+        }), {
+            cancellable: options.cancellable ?? null,
+            providerName: this.name,
+            timeoutSeconds: options.timeoutSeconds,
+        })) {
+            for (const delta of state.push(event.data, event.done))
+                yield delta;
+        }
+
+        yield { type: 'response', response: extractGeminiResponse(state.finish()) };
+    }
+
     async _complete(messages, modelId, options = {}) {
         const url = `${normalizeUrl(this._config.baseUrl, `/models/${modelId}:generateContent`)}?key=${encodeURIComponent(getApiKey(this._config))}`;
         const response = await postJson(url, {}, buildGeminiGenerateContentBody(messages, {

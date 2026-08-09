@@ -13,6 +13,7 @@ import {
     extractAnthropicUsage,
     extractAnthropicFinishReason,
     extractChatCompletionFinishReason,
+    extractChatCompletionResponse,
     extractChatCompletionReasoning,
     extractChatCompletionText,
     extractChatCompletionToolCalls,
@@ -29,13 +30,21 @@ import {
     extractGeminiServerToolResults,
     extractOpenAiFinishReason,
     extractOpenAiReasoning,
+    extractOpenAiResponse,
     extractOpenAiText,
     extractOpenAiToolCalls,
     extractOpenAiUsage,
     extractOpenAiServerToolResults,
+    openAiCompatibleMessages,
+    openAiMessages,
     OpenAiCompatibleChatProvider,
 } from '../src/providers/remoteProvider.js';
 import { createMessage } from '../src/providers/provider.js';
+import {
+    estimateRequestInputTokens,
+    isOutputCapacityError,
+    resolveEffectiveMaxOutputTokens,
+} from '../src/providers/outputLimits.js';
 
 function assertEqual(actual, expected, label) {
     if (actual !== expected)
@@ -190,7 +199,7 @@ assertEqual(openAiBody.model, 'gpt-test', 'OpenAI model');
 assertEqual(openAiBody.input.length, 4, 'OpenAI filtered message count');
 assertEqual(openAiBody.input[0].role, 'developer', 'OpenAI system role');
 assertEqual(openAiBody.input.some((message) => message.content === ''), false, 'OpenAI omitted Agent Mode reasoning messages');
-assertEqual(openAiBody.max_output_tokens, 8192, 'OpenAI default max output tokens');
+assertEqual(openAiBody.max_output_tokens, 16384, 'OpenAI default max output tokens');
 const openAiNativeToolBody = buildOpenAiResponsesBody(nativeToolMessages, 'gpt-test');
 assertEqual(openAiNativeToolBody.input[1].type, 'function_call', 'OpenAI native function call history');
 assertEqual(openAiNativeToolBody.input[2].type, 'function_call_output', 'OpenAI native function result history');
@@ -351,8 +360,25 @@ assertEqual(openAiSvgBody.input[0].content, 'Read this SVG', 'OpenAI SVG attachm
 
 const chatBody = buildOpenAiCompatibleChatBody(messages, 'chat-test');
 assertEqual(chatBody.messages[0].role, 'system', 'OpenAI-compatible system role');
-assertEqual(chatBody.max_tokens, 8192, 'OpenAI-compatible default max tokens');
+assertEqual(chatBody.max_tokens, 16384, 'OpenAI-compatible default max tokens');
 assertEqual(chatBody.stream, false, 'OpenAI-compatible stream flag');
+const strictStreamingChatBody = buildOpenAiCompatibleChatBody(messages, 'chat-test', {
+    stream: true,
+});
+assertEqual(
+    Object.hasOwn(strictStreamingChatBody, 'stream_options'),
+    false,
+    'OpenAI-compatible streaming usage options are opt-in',
+);
+const usageStreamingChatBody = buildOpenAiCompatibleChatBody(messages, 'chat-test', {
+    provider: { supportsStreamUsageOptions: true },
+    stream: true,
+});
+assertEqual(
+    usageStreamingChatBody.stream_options?.include_usage,
+    true,
+    'OpenAI-compatible streaming usage options capability',
+);
 const strictChatHistoryBody = buildOpenAiCompatibleChatBody(emptyAssistantHistoryMessages, 'kimi-test');
 assertEqual(strictChatHistoryBody.messages.length, 3, 'OpenAI-compatible omitted empty assistant history');
 assertEqual(strictChatHistoryBody.messages.some((message) => message.role === 'assistant'), false, 'OpenAI-compatible has no empty assistant messages');
@@ -506,7 +532,7 @@ assertEqual(grokOffThinkingBody.reasoning.effort, 'none', 'Grok disabled reasoni
 const anthropicBody = buildAnthropicMessagesBody(messages, 'claude-test');
 assertEqual(anthropicBody.model, 'claude-test', 'Anthropic model');
 assertEqual(anthropicBody.system, 'Keep answers concise.', 'Anthropic system text');
-assertEqual(anthropicBody.max_tokens, 8192, 'Anthropic default max tokens');
+assertEqual(anthropicBody.max_tokens, 16384, 'Anthropic default max tokens');
 assertEqual(anthropicBody.messages.length, 3, 'Anthropic conversation message count');
 const anthropicImageBody = buildAnthropicMessagesBody(imageMessages, 'claude-test');
 assertEqual(anthropicImageBody.messages[0].content[0].type, 'image', 'Anthropic image part');
@@ -554,6 +580,25 @@ assertEqual(anthropicThinkingBody.output_config.effort, 'low', 'Anthropic output
 assertEqual(hasOwn(anthropicThinkingBody.thinking, 'effort'), false, 'Anthropic effort is not nested in thinking');
 assertEqual(anthropicThinkingBody.thinking.display, 'summarized', 'Anthropic thinking display');
 assertEqual(anthropicThinkingBody.max_tokens, 12288, 'Anthropic custom max tokens');
+let anthropicCapacityError = null;
+
+try {
+    buildAnthropicMessagesBody(messages, 'claude-haiku-test', {
+        model: {
+            thinking: {
+                api: 'anthropic-budget',
+                levels: ['off', 'high'],
+                budgets: { high: 3072 },
+            },
+        },
+        thinkingLevel: 'high',
+        maxOutputTokens: 4000,
+    });
+} catch (error) {
+    anthropicCapacityError = error;
+}
+
+assertEqual(isOutputCapacityError(anthropicCapacityError), true, 'Anthropic thinking respects effective output cap');
 const anthropicXHighThinkingBody = buildAnthropicMessagesBody(messages, 'claude-opus-5', {
     model: {
         thinking: {
@@ -581,7 +626,7 @@ assertEqual(hasOwn(anthropicThinkingOffBody, 'output_config'), false, 'Disabled 
 const geminiBody = buildGeminiGenerateContentBody(messages);
 assertEqual(geminiBody.systemInstruction.parts[0].text, 'Keep answers concise.', 'Gemini system instruction');
 assertEqual(geminiBody.contents[1].role, 'model', 'Gemini assistant role');
-assertEqual(geminiBody.generationConfig.maxOutputTokens, 8192, 'Gemini default max output tokens');
+assertEqual(geminiBody.generationConfig.maxOutputTokens, 16384, 'Gemini default max output tokens');
 const geminiImageBody = buildGeminiGenerateContentBody(imageMessages);
 assertEqual(geminiImageBody.contents[0].parts[0].text, 'Describe this image', 'Gemini image prompt text part');
 assertEqual(geminiImageBody.contents[0].parts[1].inline_data.mime_type, 'image/png', 'Gemini image MIME type');
@@ -738,6 +783,117 @@ const genericChatToolCalls = extractChatCompletionToolCalls({
     }],
 });
 assertEqual(genericChatToolCalls[0].input, '2 + 2', 'Chat tool call generic input extraction');
+
+const malformedChatResponse = extractChatCompletionResponse({
+    choices: [{
+        finish_reason: 'tool_calls',
+        message: {
+            tool_calls: [{
+                id: 'call-malformed',
+                type: 'function',
+                function: { name: 'artifact_create', arguments: '{"content":"unfinished' },
+            }],
+        },
+    }],
+});
+assertEqual(malformedChatResponse.toolCallIntegrity.status, 'malformed', 'Malformed chat tool-call status');
+assertEqual(malformedChatResponse.toolCalls[0].argumentsValid, false, 'Malformed chat arguments validity');
+assertEqual(malformedChatResponse.toolCalls[0].rawArguments, '{"content":"unfinished', 'Malformed chat raw arguments');
+const malformedRuntimeMessages = [
+    createMessage('user', 'Create an artifact'),
+    {
+        ...createMessage('assistant', ''),
+        toolCalls: malformedChatResponse.toolCalls,
+    },
+    {
+        ...createMessage('tool', 'The tool call was incomplete.'),
+        toolCallId: 'call-malformed',
+        toolName: 'artifact_create',
+    },
+];
+assertEqual(
+    openAiMessages(malformedRuntimeMessages)[1].arguments,
+    '{"content":"unfinished',
+    'OpenAI Responses malformed arguments history preservation',
+);
+assertEqual(
+    openAiCompatibleMessages(malformedRuntimeMessages)[1].tool_calls[0].function.arguments,
+    '{"content":"unfinished',
+    'Chat Completions malformed arguments history preservation',
+);
+
+const truncatedChatResponse = extractChatCompletionResponse({
+    choices: [{
+        finish_reason: 'length',
+        message: {
+            tool_calls: [{
+                id: 'call-truncated',
+                type: 'function',
+                function: { name: 'artifact_create', arguments: '{"content":"unfinished' },
+            }],
+        },
+    }],
+});
+assertEqual(truncatedChatResponse.toolCallIntegrity.status, 'truncated', 'Truncated chat tool-call status');
+
+const outputLimitedChatResponse = extractChatCompletionResponse({
+    choices: [{
+        finish_reason: 'length',
+        message: {
+            tool_calls: [{
+                id: 'call-output-limited',
+                type: 'function',
+                function: { name: 'artifact_create', arguments: '{"content":"complete"}' },
+            }],
+        },
+    }],
+});
+assertEqual(outputLimitedChatResponse.toolCallIntegrity.status, 'output_limited', 'Parseable output-limited tool-call status');
+
+const mixedChatResponse = extractChatCompletionResponse({
+    choices: [{
+        finish_reason: 'tool_calls',
+        message: {
+            tool_calls: [{
+                id: 'call-valid-sibling',
+                type: 'function',
+                function: { name: 'calc', arguments: '{"input":"2 + 2"}' },
+            }, {
+                id: 'call-invalid-sibling',
+                type: 'function',
+                function: { name: 'artifact_create', arguments: '{"content":"unfinished' },
+            }],
+        },
+    }],
+});
+assertEqual(mixedChatResponse.toolCallIntegrity.status, 'malformed', 'Mixed chat tool-call status');
+assertEqual(mixedChatResponse.toolCalls.length, 2, 'Mixed chat tool-call preservation');
+
+const unnamedTruncatedChatResponse = extractChatCompletionResponse({
+    choices: [{
+        finish_reason: 'length',
+        message: {
+            tool_calls: [{
+                id: 'call-unnamed',
+                type: 'function',
+                function: { name: '', arguments: '{"content":"unfinished' },
+            }],
+        },
+    }],
+});
+assertEqual(unnamedTruncatedChatResponse.toolCallIntegrity.status, 'truncated', 'Unnamed truncated call status');
+assertEqual(unnamedTruncatedChatResponse.toolCalls.length, 1, 'Unnamed truncated call preservation');
+
+const truncatedOpenAiResponse = extractOpenAiResponse({
+    incomplete_details: { reason: 'max_output_tokens' },
+    output: [{
+        type: 'function_call',
+        call_id: 'call-openai-truncated',
+        name: 'artifact_create',
+        arguments: '{"content":"unfinished',
+    }],
+});
+assertEqual(truncatedOpenAiResponse.toolCallIntegrity.status, 'truncated', 'OpenAI Responses truncated tool-call status');
 assertEqual(extractAnthropicText({ content: [{ type: 'text', text: 'Claude text' }] }), 'Claude text', 'Anthropic extraction');
 assertEqual(extractAnthropicReasoning({ content: [{ type: 'thinking', thinking: 'Claude reasoning' }] }), 'Claude reasoning', 'Anthropic reasoning extraction');
 assertEqual(extractAnthropicFinishReason({ stop_reason: 'max_tokens' }), 'max_tokens', 'Anthropic finish reason extraction');
@@ -868,6 +1024,7 @@ const discoveredModels = extractDiscoveredModels({
 assertEqual(discoveredModels.length, 2, 'Discovered model count');
 assertEqual(discoveredModels[0].id, 'gemini-test', 'Gemini model prefix normalization');
 assertEqual(discoveredModels[0].contextWindowTokens, 1048576, 'Discovered context window normalization');
+assertEqual(discoveredModels[0].maxOutputTokens, 16384, 'Discovered model default output limit');
 
 class ContinuingProvider extends OpenAiCompatibleChatProvider {
     constructor(responses) {
@@ -908,6 +1065,118 @@ assertEqual(
     true,
     'Automatic continuation prompt',
 );
+
+class BudgetCapturingProvider extends OpenAiCompatibleChatProvider {
+    constructor(responses) {
+        super({
+            id: 'budget-capturing',
+            name: 'Budget Capturing Provider',
+            defaultModelId: 'budget-model',
+            baseUrl: 'https://example.invalid',
+            apiKey: 'test',
+            apiFormat: 'openai-chat-completions',
+        });
+        this.responses = [...responses];
+        this.requests = [];
+    }
+
+    async _complete(messagesForRequest, _modelId, options = {}) {
+        this.requests.push({ messages: messagesForRequest, options });
+        return this.responses.shift() ?? { text: 'Done', finishReason: 'stop' };
+    }
+}
+
+const budgetMessages = [createMessage('user', 'x'.repeat(4000))];
+const budgetTools = Array.from({ length: 24 }, (_value, index) => ({
+    name: `large_tool_${index}`,
+    description: 'y'.repeat(1000),
+    inputSchema: {
+        type: 'object',
+        properties: { content: { type: 'string' } },
+    },
+}));
+const budgetModel = {
+    id: 'budget-model',
+    maxOutputTokens: 32768,
+    contextWindowTokens: 20000,
+};
+const budgetProvider = new BudgetCapturingProvider([{ text: 'Budgeted', finishReason: 'stop' }]);
+
+for await (const _chunk of budgetProvider.streamChat(budgetMessages, {
+    model: budgetModel,
+    tools: budgetTools,
+})) {
+    // Collect the provider request options through the test double.
+}
+
+const serializedBudgetTools = buildOpenAiCompatibleChatBody(
+    budgetMessages,
+    budgetModel.id,
+    {
+        provider: budgetProvider._config,
+        model: budgetModel,
+        tools: budgetTools,
+        maxOutputTokens: budgetModel.maxOutputTokens,
+    },
+).tools;
+const serializedToolEstimate = estimateRequestInputTokens([], serializedBudgetTools);
+const expectedBudget = resolveEffectiveMaxOutputTokens({
+    configuredMaxOutputTokens: budgetModel.maxOutputTokens,
+    contextWindowTokens: budgetModel.contextWindowTokens,
+    estimatedInputTokens: estimateRequestInputTokens(budgetMessages, serializedBudgetTools),
+});
+assertEqual(serializedToolEstimate > 4096, true, 'Serialized tool schemas exceed the context reserve');
+assertEqual(budgetProvider.requests[0].options.maxOutputTokens, expectedBudget, 'Provider effective output budget');
+
+const continuationBudgetProvider = new BudgetCapturingProvider([
+    { text: 'Part one ', finishReason: 'length' },
+    { text: 'part two.', finishReason: 'stop' },
+]);
+
+for await (const _chunk of continuationBudgetProvider.streamChat(
+    [createMessage('user', 'Continue'.repeat(400))],
+    {
+        model: {
+            id: 'budget-model',
+            maxOutputTokens: 32768,
+            contextWindowTokens: 17000,
+        },
+        maxContinuationTurns: 1,
+    },
+)) {
+    // The second internal request must include the continuation history in its estimate.
+}
+
+assertEqual(continuationBudgetProvider.requests.length, 2, 'Budgeted continuation request count');
+assertEqual(
+    continuationBudgetProvider.requests[1].options.maxOutputTokens
+        < continuationBudgetProvider.requests[0].options.maxOutputTokens,
+    true,
+    'Continuation output budget is recalculated',
+);
+
+const exhaustedBudgetProvider = new BudgetCapturingProvider([{ text: 'Must not dispatch', finishReason: 'stop' }]);
+let exhaustedBudgetError = null;
+
+try {
+    for await (const _chunk of exhaustedBudgetProvider.streamChat(
+        [createMessage('user', 'No capacity')],
+        {
+            model: {
+                id: 'budget-model',
+                maxOutputTokens: 32768,
+                contextWindowTokens: 4096,
+            },
+        },
+    )) {
+        // A capacity failure should happen before any provider response.
+    }
+} catch (error) {
+    exhaustedBudgetError = error;
+}
+
+assertEqual(isOutputCapacityError(exhaustedBudgetError), true, 'Exhausted context raises capacity error');
+assertEqual(exhaustedBudgetProvider.requests.length, 0, 'Exhausted context prevents provider dispatch');
 
 class ReconnectingProvider extends ContinuingProvider {
     constructor(failuresBeforeSuccess) {

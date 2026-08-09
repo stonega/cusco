@@ -15,7 +15,9 @@ import {
     buildAgentModeSystemPrompt,
     createAgentToolFailurePrompt,
     createAgentToolRuntimeMessages,
+    createNativeToolIntegrityFailureResults,
     createNativeToolRuntimeBatch,
+    decideNativeToolIntegrityRecovery,
     DEFAULT_AGENT_MAX_ITERATIONS,
     isPartialAgentToolCall,
     parseAgentToolCall,
@@ -84,6 +86,7 @@ import { McpManager } from './mcp/manager.js';
 import { ProviderConfigStore } from './providers/config.js';
 import { createImageGenerationTool } from './providers/imageGeneration.js';
 import { getProviderGIcon } from './providers/icons.js';
+import { isOutputCapacityError } from './providers/outputLimits.js';
 import { createMessage } from './providers/provider.js';
 import {
     getThinkingLevelLabel,
@@ -690,6 +693,7 @@ function normalizeProviderChunk(chunk) {
             type: 'tool_calls',
             text: '',
             toolCalls: Array.isArray(chunk.toolCalls) ? chunk.toolCalls : [],
+            toolCallIntegrity: chunk.integrity ?? { status: 'valid', reason: '' },
             usage: null,
         };
 
@@ -722,6 +726,7 @@ function normalizeProviderChunk(chunk) {
     return {
         type: chunk.type === 'reasoning' ? 'reasoning' : 'text',
         text: String(chunk.text ?? chunk.content ?? ''),
+        replace: chunk.replace === true,
         usage: null,
     };
 }
@@ -5969,10 +5974,18 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 shouldSendQueued = ownsActiveTurn && stoppedBeforeAssistantText;
             } else {
                 if (assistantView) {
-                    if (assistantView.hasContent() || assistantView.hasToolResults())
+                    const hadContent = assistantView.hasContent();
+
+                    if (hadContent || assistantView.hasToolResults())
                         assistantView.clear_status();
                     else
                         assistantView.remove();
+
+                    if (hadContent) {
+                        assistantView.persist?.();
+                        this._updateUsageDisplay(conversation);
+                        this._refreshConversationList();
+                    }
                 }
 
                 throw error;
@@ -6005,6 +6018,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         let reasoningText = '';
         let usage = null;
         const toolCalls = [];
+        let toolCallIntegrity = { status: 'valid', reason: '' };
         const serverToolResults = [];
         let providerParts = [];
 
@@ -6029,15 +6043,20 @@ class CuscoWindow extends Adw.ApplicationWindow {
             } else if (normalizedChunk.type === 'usage')
                 usage = normalizedChunk.usage;
             else if (normalizedChunk.type === 'reasoning')
-                reasoningText += normalizedChunk.text;
-            else if (normalizedChunk.type === 'tool_calls')
+                reasoningText = normalizedChunk.replace
+                    ? normalizedChunk.text
+                    : reasoningText + normalizedChunk.text;
+            else if (normalizedChunk.type === 'tool_calls') {
                 toolCalls.push(...normalizedChunk.toolCalls);
-            else if (normalizedChunk.type === 'server_tool_results')
+                toolCallIntegrity = normalizedChunk.toolCallIntegrity;
+            } else if (normalizedChunk.type === 'server_tool_results')
                 serverToolResults.push(...normalizedChunk.serverToolResults);
             else if (normalizedChunk.type === 'provider_context')
                 providerParts = normalizedChunk.providerParts;
             else
-                responseText += normalizedChunk.text;
+                responseText = normalizedChunk.replace
+                    ? normalizedChunk.text
+                    : responseText + normalizedChunk.text;
 
             onChunk?.(responseText, normalizedChunk.text, {
                 type: normalizedChunk.type,
@@ -6045,6 +6064,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 reasoning: reasoningText,
                 usage,
                 toolCalls,
+                toolCallIntegrity,
                 serverToolResults,
                 providerParts,
                 serverToolResultChunk: normalizedChunk.serverToolResults ?? [],
@@ -6061,6 +6081,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 reasoning: reasoningText,
                 usage,
                 toolCalls,
+                toolCallIntegrity,
                 serverToolResults,
                 providerParts,
             };
@@ -6069,16 +6090,34 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     async _collectProviderResponseWithFallback(conversation, providerMessages, cancellable, onChunk = null, collectOptions = {}) {
+        let primaryResponseStarted = false;
+        const trackPrimaryChunk = (text, chunk, state) => {
+            const type = state?.type ?? 'text';
+
+            if ((type === 'reasoning' && Boolean(state?.reasoning))
+                || (type === 'tool_calls' && (state?.toolCalls?.length ?? 0) > 0)
+                || (type === 'server_tool_results' && (state?.serverToolResults?.length ?? 0) > 0)
+                || (type === 'provider_context' && (state?.providerParts?.length ?? 0) > 0)
+                || (type !== 'status' && type !== 'usage' && Boolean(text || chunk))) {
+                primaryResponseStarted = true;
+            }
+
+            onChunk?.(text, chunk, state);
+        };
+
         try {
             return await this._collectProviderResponse(
                 conversation.providerId,
                 conversation.modelId,
                 providerMessages,
                 cancellable,
-                onChunk,
+                trackPrimaryChunk,
                 collectOptions,
             );
         } catch (error) {
+            if (primaryResponseStarted || isOutputCapacityError(error))
+                throw error;
+
             const fallback = this._getProviderFallback(conversation.providerId, error);
 
             if (!fallback.provider)
@@ -6185,7 +6224,17 @@ class CuscoWindow extends Adw.ApplicationWindow {
             });
         };
 
-        for (let iteration = 0; iteration < DEFAULT_AGENT_MAX_ITERATIONS; iteration++) {
+        let ordinaryIterations = 0;
+        let integrityRecoveryUsed = false;
+        let pendingIntegrityRecovery = false;
+
+        while (ordinaryIterations < DEFAULT_AGENT_MAX_ITERATIONS || pendingIntegrityRecovery) {
+            const isIntegrityRecovery = pendingIntegrityRecovery;
+            pendingIntegrityRecovery = false;
+
+            if (!isIntegrityRecovery)
+                ordinaryIterations += 1;
+
             if (isCancellableCancelled(cancellable))
                 return '';
 
@@ -6194,7 +6243,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (addedUserMessages.length > 0)
                 resetAssistantViewAfterPendingMessages();
 
-            if (iteration === 0 || addedUserMessages.length > 0)
+            if (ordinaryIterations === 1 || addedUserMessages.length > 0)
                 setAssistantStatus('Agent is thinking...');
             else
                 clearAssistantStatus();
@@ -6264,6 +6313,35 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     id: String(nativeToolCall.id ?? '').trim()
                         || `cusco_${GLib.uuid_string_random().replaceAll('-', '')}`,
                 }));
+                const integrityDecision = decideNativeToolIntegrityRecovery(
+                    runtimeNativeToolCalls,
+                    responseState.toolCallIntegrity,
+                    { recoveryUsed: integrityRecoveryUsed },
+                );
+
+                if (integrityDecision.action === 'stop') {
+                    const message = createMessage('system', integrityDecision.userMessage);
+                    this._conversations.appendMessage(conversation.id, message);
+                    this._addMessageIfActiveConversation(conversation.id, message);
+                    return integrityDecision.userMessage;
+                }
+
+                if (integrityDecision.action === 'retry') {
+                    const failureResults = createNativeToolIntegrityFailureResults(
+                        runtimeNativeToolCalls,
+                        integrityDecision.integrity,
+                    );
+                    runtimeMessages.push(...createNativeToolRuntimeBatch(
+                        responseText,
+                        runtimeNativeToolCalls,
+                        failureResults,
+                        { providerParts: responseState.providerParts },
+                    ));
+                    integrityRecoveryUsed = true;
+                    pendingIntegrityRecovery = true;
+                    setAssistantStatus('Agent is retrying an incomplete tool call...');
+                    continue;
+                }
 
                 for (const runtimeNativeToolCall of runtimeNativeToolCalls) {
                     const runtimeToolCallText = responseText;
@@ -9908,6 +9986,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     hexpand: true,
                     codeMinWidth: 380,
                     selectable: !isStreamingAssistant,
+                    streaming: isStreamingAssistant,
                 }));
                 reasoningContent.add_css_class('cusco-message-bubble');
                 reasoningContent.add_css_class('cusco-message-assistant');
@@ -9950,6 +10029,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             references: messageReferences,
             referenceStyles: this._composerReferenceStyles(),
             selectable: !isStreamingAssistant && !animateWelcomeMessage,
+            streaming: isStreamingAssistant,
         }));
 
         if (messageReferences.length > 0)
@@ -10072,8 +10152,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
             start_working: startWorking,
             finish_working: finishWorking,
             finish_stream: () => {
-                bodyContent.setSelectable(true);
-                reasoningContent?.setSelectable(true);
+                bodyContent.finishStreaming?.({ selectable: true });
+                reasoningContent?.finishStreaming?.({ selectable: true });
             },
             set_reasoning: (text) => {
                 if (!reasoningExpander)

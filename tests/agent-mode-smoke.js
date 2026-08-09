@@ -3,13 +3,16 @@ import {
     createAgentToolFailurePrompt,
     createAgentToolResultPrompt,
     createAgentToolRuntimeMessages,
+    createNativeToolIntegrityFailureResults,
     createNativeToolRuntimeBatch,
+    decideNativeToolIntegrityRecovery,
     DEFAULT_AGENT_MAX_ITERATIONS,
     formatAgentToolCall,
     isPartialAgentToolCall,
     parseAgentToolCall,
     pruneComputerUseObservationImages,
 } from '../src/chat/agentMode.js';
+import { CuscoWindow } from '../src/window.js';
 import { createToolPermissionDecision, TOOL_PERMISSION_DENY } from '../src/tools/permissions.js';
 import { createAskUserTool } from '../src/tools/askUser.js';
 import { ToolManager } from '../src/tools/tools.js';
@@ -301,6 +304,231 @@ if (parallelRuntimeBatch.length !== 3
     || parallelRuntimeBatch[1].role !== 'tool'
     || parallelRuntimeBatch[2].role !== 'tool') {
     throw new Error('Parallel native tool calls were not preserved as one assistant turn');
+}
+
+const invalidNativeBatch = [{
+    id: 'call-invalid-json',
+    name: 'artifact_create',
+    input: '',
+    rawArguments: '{"content":"unfinished',
+    argumentsValid: false,
+}, {
+    id: 'call-valid-sibling',
+    name: 'calc',
+    input: '2 + 2',
+    rawArguments: '{"input":"2 + 2"}',
+    argumentsValid: true,
+}];
+const truncatedIntegrity = {
+    status: 'truncated',
+    reason: 'max_output_with_incomplete_tool_call',
+};
+const firstIntegrityDecision = decideNativeToolIntegrityRecovery(
+    invalidNativeBatch,
+    truncatedIntegrity,
+    { recoveryUsed: false },
+);
+const repeatedIntegrityDecision = decideNativeToolIntegrityRecovery(
+    invalidNativeBatch,
+    truncatedIntegrity,
+    { recoveryUsed: true },
+);
+const integrityFailureResults = createNativeToolIntegrityFailureResults(
+    invalidNativeBatch,
+    truncatedIntegrity,
+);
+
+if (firstIntegrityDecision.action !== 'retry'
+    || !firstIntegrityDecision.userMessage.includes('smaller')
+    || repeatedIntegrityDecision.action !== 'stop'
+    || !repeatedIntegrityDecision.userMessage.includes('repeatedly')) {
+    throw new Error('Native tool integrity retry policy was not bounded');
+}
+
+if (integrityFailureResults.length !== 2
+    || integrityFailureResults.some((message) => message.role !== 'tool')
+    || !integrityFailureResults[0].content.includes('output limit')
+    || !integrityFailureResults[1].content.includes('not executed')
+    || !integrityFailureResults[1].content.includes('reissue')) {
+    throw new Error('Native tool integrity failure results were not classified per call');
+}
+
+function createAgentIntegrityWindow(responses) {
+    const providerCalls = [];
+    const createdRequests = [];
+    const runRequests = [];
+    const systemMessages = [];
+    const view = {
+        set_status() {},
+        clear_status() {},
+        set_usage() {},
+    };
+    const window = {
+        _tools: {
+            listTools() {
+                return [];
+            },
+        },
+        _drainPendingUserMessagesForRuntime() {
+            return [];
+        },
+        _appendOrUpdateAgentReasoningSegment() {
+            return null;
+        },
+        _parseAgentToolCallForRuntime() {
+            return null;
+        },
+        async _collectProviderResponseWithFallback(_conversation, runtimeMessages) {
+            providerCalls.push(runtimeMessages.map((message) => ({ ...message })));
+            return responses.shift() ?? {
+                text: 'Done',
+                reasoning: '',
+                toolCalls: [],
+                toolCallIntegrity: { status: 'valid', reason: '' },
+                providerParts: [],
+            };
+        },
+        _createAgentToolRequest(toolCall) {
+            createdRequests.push(toolCall);
+            return { id: toolCall.id, name: toolCall.name, input: toolCall.input };
+        },
+        async _runAgentToolRequest(request, _responseText, _conversation, runtimeMessages) {
+            runRequests.push(request);
+            runtimeMessages.push({
+                role: 'tool',
+                content: 'ok',
+                toolCallId: request.id,
+                toolName: request.name,
+            });
+            return true;
+        },
+        _conversations: {
+            appendMessage(_conversationId, message) {
+                systemMessages.push(message);
+            },
+        },
+        _addMessageIfActiveConversation() {},
+    };
+
+    return {
+        window,
+        providerCalls,
+        createdRequests,
+        runRequests,
+        systemMessages,
+        assistantViewState: { view, workingStartedAt: 0 },
+    };
+}
+
+const recoveredIntegrityRun = createAgentIntegrityWindow([
+    {
+        text: '',
+        reasoning: '',
+        toolCalls: invalidNativeBatch,
+        toolCallIntegrity: truncatedIntegrity,
+        providerParts: [],
+    },
+    {
+        text: 'Recovered without a tool.',
+        reasoning: '',
+        toolCalls: [],
+        toolCallIntegrity: { status: 'valid', reason: '' },
+        providerParts: [],
+    },
+]);
+const recoveredIntegrityText = await CuscoWindow.prototype._runAgentModeResponse.call(
+    recoveredIntegrityRun.window,
+    { id: 'conversation-integrity' },
+    [{ role: 'user', content: 'Create the artifact' }],
+    recoveredIntegrityRun.assistantViewState,
+    null,
+);
+
+if (recoveredIntegrityText !== 'Recovered without a tool.'
+    || recoveredIntegrityRun.providerCalls.length !== 2
+    || recoveredIntegrityRun.createdRequests.length !== 0
+    || recoveredIntegrityRun.runRequests.length !== 0
+    || recoveredIntegrityRun.providerCalls[1].filter((message) => message.role === 'tool').length !== 2) {
+    throw new Error('First invalid native batch did not recover without tool side effects');
+}
+
+const repeatedIntegrityRun = createAgentIntegrityWindow([
+    {
+        text: '',
+        reasoning: '',
+        toolCalls: invalidNativeBatch,
+        toolCallIntegrity: truncatedIntegrity,
+        providerParts: [],
+    },
+    {
+        text: '',
+        reasoning: '',
+        toolCalls: invalidNativeBatch,
+        toolCallIntegrity: truncatedIntegrity,
+        providerParts: [],
+    },
+]);
+
+await CuscoWindow.prototype._runAgentModeResponse.call(
+    repeatedIntegrityRun.window,
+    { id: 'conversation-integrity-repeat' },
+    [{ role: 'user', content: 'Create the artifact' }],
+    repeatedIntegrityRun.assistantViewState,
+    null,
+);
+
+if (repeatedIntegrityRun.providerCalls.length !== 2
+    || repeatedIntegrityRun.createdRequests.length !== 0
+    || repeatedIntegrityRun.runRequests.length !== 0
+    || repeatedIntegrityRun.systemMessages.length !== 1
+    || !repeatedIntegrityRun.systemMessages[0].content.includes('repeatedly')) {
+    throw new Error('Repeated invalid native batch did not stop deterministically');
+}
+
+const finalIterationResponses = Array.from(
+    { length: DEFAULT_AGENT_MAX_ITERATIONS - 1 },
+    (_value, index) => ({
+        text: '',
+        reasoning: '',
+        toolCalls: [{
+            id: `call-valid-${index}`,
+            name: 'calc',
+            input: '2 + 2',
+            argumentsValid: true,
+        }],
+        toolCallIntegrity: { status: 'valid', reason: '' },
+        providerParts: [],
+    }),
+);
+finalIterationResponses.push(
+    {
+        text: '',
+        reasoning: '',
+        toolCalls: invalidNativeBatch,
+        toolCallIntegrity: truncatedIntegrity,
+        providerParts: [],
+    },
+    {
+        text: 'Recovered on the dedicated slot.',
+        reasoning: '',
+        toolCalls: [],
+        toolCallIntegrity: { status: 'valid', reason: '' },
+        providerParts: [],
+    },
+);
+const finalIterationRun = createAgentIntegrityWindow(finalIterationResponses);
+const finalIterationText = await CuscoWindow.prototype._runAgentModeResponse.call(
+    finalIterationRun.window,
+    { id: 'conversation-integrity-final-slot' },
+    [{ role: 'user', content: 'Use tools repeatedly' }],
+    finalIterationRun.assistantViewState,
+    null,
+);
+
+if (finalIterationText !== 'Recovered on the dedicated slot.'
+    || finalIterationRun.providerCalls.length !== DEFAULT_AGENT_MAX_ITERATIONS + 1
+    || finalIterationRun.createdRequests.length !== DEFAULT_AGENT_MAX_ITERATIONS - 1) {
+    throw new Error('Integrity recovery did not retain a slot after the final ordinary iteration');
 }
 
 print('Cusco Agent Mode smoke passed');
