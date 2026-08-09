@@ -33,6 +33,7 @@ gjs -m tests/attachments-smoke.js
 gjs -m tests/markdown-smoke.js
 gjs -m tests/message-view-smoke.js
 gjs -m tests/usage-smoke.js
+gjs -m tests/usage-page-smoke.js
 gjs -m tests/compaction-smoke.js
 gjs -m tests/composer-readline-smoke.js
 gjs -m tests/hooks-smoke.js
