@@ -2,6 +2,7 @@ import {
     estimateConversationUsage,
     estimateTokenCount,
     summarizeConversationStatistics,
+    summarizeUsageDashboard,
 } from '../src/chat/usage.js';
 
 if (estimateTokenCount('') !== 0)
@@ -91,5 +92,88 @@ const totalOnlyStatistics = summarizeConversationStatistics([{
 
 if (totalOnlyStatistics.totalTokens !== 42)
     throw new Error(`Total-only usage was lost: ${JSON.stringify(totalOnlyStatistics)}`);
+
+const localTimestamp = (year, month, day, hour = 12) => (
+    new Date(year, month - 1, day, hour).toISOString()
+);
+const dashboard = summarizeUsageDashboard([
+    {
+        id: 'chat-openai',
+        providerId: 'openai',
+        modelId: 'gpt-5',
+        messages: [
+            {
+                role: 'assistant',
+                createdAt: localTimestamp(2026, 8, 9, 5),
+                usage: {
+                    inputTokens: 120,
+                    cachedInputTokens: 80,
+                    outputTokens: 30,
+                    totalTokens: 150,
+                },
+            },
+            {
+                role: 'assistant',
+                createdAt: localTimestamp(2026, 8, 8, 5),
+                usage: {
+                    inputTokens: 50,
+                    outputTokens: 10,
+                    totalTokens: 60,
+                    providerId: 'anthropic',
+                    modelId: 'claude-sonnet',
+                },
+            },
+            {
+                role: 'assistant',
+                createdAt: localTimestamp(2026, 7, 1, 5),
+                usage: {
+                    inputTokens: 999,
+                    outputTokens: 999,
+                    totalTokens: 1998,
+                },
+            },
+        ],
+    },
+    {
+        id: 'chat-unreported',
+        providerId: 'gemini',
+        modelId: 'gemini-pro',
+        messages: [{
+            role: 'assistant',
+            createdAt: localTimestamp(2026, 8, 7, 5),
+            content: 'No provider usage metadata',
+        }],
+    },
+], {
+    days: 7,
+    now: new Date(2026, 7, 9, 12),
+});
+
+if (dashboard.days !== 7
+    || dashboard.daily.length !== 7
+    || dashboard.totalTokens !== 210
+    || dashboard.inputTokens !== 170
+    || dashboard.cachedInputTokens !== 80
+    || dashboard.uncachedInputTokens !== 90
+    || dashboard.outputTokens !== 40
+    || dashboard.reportedMessages !== 2
+    || dashboard.assistantMessages !== 3
+    || dashboard.conversationCount !== 2) {
+    throw new Error(`Unexpected dashboard totals: ${JSON.stringify(dashboard)}`);
+}
+
+if (dashboard.breakdown.length !== 2
+    || dashboard.breakdown[0].providerId !== 'openai'
+    || dashboard.breakdown[0].totalTokens !== 150
+    || dashboard.breakdown[1].providerId !== 'anthropic'
+    || dashboard.breakdown[1].totalTokens !== 60) {
+    throw new Error(`Unexpected dashboard breakdown: ${JSON.stringify(dashboard.breakdown)}`);
+}
+
+if (dashboard.daily.at(-1).date !== '2026-08-09'
+    || dashboard.daily.at(-1).totalTokens !== 150
+    || dashboard.daily.at(-2).totalTokens !== 60) {
+    throw new Error(`Unexpected dashboard daily series: ${JSON.stringify(dashboard.daily)}`);
+}
 
 print('Cusco usage smoke passed');

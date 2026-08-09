@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Added a Usage dashboard with selectable date ranges, daily token activity, cache and output metrics, reporting coverage, and provider/model breakdowns.
+
 ### Fixed
 
 - Retried provider requests that receive HTTP 408 responses instead of ending the chat immediately.

@@ -636,6 +636,21 @@ export class ConversationManager {
         return this._conversationLoadErrors.get(conversationId) ?? null;
     }
 
+    retryConversationLoad(conversationId) {
+        const conversation = this.getConversation(conversationId);
+
+        if (!conversation || !this.conversationLoadError(conversationId))
+            return conversation;
+
+        const messages = this._loadConversationMessages(conversationId);
+
+        if (messages === null)
+            return null;
+
+        conversation.messages = messages;
+        return conversation;
+    }
+
     _moveToTop(conversationId) {
         const index = this._conversations.findIndex((conversation) => conversation.id === conversationId);
 
