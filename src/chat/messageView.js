@@ -12,6 +12,7 @@ import {
     inlineMarkdownToPangoMarkup,
     markdownToPangoMarkup,
     parseMarkdownBlocks,
+    stabilizeStreamingMarkdown,
 } from './markdown.js';
 import {
     getCodeThemeStyleScheme,
@@ -35,6 +36,10 @@ const LANGUAGE_ALIASES = {
 };
 const DEFAULT_CODE_MIN_WIDTH = 360;
 const CONTENT_UPDATE_INTERVAL_MS = 33;
+const LONG_CONTENT_UPDATE_INTERVAL_MS = 100;
+const VERY_LONG_CONTENT_UPDATE_INTERVAL_MS = 250;
+const LONG_CONTENT_THRESHOLD = 25_000;
+const VERY_LONG_CONTENT_THRESHOLD = 100_000;
 const SYNTAX_HIGHLIGHT_INTERVAL_MS = 16;
 const ARTIFACT_PREVIEW_WIDTH = 360;
 const ARTIFACT_PREVIEW_HEIGHT = 240;
@@ -47,6 +52,16 @@ const PENDING_ARTIFACT_PREVIEW_LOADS = new Map();
 const PENDING_ARTIFACT_TEXTURES = [];
 let syntaxHighlightSourceId = 0;
 let artifactTextureSourceId = 0;
+
+function contentUpdateInterval(body) {
+    if (body.length >= VERY_LONG_CONTENT_THRESHOLD)
+        return VERY_LONG_CONTENT_UPDATE_INTERVAL_MS;
+
+    if (body.length >= LONG_CONTENT_THRESHOLD)
+        return LONG_CONTENT_UPDATE_INTERVAL_MS;
+
+    return CONTENT_UPDATE_INTERVAL_MS;
+}
 
 export function setLoadedPicturePaintable(picture, paintable) {
     // Cache hits can complete while a newly constructed picture is still parentless.
@@ -747,11 +762,14 @@ function createCodeBlock(block, options) {
 export function renderMessageContent(container, body, options = {}) {
     clearBox(container);
     const renderedArtifacts = new Set();
+    const renderedBody = options.streaming
+        ? stabilizeStreamingMarkdown(body)
+        : body;
     const artifactKey = (artifact) => artifact?.artifactId
         ? `${artifact.artifactId}/${artifact.revisionId}`
         : artifact?.id ?? artifact?.path ?? artifact;
 
-    for (const [index, block] of parseMarkdownBlocks(body).entries()) {
+    for (const [index, block] of parseMarkdownBlocks(renderedBody).entries()) {
         if (block.type === 'code') {
             const artifact = artifactForCodeBlock(options.artifacts, index, block);
 
@@ -827,7 +845,7 @@ export function createMessageContent(body, options = {}) {
 
         renderSourceId = GLib.timeout_add(
             GLib.PRIORITY_DEFAULT,
-            CONTENT_UPDATE_INTERVAL_MS,
+            contentUpdateInterval(currentBody),
             () => {
                 renderSourceId = 0;
                 render();
@@ -847,6 +865,19 @@ export function createMessageContent(body, options = {}) {
             return;
 
         renderingOptions.selectable = normalizedSelectable;
+        cancelQueuedRender();
+        render(true);
+    };
+    container.finishStreaming = (finishOptions = {}) => {
+        const selectable = finishOptions.selectable === undefined
+            ? renderingOptions.selectable
+            : Boolean(finishOptions.selectable);
+
+        if (!renderingOptions.streaming && renderingOptions.selectable === selectable)
+            return;
+
+        renderingOptions.streaming = false;
+        renderingOptions.selectable = selectable;
         cancelQueuedRender();
         render(true);
     };

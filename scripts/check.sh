@@ -33,6 +33,7 @@ gjs -m tests/attachments-smoke.js
 gjs -m tests/markdown-smoke.js
 gjs -m tests/message-view-smoke.js
 gjs -m tests/usage-smoke.js
+gjs -m tests/usage-page-smoke.js
 gjs -m tests/compaction-smoke.js
 gjs -m tests/composer-readline-smoke.js
 gjs -m tests/hooks-smoke.js
@@ -44,6 +45,7 @@ gjs -m tests/image-editor-window-smoke.js
 gjs -m tests/tools-smoke.js
 gjs -m tests/cron-smoke.js
 gjs -m tests/window-background-sync-smoke.js
+gjs -m tests/window-provider-fallback-smoke.js
 gjs -m tests/agent-mode-smoke.js
 gjs -m tests/ask-user-smoke.js
 gjs -m tests/accessibility-smoke.js
@@ -61,6 +63,7 @@ gjs -m tests/archived-chats-smoke.js
 gjs -m tests/chat-management-smoke.js
 gjs -m tests/conversation-store-smoke.js
 gjs -m tests/provider-config-smoke.js
+gjs -m tests/output-limits-smoke.js
 gjs -m tests/remote-provider-adapters-smoke.js
 gjs -m tests/remote-provider-http-smoke.js
 gjs -m tests/provider-settings-smoke.js

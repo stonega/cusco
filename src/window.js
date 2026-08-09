@@ -15,7 +15,9 @@ import {
     buildAgentModeSystemPrompt,
     createAgentToolFailurePrompt,
     createAgentToolRuntimeMessages,
+    createNativeToolIntegrityFailureResults,
     createNativeToolRuntimeBatch,
+    decideNativeToolIntegrityRecovery,
     DEFAULT_AGENT_MAX_ITERATIONS,
     isPartialAgentToolCall,
     parseAgentToolCall,
@@ -51,6 +53,7 @@ import {
 import {
     estimateConversationUsage,
     summarizeConversationStatistics,
+    summarizeUsageDashboard,
 } from './chat/usage.js';
 import {
     createWelcomeMessage,
@@ -83,6 +86,7 @@ import { McpManager } from './mcp/manager.js';
 import { ProviderConfigStore } from './providers/config.js';
 import { createImageGenerationTool } from './providers/imageGeneration.js';
 import { getProviderGIcon } from './providers/icons.js';
+import { isOutputCapacityError } from './providers/outputLimits.js';
 import { createMessage } from './providers/provider.js';
 import {
     getThinkingLevelLabel,
@@ -121,6 +125,7 @@ const ATTACHMENT_ICON_FILE = 'attachment-symbolic.svg';
 const PROMPT_ICON_FILE = 'prompt-symbolic.svg';
 const MORE_VERTICAL_ICON_FILE = 'more-vertical-symbolic.svg';
 const QUEUED_ICON_FILE = 'queued-symbolic.svg';
+const USAGE_ICON_FILE = 'usage-symbolic.svg';
 const EMPTY_STATE_IMAGE_DARK = 'machupicchu_dark.png';
 const EMPTY_STATE_IMAGE_LIGHT = 'machupicchu_light.png';
 const EMPTY_STATE_FRAME_WIDTH_RATIO = 1 / 3;
@@ -340,6 +345,74 @@ function drawContextUsageChart(cr, width, height, fraction, color) {
     }
 
     cr.restore();
+}
+
+function drawDailyUsageChart(cr, width, height, daily, color) {
+    const values = Array.isArray(daily)
+        ? daily.map((entry) => Math.max(0, Number(entry?.totalTokens) || 0))
+        : [];
+    const padding = { top: 14, right: 8, bottom: 10, left: 8 };
+    const chartWidth = Math.max(1, width - padding.left - padding.right);
+    const chartHeight = Math.max(1, height - padding.top - padding.bottom);
+    const baseline = padding.top + chartHeight;
+    const maximum = Math.max(1, ...values);
+
+    cr.save();
+    cr.setLineWidth(1);
+    cr.setSourceRGBA(color.red, color.green, color.blue, color.alpha * 0.12);
+
+    for (let index = 0; index <= 3; index += 1) {
+        const y = padding.top + ((chartHeight / 3) * index);
+        cr.moveTo(padding.left, y);
+        cr.lineTo(padding.left + chartWidth, y);
+    }
+    cr.stroke();
+
+    if (values.length === 0 || values.every((value) => value === 0)) {
+        cr.restore();
+        return;
+    }
+
+    const pointFor = (value, index) => ({
+        x: padding.left + (values.length === 1
+            ? chartWidth / 2
+            : (chartWidth * index) / (values.length - 1)),
+        y: baseline - ((value / maximum) * chartHeight),
+    });
+    const points = values.map(pointFor);
+
+    cr.moveTo(points[0].x, baseline);
+    for (const point of points)
+        cr.lineTo(point.x, point.y);
+    cr.lineTo(points.at(-1).x, baseline);
+    cr.closePath();
+    cr.setSourceRGBA(color.red, color.green, color.blue, color.alpha * 0.16);
+    cr.fill();
+
+    cr.setLineWidth(2);
+    cr.setLineJoin(Cairo.LineJoin.ROUND);
+    cr.setLineCap(Cairo.LineCap.ROUND);
+    cr.moveTo(points[0].x, points[0].y);
+    for (const point of points.slice(1))
+        cr.lineTo(point.x, point.y);
+    cr.setSourceRGBA(color.red, color.green, color.blue, Math.max(0.72, color.alpha));
+    cr.stroke();
+    cr.restore();
+}
+
+const USAGE_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+});
+
+function formatUsageDate(date) {
+    const parsed = new Date(`${date}T00:00:00.000Z`);
+
+    if (!Number.isFinite(parsed.getTime()))
+        return '';
+
+    return USAGE_DATE_FORMATTER.format(parsed);
 }
 
 let knotIconPath = null;
@@ -620,6 +693,7 @@ function normalizeProviderChunk(chunk) {
             type: 'tool_calls',
             text: '',
             toolCalls: Array.isArray(chunk.toolCalls) ? chunk.toolCalls : [],
+            toolCallIntegrity: chunk.integrity ?? { status: 'valid', reason: '' },
             usage: null,
         };
 
@@ -652,6 +726,7 @@ function normalizeProviderChunk(chunk) {
     return {
         type: chunk.type === 'reasoning' ? 'reasoning' : 'text',
         text: String(chunk.text ?? chunk.content ?? ''),
+        replace: chunk.replace === true,
         usage: null,
     };
 }
@@ -1069,6 +1144,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._legacyArtifactMigrationIds = new Set();
         this._conversationLoadErrorToastIds = new Set();
         this._usageDisplaySourceId = 0;
+        this._usageRefreshSourceId = 0;
         this._pendingUsageConversationId = null;
         const { provider: defaultProvider, model: defaultModel } = this._providerConfigs.getActiveSelection();
 
@@ -1149,6 +1225,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (this._usageDisplaySourceId) {
                 GLib.Source.remove(this._usageDisplaySourceId);
                 this._usageDisplaySourceId = 0;
+            }
+
+            if (this._usageRefreshSourceId) {
+                GLib.Source.remove(this._usageRefreshSourceId);
+                this._usageRefreshSourceId = 0;
             }
 
             if (this._pendingConversationSendSourceId) {
@@ -1246,6 +1327,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const chatView = new Adw.ToolbarView();
         chatView.add_top_bar(headerBar);
         chatView.set_content(this._createChatSurface());
+        this._primaryStack = new Gtk.Stack({
+            hexpand: true,
+            vexpand: true,
+            hhomogeneous: false,
+            vhomogeneous: false,
+            transition_type: Gtk.StackTransitionType.CROSSFADE,
+            transition_duration: 160,
+        });
+        this._primaryStack.add_named(chatView, 'chat');
+        this._primaryStack.set_visible_child_name('chat');
         this._artifactWorkspace = createArtifactWorkspace({
             artifactManager: this._artifacts,
             artifactRegistry: this._artifactRenderers,
@@ -1256,7 +1347,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             onArtifactChanged: () => this._syncArtifactWorkspaceButton(),
         });
         this._artifactSplitView = new Adw.OverlaySplitView({
-            content: chatView,
+            content: this._primaryStack,
             sidebar: this._artifactWorkspace,
             sidebar_position: Gtk.PackType.END,
             show_sidebar: false,
@@ -1430,6 +1521,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (!conversationId)
                 return;
 
+            this._showChatPage();
             this._conversationSelectionSerial += 1;
             this._selectConversation(conversationId);
             this._renderActiveConversation({ deferIfUncached: true });
@@ -1452,9 +1544,543 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
 
         sidebarContent.append(this._conversationListScroller);
+
+        sidebarContent.append(new Gtk.Separator({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            margin_start: 12,
+            margin_end: 12,
+        }));
+
+        const usageButtonContent = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 10,
+        });
+        usageButtonContent.append(createBundledIcon(USAGE_ICON_FILE, 'view-list-symbolic'));
+        usageButtonContent.append(new Gtk.Label({
+            label: 'Usage',
+            xalign: 0,
+            hexpand: true,
+        }));
+        this._usageNavigationButton = new Gtk.ToggleButton({
+            child: usageButtonContent,
+            hexpand: true,
+            margin_start: 6,
+            margin_end: 6,
+            margin_bottom: 6,
+            tooltip_text: 'Usage',
+        });
+        this._usageNavigationButton.add_css_class('flat');
+        this._usageNavigationButton.add_css_class('cusco-sidebar-destination');
+        this._usageNavigationButton.connect('clicked', () => this._showUsagePage());
+        sidebarContent.append(this._usageNavigationButton);
         sidebar.append(sidebarContent);
 
         return sidebar;
+    }
+
+    _showUsagePage() {
+        this._ensureUsageSurface();
+        this._usageNavigationButton?.set_active(true);
+
+        if (this._primaryStack?.get_visible_child_name() === 'usage')
+            return;
+
+        if (this._artifactSplitView?.get_show_sidebar())
+            this._closeArtifactWorkspace();
+
+        this._conversationSelectionModel?.unselect_all();
+        this._primaryStack?.set_visible_child_name('usage');
+        this._refreshUsageDashboard();
+    }
+
+    _showChatPage() {
+        if (this._usageRefreshSourceId) {
+            GLib.Source.remove(this._usageRefreshSourceId);
+            this._usageRefreshSourceId = 0;
+        }
+
+        this._usageNavigationButton?.set_active(false);
+        this._primaryStack?.set_visible_child_name('chat');
+    }
+
+    _ensureUsageSurface() {
+        if (this._usageSurface)
+            return;
+
+        this._usageSurface = this._createUsageSurface();
+        this._primaryStack.add_named(this._usageSurface, 'usage');
+    }
+
+    _createUsageMetricCard(title) {
+        const card = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 4,
+            hexpand: true,
+            width_request: 175,
+        });
+        card.add_css_class('card');
+        card.add_css_class('cusco-usage-metric-card');
+        const titleLabel = new Gtk.Label({
+            label: title,
+            xalign: 0,
+            ellipsize: Pango.EllipsizeMode.END,
+        });
+        titleLabel.add_css_class('caption');
+        titleLabel.add_css_class('dim-label');
+        const valueLabel = new Gtk.Label({
+            label: '0',
+            xalign: 0,
+            ellipsize: Pango.EllipsizeMode.END,
+        });
+        valueLabel.add_css_class('title-2');
+        valueLabel.add_css_class('cusco-chat-statistics-value');
+        const detailLabel = new Gtk.Label({
+            label: '',
+            xalign: 0,
+            wrap: true,
+        });
+        detailLabel.add_css_class('caption');
+        detailLabel.add_css_class('dim-label');
+        card.append(titleLabel);
+        card.append(valueLabel);
+        card.append(detailLabel);
+        return { card, valueLabel, detailLabel };
+    }
+
+    _createUsageSurface() {
+        this._usagePeriodDays = 30;
+        const toolbarView = new Adw.ToolbarView();
+        const headerBar = new Adw.HeaderBar();
+        this._usageWindowTitle = new Adw.WindowTitle({
+            title: 'Usage',
+            subtitle: 'Last 30 days',
+        });
+        headerBar.set_title_widget(this._usageWindowTitle);
+
+        const periodButtons = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+        });
+        periodButtons.add_css_class('linked');
+        let firstPeriodButton = null;
+
+        for (const days of [7, 30, 90]) {
+            const button = new Gtk.ToggleButton({
+                label: `${days} days`,
+                active: days === this._usagePeriodDays,
+            });
+
+            if (firstPeriodButton)
+                button.set_group(firstPeriodButton);
+            else
+                firstPeriodButton = button;
+
+            button.connect('toggled', () => {
+                if (!button.get_active())
+                    return;
+
+                this._usagePeriodDays = days;
+                this._refreshUsageDashboard();
+            });
+            periodButtons.append(button);
+        }
+
+        const refreshButton = new Gtk.Button({
+            icon_name: 'view-refresh-symbolic',
+            tooltip_text: 'Refresh usage',
+        });
+        refreshButton.connect('clicked', () => this._refreshUsageDashboard());
+        headerBar.pack_end(refreshButton);
+        headerBar.pack_end(periodButtons);
+        toolbarView.add_top_bar(headerBar);
+
+        const content = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 16,
+            margin_top: 24,
+            margin_bottom: 32,
+            margin_start: 24,
+            margin_end: 24,
+        });
+        const overview = new Adw.WrapBox({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            child_spacing: 16,
+            line_spacing: 16,
+            justify: Adw.JustifyMode.FILL,
+            justify_last_line: Adw.JustifyMode.FILL,
+            line_homogeneous: false,
+            wrap_policy: Adw.WrapPolicy.MINIMUM,
+            hexpand: true,
+        });
+
+        const totalCard = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 7,
+            width_request: 245,
+        });
+        totalCard.add_css_class('card');
+        totalCard.add_css_class('cusco-usage-total-card');
+        const totalHeading = new Gtk.Label({
+            label: 'TOTAL TOKENS',
+            xalign: 0,
+        });
+        totalHeading.add_css_class('caption');
+        totalHeading.add_css_class('dim-label');
+        this._usageTotalTokensLabel = new Gtk.Label({
+            label: '0',
+            xalign: 0,
+        });
+        this._usageTotalTokensLabel.add_css_class('title-1');
+        this._usageTotalTokensLabel.add_css_class('cusco-chat-statistics-value');
+        this._usageTotalDetailLabel = new Gtk.Label({
+            label: 'No stored usage',
+            xalign: 0,
+            wrap: true,
+        });
+        this._usageTotalDetailLabel.add_css_class('dim-label');
+        totalCard.append(totalHeading);
+        totalCard.append(this._usageTotalTokensLabel);
+        totalCard.append(this._usageTotalDetailLabel);
+
+        const chartCard = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 8,
+            hexpand: true,
+        });
+        chartCard.add_css_class('card');
+        chartCard.add_css_class('cusco-usage-chart-card');
+        const chartHeading = new Gtk.Label({
+            label: 'Daily tokens',
+            xalign: 0,
+        });
+        chartHeading.add_css_class('heading');
+        this._usageChartData = [];
+        this._usageChart = new Gtk.DrawingArea({
+            hexpand: true,
+            vexpand: true,
+            content_height: 210,
+            content_width: 360,
+            accessible_role: Gtk.AccessibleRole.IMG,
+        });
+        this._usageChart.add_css_class('cusco-usage-chart');
+        this._usageChart.set_draw_func((widget, cr, width, height) => {
+            drawDailyUsageChart(cr, width, height, this._usageChartData, widget.get_color());
+        });
+        const chartDates = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+        });
+        this._usageStartDateLabel = new Gtk.Label({
+            xalign: 0,
+            hexpand: true,
+        });
+        this._usageEndDateLabel = new Gtk.Label({
+            xalign: 1,
+            hexpand: true,
+        });
+        this._usageStartDateLabel.add_css_class('caption');
+        this._usageStartDateLabel.add_css_class('dim-label');
+        this._usageEndDateLabel.add_css_class('caption');
+        this._usageEndDateLabel.add_css_class('dim-label');
+        chartDates.append(this._usageStartDateLabel);
+        chartDates.append(this._usageEndDateLabel);
+        chartCard.append(chartHeading);
+        chartCard.append(this._usageChart);
+        chartCard.append(chartDates);
+        overview.append(totalCard);
+        overview.append(chartCard);
+        content.append(overview);
+
+        const metrics = new Adw.WrapBox({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            child_spacing: 12,
+            line_spacing: 12,
+            justify: Adw.JustifyMode.FILL,
+            justify_last_line: Adw.JustifyMode.FILL,
+            line_homogeneous: true,
+            wrap_policy: Adw.WrapPolicy.MINIMUM,
+            hexpand: true,
+        });
+        this._usageMetricLabels = {};
+        for (const [key, title] of [
+            ['cached', 'Cached input'],
+            ['uncached', 'Uncached input'],
+            ['output', 'Output'],
+            ['coverage', 'Reporting coverage'],
+        ]) {
+            const { card, valueLabel, detailLabel } = this._createUsageMetricCard(title);
+            metrics.append(card);
+            this._usageMetricLabels[key] = { valueLabel, detailLabel };
+        }
+        content.append(metrics);
+
+        const breakdownHeading = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 8,
+            margin_top: 8,
+        });
+        const breakdownTitle = new Gtk.Label({
+            label: 'Breakdown',
+            xalign: 0,
+            hexpand: true,
+        });
+        breakdownTitle.add_css_class('title-3');
+        const breakdownSubtitle = new Gtk.Label({
+            label: 'Provider and model',
+            xalign: 1,
+        });
+        breakdownSubtitle.add_css_class('dim-label');
+        breakdownHeading.append(breakdownTitle);
+        breakdownHeading.append(breakdownSubtitle);
+        content.append(breakdownHeading);
+
+        this._usageBreakdownList = new Gtk.ListBox({
+            selection_mode: Gtk.SelectionMode.NONE,
+        });
+        this._usageBreakdownList.add_css_class('boxed-list');
+        this._usageEmptyLabel = new Gtk.Label({
+            label: 'No provider-reported token usage in this period.',
+            margin_top: 28,
+            margin_bottom: 28,
+            wrap: true,
+            visible: false,
+        });
+        this._usageEmptyLabel.add_css_class('dim-label');
+        content.append(this._usageBreakdownList);
+        content.append(this._usageEmptyLabel);
+
+        this._usageSourceNoteLabel = new Gtk.Label({
+            label: 'Usage is calculated from token metadata stored in local chat history. Historical cost is not estimated because provider pricing can change.',
+            xalign: 0,
+            wrap: true,
+        });
+        this._usageSourceNoteLabel.add_css_class('caption');
+        this._usageSourceNoteLabel.add_css_class('dim-label');
+        content.append(this._usageSourceNoteLabel);
+
+        const clamp = new Adw.Clamp({
+            child: content,
+            maximum_size: 1120,
+            tightening_threshold: 840,
+        });
+        toolbarView.set_content(new Gtk.ScrolledWindow({
+            child: clamp,
+            hscrollbar_policy: Gtk.PolicyType.NEVER,
+            vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+            hexpand: true,
+            vexpand: true,
+        }));
+        return toolbarView;
+    }
+
+    _refreshUsageDashboard() {
+        if (!this._usageTotalTokensLabel || !this._conversations)
+            return;
+
+        if (this._usageRefreshSourceId) {
+            GLib.Source.remove(this._usageRefreshSourceId);
+            this._usageRefreshSourceId = 0;
+        }
+
+        const now = new Date();
+        const startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        startDate.setDate(startDate.getDate() - (this._usagePeriodDays - 1));
+        const cutoff = startDate.getTime();
+        const conversations = this._conversations.allConversations.filter((conversation) => {
+            const updatedAt = Date.parse(conversation?.updatedAt);
+            return !Number.isFinite(updatedAt) || updatedAt >= cutoff;
+        });
+        let conversationIndex = 0;
+        let incompleteConversationCount = 0;
+
+        this._usageTotalTokensLabel.set_label('…');
+        this._usageTotalDetailLabel.set_label('Reading local chat history…');
+
+        const finish = () => {
+            this._usageRefreshSourceId = 0;
+            this._applyUsageDashboard(summarizeUsageDashboard(conversations, {
+                days: this._usagePeriodDays,
+                now,
+            }), { incompleteConversationCount });
+        };
+
+        if (conversations.length === 0) {
+            finish();
+            return;
+        }
+
+        this._usageRefreshSourceId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            const deadline = GLib.get_monotonic_time() + 4000;
+
+            do {
+                const conversation = conversations[conversationIndex];
+
+                if (this._conversations.conversationLoadError(conversation.id))
+                    this._conversations.retryConversationLoad(conversation.id);
+
+                void conversation.messages;
+
+                if (this._conversations.conversationLoadError(conversation.id))
+                    incompleteConversationCount += 1;
+
+                conversationIndex += 1;
+            } while (conversationIndex < conversations.length
+                && GLib.get_monotonic_time() < deadline);
+
+            if (conversationIndex < conversations.length)
+                return GLib.SOURCE_CONTINUE;
+
+            finish();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _applyUsageDashboard(usage, { incompleteConversationCount = 0 } = {}) {
+        const cachedPercentage = usage.inputTokens > 0
+            ? (usage.cachedInputTokens / usage.inputTokens) * 100
+            : 0;
+        const coveragePercentage = usage.assistantMessages > 0
+            ? (usage.reportedMessages / usage.assistantMessages) * 100
+            : 0;
+
+        this._usageWindowTitle?.set_subtitle(
+            `${formatUsageDate(usage.startDate)} – ${formatUsageDate(usage.endDate)}`,
+        );
+        this._usageTotalTokensLabel.set_label(formatStatisticCount(usage.totalTokens));
+        const totalDetails = [
+            formatStatisticNoun(usage.conversationCount, 'conversation'),
+            formatStatisticNoun(usage.totalMessages, 'message'),
+        ];
+
+        if (incompleteConversationCount > 0) {
+            totalDetails.push(
+                `${formatStatisticNoun(incompleteConversationCount, 'chat')} unavailable`,
+            );
+        }
+
+        this._usageTotalDetailLabel.set_label(totalDetails.join(' · '));
+        this._usageMetricLabels.cached.valueLabel.set_label(
+            formatStatisticCount(usage.cachedInputTokens),
+        );
+        this._usageMetricLabels.cached.detailLabel.set_label(
+            `${cachedPercentage.toFixed(1)}% of reported input`,
+        );
+        this._usageMetricLabels.uncached.valueLabel.set_label(
+            formatStatisticCount(usage.uncachedInputTokens),
+        );
+        this._usageMetricLabels.uncached.detailLabel.set_label(
+            `${formatStatisticCount(usage.inputTokens)} total input tokens`,
+        );
+        this._usageMetricLabels.output.valueLabel.set_label(
+            formatStatisticCount(usage.outputTokens),
+        );
+        this._usageMetricLabels.output.detailLabel.set_label(
+            usage.estimatedMessages > 0
+                ? formatStatisticNoun(usage.estimatedMessages, 'estimate')
+                : 'Provider-reported output',
+        );
+        this._usageMetricLabels.coverage.valueLabel.set_label(
+            `${coveragePercentage.toFixed(1)}%`,
+        );
+        this._usageMetricLabels.coverage.detailLabel.set_label(
+            `${formatStatisticCount(usage.reportedMessages)} of ${
+                formatStatisticCount(usage.assistantMessages)
+            } assistant messages`,
+        );
+        this._usageChartData = usage.daily;
+        this._usageChart.queue_draw();
+        const dailyDescription = usage.daily
+            .filter((entry) => entry.totalTokens > 0)
+            .map((entry) => `${formatUsageDate(entry.date)}: ${
+                formatStatisticCount(entry.totalTokens)
+            } tokens`)
+            .join('; ');
+        const chartDescription = dailyDescription
+            ? `Daily token usage. ${dailyDescription}`
+            : 'Daily token usage. No provider-reported tokens in this period.';
+        this._usageChart.set_tooltip_text(chartDescription);
+        this._usageChart.update_property(
+            [Gtk.AccessibleProperty.LABEL],
+            [chartDescription],
+        );
+        this._usageStartDateLabel.set_label(formatUsageDate(usage.startDate));
+        this._usageEndDateLabel.set_label(formatUsageDate(usage.endDate));
+
+        this._clearBox(this._usageBreakdownList);
+
+        for (const entry of usage.breakdown) {
+            const provider = this._providerConfigs.getProvider(entry.providerId);
+            const model = provider?.models.find((candidate) => candidate.id === entry.modelId);
+            const row = new Gtk.ListBoxRow({
+                activatable: false,
+                selectable: false,
+            });
+            const rowContent = new Gtk.Box({
+                orientation: Gtk.Orientation.HORIZONTAL,
+                spacing: 12,
+                margin_top: 10,
+                margin_bottom: 10,
+                margin_start: 12,
+                margin_end: 12,
+            });
+            const icon = new Gtk.Image({
+                gicon: getProviderGIcon(provider ?? entry.providerId),
+                valign: Gtk.Align.CENTER,
+            });
+            icon.set_pixel_size(20);
+            const identity = new Gtk.Box({
+                orientation: Gtk.Orientation.VERTICAL,
+                spacing: 2,
+                hexpand: true,
+            });
+            const name = new Gtk.Label({
+                label: model?.name ?? model?.label ?? entry.modelId,
+                xalign: 0,
+                ellipsize: Pango.EllipsizeMode.END,
+            });
+            const providerLabel = new Gtk.Label({
+                label: `${provider?.name ?? entry.providerId} · ${
+                    formatStatisticCount(entry.inputTokens)
+                } input · ${formatStatisticCount(entry.outputTokens)} output`,
+                xalign: 0,
+                ellipsize: Pango.EllipsizeMode.END,
+            });
+            providerLabel.add_css_class('caption');
+            providerLabel.add_css_class('dim-label');
+            identity.append(name);
+            identity.append(providerLabel);
+            const share = usage.totalTokens > 0
+                ? (entry.totalTokens / usage.totalTokens) * 100
+                : 0;
+            const totals = new Gtk.Box({
+                orientation: Gtk.Orientation.VERTICAL,
+                spacing: 2,
+                halign: Gtk.Align.END,
+            });
+            const tokenLabel = new Gtk.Label({
+                label: formatStatisticCount(entry.totalTokens),
+                xalign: 1,
+            });
+            tokenLabel.add_css_class('cusco-chat-statistics-value');
+            const shareLabel = new Gtk.Label({
+                label: `${share.toFixed(1)}%`,
+                xalign: 1,
+            });
+            shareLabel.add_css_class('caption');
+            shareLabel.add_css_class('dim-label');
+            totals.append(tokenLabel);
+            totals.append(shareLabel);
+            rowContent.append(icon);
+            rowContent.append(identity);
+            rowContent.append(totals);
+            row.set_child(rowContent);
+            this._usageBreakdownList.append(row);
+        }
+
+        const hasBreakdown = usage.breakdown.length > 0;
+        this._usageBreakdownList.set_visible(hasBreakdown);
+        this._usageEmptyLabel.set_visible(!hasBreakdown);
+        this._usageSourceNoteLabel.set_label(incompleteConversationCount > 0
+            ? 'Usage is calculated from token metadata stored in local chat history. Some chat transcripts could not be read, so these totals are incomplete. Refresh to retry. Historical cost is not estimated because provider pricing can change.'
+            : 'Usage is calculated from token metadata stored in local chat history. Historical cost is not estimated because provider pricing can change.');
     }
 
     _createChatSurface() {
@@ -1920,6 +2546,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _createNewConversation() {
+        this._showChatPage();
         const activeConversation = this._conversations.activeConversation;
         const transientConversation = this._conversations.allConversations.find((conversation) => (
             !conversation.archived
@@ -3388,6 +4015,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (!conversation)
             return;
 
+        this._showChatPage();
         this._conversationSelectionSerial += 1;
         this._selectConversation(conversationId);
         this._refreshConversationList();
@@ -5346,10 +5974,18 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 shouldSendQueued = ownsActiveTurn && stoppedBeforeAssistantText;
             } else {
                 if (assistantView) {
-                    if (assistantView.hasContent() || assistantView.hasToolResults())
+                    const hadContent = assistantView.hasContent();
+
+                    if (hadContent || assistantView.hasToolResults())
                         assistantView.clear_status();
                     else
                         assistantView.remove();
+
+                    if (hadContent) {
+                        assistantView.persist?.();
+                        this._updateUsageDisplay(conversation);
+                        this._refreshConversationList();
+                    }
                 }
 
                 throw error;
@@ -5382,6 +6018,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         let reasoningText = '';
         let usage = null;
         const toolCalls = [];
+        let toolCallIntegrity = { status: 'valid', reason: '' };
         const serverToolResults = [];
         let providerParts = [];
 
@@ -5406,15 +6043,20 @@ class CuscoWindow extends Adw.ApplicationWindow {
             } else if (normalizedChunk.type === 'usage')
                 usage = normalizedChunk.usage;
             else if (normalizedChunk.type === 'reasoning')
-                reasoningText += normalizedChunk.text;
-            else if (normalizedChunk.type === 'tool_calls')
+                reasoningText = normalizedChunk.replace
+                    ? normalizedChunk.text
+                    : reasoningText + normalizedChunk.text;
+            else if (normalizedChunk.type === 'tool_calls') {
                 toolCalls.push(...normalizedChunk.toolCalls);
-            else if (normalizedChunk.type === 'server_tool_results')
+                toolCallIntegrity = normalizedChunk.toolCallIntegrity;
+            } else if (normalizedChunk.type === 'server_tool_results')
                 serverToolResults.push(...normalizedChunk.serverToolResults);
             else if (normalizedChunk.type === 'provider_context')
                 providerParts = normalizedChunk.providerParts;
             else
-                responseText += normalizedChunk.text;
+                responseText = normalizedChunk.replace
+                    ? normalizedChunk.text
+                    : responseText + normalizedChunk.text;
 
             onChunk?.(responseText, normalizedChunk.text, {
                 type: normalizedChunk.type,
@@ -5422,6 +6064,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 reasoning: reasoningText,
                 usage,
                 toolCalls,
+                toolCallIntegrity,
                 serverToolResults,
                 providerParts,
                 serverToolResultChunk: normalizedChunk.serverToolResults ?? [],
@@ -5438,6 +6081,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 reasoning: reasoningText,
                 usage,
                 toolCalls,
+                toolCallIntegrity,
                 serverToolResults,
                 providerParts,
             };
@@ -5446,16 +6090,34 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     async _collectProviderResponseWithFallback(conversation, providerMessages, cancellable, onChunk = null, collectOptions = {}) {
+        let primaryResponseStarted = false;
+        const trackPrimaryChunk = (text, chunk, state) => {
+            const type = state?.type ?? 'text';
+
+            if ((type === 'reasoning' && Boolean(state?.reasoning))
+                || (type === 'tool_calls' && (state?.toolCalls?.length ?? 0) > 0)
+                || (type === 'server_tool_results' && (state?.serverToolResults?.length ?? 0) > 0)
+                || (type === 'provider_context' && (state?.providerParts?.length ?? 0) > 0)
+                || (type !== 'status' && type !== 'usage' && Boolean(text || chunk))) {
+                primaryResponseStarted = true;
+            }
+
+            onChunk?.(text, chunk, state);
+        };
+
         try {
             return await this._collectProviderResponse(
                 conversation.providerId,
                 conversation.modelId,
                 providerMessages,
                 cancellable,
-                onChunk,
+                trackPrimaryChunk,
                 collectOptions,
             );
         } catch (error) {
+            if (primaryResponseStarted || isOutputCapacityError(error))
+                throw error;
+
             const fallback = this._getProviderFallback(conversation.providerId, error);
 
             if (!fallback.provider)
@@ -5562,7 +6224,17 @@ class CuscoWindow extends Adw.ApplicationWindow {
             });
         };
 
-        for (let iteration = 0; iteration < DEFAULT_AGENT_MAX_ITERATIONS; iteration++) {
+        let ordinaryIterations = 0;
+        let integrityRecoveryUsed = false;
+        let pendingIntegrityRecovery = false;
+
+        while (ordinaryIterations < DEFAULT_AGENT_MAX_ITERATIONS || pendingIntegrityRecovery) {
+            const isIntegrityRecovery = pendingIntegrityRecovery;
+            pendingIntegrityRecovery = false;
+
+            if (!isIntegrityRecovery)
+                ordinaryIterations += 1;
+
             if (isCancellableCancelled(cancellable))
                 return '';
 
@@ -5571,7 +6243,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (addedUserMessages.length > 0)
                 resetAssistantViewAfterPendingMessages();
 
-            if (iteration === 0 || addedUserMessages.length > 0)
+            if (ordinaryIterations === 1 || addedUserMessages.length > 0)
                 setAssistantStatus('Agent is thinking...');
             else
                 clearAssistantStatus();
@@ -5641,6 +6313,35 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     id: String(nativeToolCall.id ?? '').trim()
                         || `cusco_${GLib.uuid_string_random().replaceAll('-', '')}`,
                 }));
+                const integrityDecision = decideNativeToolIntegrityRecovery(
+                    runtimeNativeToolCalls,
+                    responseState.toolCallIntegrity,
+                    { recoveryUsed: integrityRecoveryUsed },
+                );
+
+                if (integrityDecision.action === 'stop') {
+                    const message = createMessage('system', integrityDecision.userMessage);
+                    this._conversations.appendMessage(conversation.id, message);
+                    this._addMessageIfActiveConversation(conversation.id, message);
+                    return integrityDecision.userMessage;
+                }
+
+                if (integrityDecision.action === 'retry') {
+                    const failureResults = createNativeToolIntegrityFailureResults(
+                        runtimeNativeToolCalls,
+                        integrityDecision.integrity,
+                    );
+                    runtimeMessages.push(...createNativeToolRuntimeBatch(
+                        responseText,
+                        runtimeNativeToolCalls,
+                        failureResults,
+                        { providerParts: responseState.providerParts },
+                    ));
+                    integrityRecoveryUsed = true;
+                    pendingIntegrityRecovery = true;
+                    setAssistantStatus('Agent is retrying an incomplete tool call...');
+                    continue;
+                }
 
                 for (const runtimeNativeToolCall of runtimeNativeToolCalls) {
                     const runtimeToolCallText = responseText;
@@ -9285,6 +9986,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     hexpand: true,
                     codeMinWidth: 380,
                     selectable: !isStreamingAssistant,
+                    streaming: isStreamingAssistant,
                 }));
                 reasoningContent.add_css_class('cusco-message-bubble');
                 reasoningContent.add_css_class('cusco-message-assistant');
@@ -9327,6 +10029,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             references: messageReferences,
             referenceStyles: this._composerReferenceStyles(),
             selectable: !isStreamingAssistant && !animateWelcomeMessage,
+            streaming: isStreamingAssistant,
         }));
 
         if (messageReferences.length > 0)
@@ -9449,8 +10152,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
             start_working: startWorking,
             finish_working: finishWorking,
             finish_stream: () => {
-                bodyContent.setSelectable(true);
-                reasoningContent?.setSelectable(true);
+                bodyContent.finishStreaming?.({ selectable: true });
+                reasoningContent?.finishStreaming?.({ selectable: true });
             },
             set_reasoning: (text) => {
                 if (!reasoningExpander)

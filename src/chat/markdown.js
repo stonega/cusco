@@ -196,6 +196,10 @@ function consumeLink(text, index) {
     };
 }
 
+function matchOpeningFence(line) {
+    return String(line ?? '').match(/^```([\w#+.-]*)\s*$/);
+}
+
 export function parseMarkdownBlocks(markdown) {
     const lines = String(markdown ?? '').replace(/\r\n/g, '\n').split('\n');
     const blocks = [];
@@ -215,7 +219,7 @@ export function parseMarkdownBlocks(markdown) {
 
     for (let index = 0; index < lines.length; index++) {
         const line = lines[index];
-        const openingFence = line.match(/^```([\w#+.-]*)\s*$/);
+        const openingFence = matchOpeningFence(line);
 
         if (openingFence && !inCodeBlock) {
             flushParagraph();
@@ -273,6 +277,119 @@ export function parseMarkdownBlocks(markdown) {
         blocks.push({ type: 'markdown', content: '' });
 
     return blocks;
+}
+
+function streamingMarkdownState(markdown) {
+    const source = String(markdown ?? '');
+    let inCodeBlock = false;
+    let inInlineCode = false;
+    let boldOpen = false;
+    let emphasisOpen = false;
+    let lastOpenBracket = -1;
+    let lastLinkStart = -1;
+    let lastLinkEnd = -1;
+    let linkTargetHasContent = false;
+
+    for (let lineStart = 0; lineStart <= source.length;) {
+        const newlineIndex = source.indexOf('\n', lineStart);
+        const lineEnd = newlineIndex < 0 ? source.length : newlineIndex;
+        const line = source.slice(lineStart, lineEnd);
+
+        if (!inCodeBlock && matchOpeningFence(line)) {
+            inCodeBlock = true;
+        } else if (inCodeBlock && line.trim() === '```') {
+            inCodeBlock = false;
+        } else if (!inCodeBlock) {
+            let backslashRun = 0;
+
+            for (let index = lineStart; index < lineEnd; index++) {
+                const character = source[index];
+
+                if (character === '\\') {
+                    backslashRun++;
+                    continue;
+                }
+
+                const escaped = backslashRun % 2 === 1;
+                backslashRun = 0;
+
+                if (character === '`' && !escaped) {
+                    inInlineCode = !inInlineCode;
+                    continue;
+                }
+
+                if (inInlineCode || escaped)
+                    continue;
+
+                if (character === '[')
+                    lastOpenBracket = index;
+
+                if (character === ']'
+                    && source[index + 1] === '('
+                    && lastOpenBracket >= 0) {
+                    lastLinkStart = index;
+                    linkTargetHasContent = false;
+                } else if (character === ')') {
+                    lastLinkEnd = index;
+                } else if (lastLinkStart > lastLinkEnd
+                    && index > lastLinkStart + 1
+                    && !/\s/.test(character)) {
+                    linkTargetHasContent = true;
+                }
+
+                if (character !== '*')
+                    continue;
+
+                if (source[index + 1] === '*') {
+                    boldOpen = !boldOpen;
+                    index++;
+                    continue;
+                }
+
+                const previous = source[index - 1] ?? '';
+                const next = source[index + 1] ?? '';
+
+                if ((next && !/\s/.test(next)) || (previous && !/\s/.test(previous)))
+                    emphasisOpen = !emphasisOpen;
+            }
+        }
+
+        if (newlineIndex < 0)
+            break;
+
+        lineStart = newlineIndex + 1;
+    }
+
+    return {
+        boldOpen,
+        emphasisOpen,
+        inCodeBlock,
+        inInlineCode,
+        linkOpen: lastLinkStart > lastLinkEnd && linkTargetHasContent,
+    };
+}
+
+export function stabilizeStreamingMarkdown(markdown) {
+    const source = String(markdown ?? '');
+    const state = streamingMarkdownState(source);
+
+    // The block parser already renders an unfinished fence as a code block.
+    if (state.inCodeBlock)
+        return source;
+
+    if (state.inInlineCode)
+        return `${source}\``;
+
+    if (state.linkOpen)
+        return `${source})`;
+
+    if (state.boldOpen)
+        return `${source}**`;
+
+    if (state.emphasisOpen)
+        return `${source}*`;
+
+    return source;
 }
 
 export function inlineMarkdownToPangoMarkup(text) {

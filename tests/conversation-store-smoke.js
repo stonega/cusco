@@ -406,6 +406,52 @@ if (lazyConversations.getConversation(migrationFirstId).messages[0].content !== 
     throw new Error('Selecting transcript data did not hydrate exactly one conversation');
 }
 
+let retryShouldFail = true;
+const retryManager = new ConversationManager({
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
+    store: {
+        supportsLazyLoading: true,
+        load: () => ({
+            conversations: [{
+                id: 'retry-chat',
+                title: 'Retry chat',
+                providerId: 'openai',
+                modelId: 'gpt-5.5',
+                messageCount: 1,
+                archived: false,
+                createdAt: '2026-01-01T00:00:00.000Z',
+                updatedAt: '2026-01-01T00:00:00.000Z',
+            }],
+            activeConversationId: 'retry-chat',
+        }),
+        loadConversation: () => {
+            if (retryShouldFail)
+                throw new Error('Temporary transcript read failure');
+
+            return {
+                messages: [{ role: 'assistant', content: 'Recovered transcript' }],
+            };
+        },
+        saveConversation: () => {},
+        saveIndex: () => {},
+    },
+});
+
+if (retryManager.activeConversation.messages.length !== 0
+    || !retryManager.conversationLoadError('retry-chat')) {
+    throw new Error('Lazy transcript failure was not exposed for retry');
+}
+
+retryShouldFail = false;
+const retriedConversation = retryManager.retryConversationLoad('retry-chat');
+
+if (retriedConversation?.messages[0]?.content !== 'Recovered transcript'
+    || retryManager.conversationLoadError('retry-chat')
+    || !retryManager.isConversationHydrated('retry-chat')) {
+    throw new Error('Lazy transcript retry did not restore the conversation');
+}
+
 const savedConversationIds = [];
 const saveMigratedConversation = migrationStore.saveConversation.bind(migrationStore);
 migrationStore.saveConversation = (conversation, options) => {

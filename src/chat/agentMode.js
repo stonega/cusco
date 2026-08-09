@@ -275,6 +275,96 @@ export function createNativeToolRuntimeBatch(
     ];
 }
 
+function normalizeNativeToolIntegrity(integrity, nativeToolCalls) {
+    const declaredStatus = String(integrity?.status ?? '').trim();
+    const knownStatuses = new Set(['valid', 'truncated', 'output_limited', 'malformed']);
+
+    if (knownStatuses.has(declaredStatus))
+        return {
+            status: declaredStatus,
+            reason: String(integrity?.reason ?? '').trim(),
+        };
+
+    const hasInvalidArguments = (nativeToolCalls ?? []).some(
+        call => call?.argumentsValid === false,
+    );
+
+    return {
+        status: hasInvalidArguments ? 'malformed' : 'valid',
+        reason: hasInvalidArguments ? 'invalid_tool_arguments' : '',
+    };
+}
+
+export function decideNativeToolIntegrityRecovery(
+    nativeToolCalls,
+    integrity,
+    { recoveryUsed = false } = {},
+) {
+    const toolCalls = Array.isArray(nativeToolCalls) ? nativeToolCalls : [];
+    const normalizedIntegrity = normalizeNativeToolIntegrity(integrity, toolCalls);
+    const hasMissingName = toolCalls.some(call => !String(call?.name ?? '').trim());
+    const hasInvalidArguments = toolCalls.some(call => call?.argumentsValid === false);
+    const batchIsValid = normalizedIntegrity.status === 'valid'
+        && !hasMissingName
+        && !hasInvalidArguments;
+
+    if (batchIsValid)
+        return { action: 'execute', integrity: normalizedIntegrity, userMessage: '' };
+
+    if (hasMissingName) {
+        return {
+            action: 'stop',
+            integrity: normalizedIntegrity,
+            userMessage: 'The model returned an incomplete native tool call without a tool name, so Cusco did not execute any tool in the batch.',
+        };
+    }
+
+    if (recoveryUsed) {
+        return {
+            action: 'stop',
+            integrity: normalizedIntegrity,
+            userMessage: 'The model repeatedly returned an incomplete native tool-call batch, so Cusco stopped without executing it.',
+        };
+    }
+
+    const retryMessage = normalizedIntegrity.status === 'malformed'
+        ? 'Regenerate the complete tool-call batch with valid JSON arguments. Reissue every required call; none of the previous calls was executed.'
+        : 'The previous tool-call batch reached the output limit. Regenerate it with a smaller payload, splitting the work across calls if needed. Reissue every required call; none of the previous calls was executed.';
+
+    return {
+        action: 'retry',
+        integrity: normalizedIntegrity,
+        userMessage: retryMessage,
+    };
+}
+
+export function createNativeToolIntegrityFailureResults(nativeToolCalls, integrity) {
+    const toolCalls = Array.isArray(nativeToolCalls) ? nativeToolCalls : [];
+    const normalizedIntegrity = normalizeNativeToolIntegrity(integrity, toolCalls);
+
+    return toolCalls.map((toolCall) => {
+        const request = { name: String(toolCall?.name ?? '').trim() || 'unknown' };
+        let reason;
+
+        if (normalizedIntegrity.status === 'output_limited') {
+            reason = 'The response reached the output limit, so this parseable call was not executed; reissue it with a smaller payload or split the work across calls.';
+        } else if (toolCall?.argumentsValid === false) {
+            reason = normalizedIntegrity.status === 'truncated'
+                ? 'The tool arguments were cut off by the output limit; reissue the call with a smaller payload or split the work across calls.'
+                : 'The tool arguments were malformed JSON; reissue the call with complete, valid JSON arguments.';
+        } else {
+            reason = 'This call was not executed because another call in the same batch was incomplete; reissue every required call as one complete batch.';
+        }
+
+        return {
+            role: 'tool',
+            content: createAgentToolFailurePrompt(request, reason),
+            toolCallId: String(toolCall?.id ?? ''),
+            toolName: String(toolCall?.name ?? ''),
+        };
+    });
+}
+
 export function isPartialAgentToolCall(text) {
     const source = String(text ?? '').toLowerCase();
     return source.includes(TOOL_CALL_OPEN_TAG) && !source.includes(TOOL_CALL_CLOSE_TAG);

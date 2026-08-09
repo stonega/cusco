@@ -20,6 +20,7 @@ import {
     getSupportedThinkingLevels,
     normalizeThinkingLevel,
 } from './thinking.js';
+import { normalizeMaxOutputTokens } from './outputLimits.js';
 import { createDefaultApiKeyStore } from '../secrets/apiKeyStore.js';
 
 const SETTINGS_SCHEMA_ID = 'io.github.stonega.Cusco';
@@ -270,18 +271,34 @@ function applyProviderEndpointUrl(provider, baseUrl) {
 }
 
 function normalizeCustomModels(models) {
-    const modelIds = Array.isArray(models)
+    const modelItems = Array.isArray(models)
         ? models
         : String(models ?? '').split(',');
+    const seenIds = new Set();
 
-    return modelIds
-        .map((model) => String(model?.id ?? model).trim())
-        .filter((model, index, allModels) => model && allModels.indexOf(model) === index)
-        .map((model) => ({
-            id: model,
-            name: model,
-            description: 'Custom OpenAI-compatible model.',
-        }));
+    return modelItems
+        .map((model) => {
+            const id = String(model?.id ?? model).trim();
+
+            if (!id || seenIds.has(id))
+                return null;
+
+            seenIds.add(id);
+            const contextWindowTokens = normalizeContextWindowTokens(
+                model?.contextWindowTokens
+                ?? model?.contextLengthTokens
+                ?? model?.contextLength,
+            );
+
+            return {
+                id,
+                name: String(model?.name ?? id),
+                description: 'Custom OpenAI-compatible model.',
+                maxOutputTokens: normalizeMaxOutputTokens(model?.maxOutputTokens ?? model?.maxTokens),
+                ...(contextWindowTokens === undefined ? {} : { contextWindowTokens }),
+            };
+        })
+        .filter(Boolean);
 }
 
 function isCustomProviderId(providerId) {
@@ -524,6 +541,7 @@ const OPENAI_MODEL_METADATA = {
         name: 'GPT-5.6 Sol',
         description: 'Frontier model for complex professional work.',
         contextWindowTokens: 1050000,
+        maxOutputTokens: 128000,
         thinking: OPENAI_GPT_56_THINKING,
     },
     'gpt-5.6-terra': {
@@ -531,6 +549,7 @@ const OPENAI_MODEL_METADATA = {
         name: 'GPT-5.6 Terra',
         description: 'GPT-5.6 model that balances intelligence and cost.',
         contextWindowTokens: 1050000,
+        maxOutputTokens: 128000,
         thinking: OPENAI_GPT_56_THINKING,
     },
     'gpt-5.6-luna': {
@@ -538,6 +557,7 @@ const OPENAI_MODEL_METADATA = {
         name: 'GPT-5.6 Luna',
         description: 'GPT-5.6 model optimized for cost-sensitive workloads.',
         contextWindowTokens: 1050000,
+        maxOutputTokens: 128000,
         thinking: OPENAI_GPT_56_THINKING,
     },
 };
@@ -598,6 +618,7 @@ const KIMI_MODEL_METADATA = {
         name: 'Kimi K3',
         description: 'Kimi flagship model for long-horizon coding, knowledge work, reasoning, and visual understanding. Context 1M.',
         contextWindowTokens: 1000000,
+        maxOutputTokens: 131072,
         thinking: {
             api: 'kimi-k3-reasoning',
             levels: ['max'],
@@ -636,6 +657,7 @@ const DEEPSEEK_MODEL_METADATA = {
         name: 'DeepSeek V4 Pro',
         description: 'DeepSeek reasoning-capable model.',
         contextWindowTokens: 1000000,
+        maxOutputTokens: 384000,
         thinking: {
             api: 'deepseek-thinking',
             levels: ['off', 'auto', 'high', 'max'],
@@ -646,6 +668,7 @@ const DEEPSEEK_MODEL_METADATA = {
         name: 'DeepSeek V4 Flash',
         description: 'DeepSeek lower-latency model.',
         contextWindowTokens: 1000000,
+        maxOutputTokens: 384000,
         thinking: {
             api: 'deepseek-thinking',
             levels: ['off', 'auto', 'high', 'max'],
@@ -792,9 +815,16 @@ function normalizeStoredModels(models, providerId = '') {
             ?? model?.contextLength,
         );
         const thinking = normalizeStoredThinkingCapability(model?.thinking ?? metadata?.thinking);
+        const maxOutputTokens = normalizeMaxOutputTokens(
+            metadata?.maxOutputTokens
+            ?? model?.maxOutputTokens
+            ?? model?.maxTokens,
+        );
 
         if (contextWindowTokens !== undefined)
             normalizedModel.contextWindowTokens = contextWindowTokens;
+
+        normalizedModel.maxOutputTokens = maxOutputTokens;
 
         if (thinking !== undefined)
             normalizedModel.thinking = thinking;
@@ -1043,6 +1073,7 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         implemented: true,
         enabled: false,
         apiFormat: 'openai-chat-completions',
+        supportsStreamUsageOptions: true,
         apiKeyRequired: true,
         apiKeyConfigured: false,
         apiKeyEnvVar: 'MOONSHOT_API_KEY',
@@ -1077,6 +1108,7 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         implemented: true,
         enabled: false,
         apiFormat: 'openai-chat-completions',
+        supportsStreamUsageOptions: true,
         supportsImageAttachments: false,
         apiKeyRequired: true,
         apiKeyConfigured: false,
@@ -1174,7 +1206,7 @@ export class ProviderConfigStore {
             defaultBaseUrl: String(config.defaultBaseUrl ?? config.baseUrl ?? '').trim(),
             usesCustomEndpoint: false,
             endpointPresets: (config.endpointPresets ?? []).map((preset) => ({ ...preset })),
-            models: config.models.map((model) => ({ ...model })),
+            models: normalizeStoredModels(config.models, config.id),
             imageModels: (config.imageModels ?? []).map((model) => ({ ...model })),
             customImageModels: (config.customImageModels ?? []).map((model) => ({ ...model })),
             discoveredImageModels: (config.discoveredImageModels ?? []).map((model) => ({ ...model })),
@@ -2360,7 +2392,15 @@ export class ProviderConfigStore {
                 id: provider.id,
                 name: provider.name,
                 baseUrl: provider.baseUrl,
-                models: provider.models.map((model) => model.id),
+                models: provider.models.map((model) => ({
+                    id: model.id,
+                    name: model.name,
+                    description: model.description,
+                    maxOutputTokens: normalizeMaxOutputTokens(model.maxOutputTokens),
+                    ...(model.contextWindowTokens === undefined
+                        ? {}
+                        : { contextWindowTokens: model.contextWindowTokens }),
+                })),
             }));
 
         this._settings?.set_string('custom-openai-compatible-providers', JSON.stringify(customProviders));
@@ -2444,6 +2484,7 @@ export class ProviderConfigStore {
                 ...(model.contextWindowTokens === undefined
                     ? {}
                     : { contextWindowTokens: model.contextWindowTokens }),
+                maxOutputTokens: normalizeMaxOutputTokens(model.maxOutputTokens),
                 ...(model.thinking === undefined ? {} : { thinking: model.thinking }),
             }));
         }

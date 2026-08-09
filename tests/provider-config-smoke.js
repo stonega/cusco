@@ -145,6 +145,24 @@ const builtInModelsMissingContext = defaultStore.listProviders()
 if (builtInModelsMissingContext.length > 0)
     throw new Error(`Built-in chat models are missing context windows: ${builtInModelsMissingContext.join(', ')}`);
 
+const builtInModelsMissingOutputLimit = defaultStore.listProviders()
+    .filter((provider) => !provider.customizable)
+    .flatMap((provider) => provider.models
+        .filter((model) => !Number.isFinite(model.maxOutputTokens) || model.maxOutputTokens <= 0)
+        .map((model) => `${provider.id}/${model.id}`));
+
+if (builtInModelsMissingOutputLimit.length > 0)
+    throw new Error(`Built-in chat models are missing output limits: ${builtInModelsMissingOutputLimit.join(', ')}`);
+
+if (defaultStore.resolve('openai', 'gpt-5.6-sol').model.maxOutputTokens !== 128000)
+    throw new Error('OpenAI GPT-5.6 Sol output limit should match the model catalog');
+
+if (defaultStore.resolve('kimi', 'kimi-k3').model.maxOutputTokens !== 131072)
+    throw new Error('Kimi K3 output limit should match the model catalog');
+
+if (defaultStore.resolve('deepseek', 'deepseek-v4-pro').model.maxOutputTokens !== 384000)
+    throw new Error('DeepSeek V4 Pro output limit should match the model catalog');
+
 if (defaultStore.getDefaultModel('openai').id !== 'gpt-5.6-sol')
     throw new Error('OpenAI default GPT-5.6 Sol model was not configured');
 
@@ -259,6 +277,38 @@ if (defaultStore.getWebSearchProviderId() !== 'duckduckgo'
     || defaultStore.createWebSearchFallbackConfig().apiKeyRequired) {
     throw new Error('Built-in DuckDuckGo was not configured as the no-key web search fallback');
 }
+
+const outputLimitCustomSettings = new MemorySettings();
+const outputLimitCustomStore = new ProviderConfigStore(undefined, {
+    settings: outputLimitCustomSettings,
+    apiKeyStore: new MemoryApiKeyStore(),
+    envLookup: () => '',
+});
+const addedCustomProvider = await outputLimitCustomStore.addCustomProvider({
+    name: 'Output Limits API',
+    baseUrl: 'https://example.invalid/v1',
+    models: [
+        { id: 'custom-default' },
+        { id: 'custom-explicit', maxOutputTokens: 24576, contextWindowTokens: 100000 },
+    ],
+});
+
+if (outputLimitCustomStore.resolve(addedCustomProvider.id, 'custom-default').model.maxOutputTokens !== 16384)
+    throw new Error('Custom models should default to 16,384 output tokens');
+
+const explicitCustomModel = outputLimitCustomStore.resolve(addedCustomProvider.id, 'custom-explicit').model;
+
+if (explicitCustomModel.maxOutputTokens !== 24576 || explicitCustomModel.contextWindowTokens !== 100000)
+    throw new Error('Custom model output/context overrides were not preserved');
+
+const outputLimitPersistedCustomProviders = JSON.parse(
+    outputLimitCustomSettings.get_string('custom-openai-compatible-providers'),
+);
+const persistedExplicitModel = outputLimitPersistedCustomProviders[0].models
+    .find((model) => model.id === 'custom-explicit');
+
+if (persistedExplicitModel.maxOutputTokens !== 24576 || persistedExplicitModel.contextWindowTokens !== 100000)
+    throw new Error('Custom model output/context overrides were not persisted');
 
 const webSearchSettings = new MemorySettings({
     strings: {
@@ -916,7 +966,12 @@ await customStore.discoverModels(discoveredProvider.id, {
 
         return [
             { id: 'discovered-small', name: 'Discovered Small' },
-            { id: 'discovered-large', name: 'Discovered Large', contextWindowTokens: 131072 },
+            {
+                id: 'discovered-large',
+                name: 'Discovered Large',
+                contextWindowTokens: 131072,
+                maxOutputTokens: 24576,
+            },
         ];
     },
 });
@@ -972,6 +1027,9 @@ if (!customSettings.get_string('provider-discovered-models').includes('discovere
 if (customStore.resolve(discoveredProvider.id, 'discovered-large').model.contextWindowTokens !== 131072)
     throw new Error('Discovered custom model context window was not preserved');
 
+if (customStore.resolve(discoveredProvider.id, 'discovered-large').model.maxOutputTokens !== 24576)
+    throw new Error('Discovered custom model output limit was not preserved');
+
 const reloadedCustomStore = new ProviderConfigStore(undefined, {
     settings: customSettings,
     apiKeyStore: customApiKeys,
@@ -983,6 +1041,9 @@ if (reloadedCustomStore.listProviders().filter((provider) => provider.customizab
 
 if (reloadedCustomStore.resolve(discoveredProvider.id, 'discovered-large').model.contextWindowTokens !== 131072)
     throw new Error('Reloaded custom provider lost discovered model metadata');
+
+if (reloadedCustomStore.resolve(discoveredProvider.id, 'discovered-large').model.maxOutputTokens !== 24576)
+    throw new Error('Reloaded custom provider lost discovered output-limit metadata');
 
 await reloadedCustomStore.removeCustomProvider(manualProvider.id);
 

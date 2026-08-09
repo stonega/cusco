@@ -2,6 +2,7 @@ import {
     inlineMarkdownToPangoMarkup,
     markdownToPangoMarkup,
     parseMarkdownBlocks,
+    stabilizeStreamingMarkdown,
 } from '../src/chat/markdown.js';
 
 const blocks = parseMarkdownBlocks([
@@ -110,5 +111,22 @@ const emojiMarkup = inlineMarkdownToPangoMarkup('Hihi! \u{1F44B} How are you?');
 
 if (!emojiMarkup.includes('\u{1F44B}') || emojiMarkup.includes('\uFFFD'))
     throw new Error(`Emoji was not preserved in markdown markup: ${emojiMarkup}`);
+
+if (stabilizeStreamingMarkdown('Writing **bold') !== 'Writing **bold**')
+    throw new Error('Streaming markdown did not stabilize an unfinished bold span');
+
+if (stabilizeStreamingMarkdown('Writing `code') !== 'Writing `code`')
+    throw new Error('Streaming markdown did not stabilize an unfinished code span');
+
+if (stabilizeStreamingMarkdown('[Cusco](https://example.com') !== '[Cusco](https://example.com)')
+    throw new Error('Streaming markdown did not stabilize an unfinished link');
+
+if (stabilizeStreamingMarkdown('- list item') !== '- list item')
+    throw new Error('Streaming markdown changed a list marker');
+
+const unfinishedFence = '```js\nconst answer = 42;';
+
+if (stabilizeStreamingMarkdown(unfinishedFence) !== unfinishedFence)
+    throw new Error('Streaming markdown changed an unfinished fenced code block');
 
 print('Cusco markdown smoke passed');
