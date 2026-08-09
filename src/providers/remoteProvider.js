@@ -18,6 +18,9 @@ const DEFAULT_REQUEST_TIMEOUT_SECONDS = 300;
 const MAX_NETWORK_RECONNECTS = 5;
 const NETWORK_RECONNECT_DELAY_MS = 250;
 const RESPONSE_READ_CHUNK_BYTES = 16 * 1024;
+const MAX_STREAM_LINE_CHARS = 16 * 1024 * 1024;
+const MAX_STREAM_EVENT_CHARS = 16 * 1024 * 1024;
+const MAX_UNFRAMED_RESPONSE_CHARS = 32 * 1024 * 1024;
 const CONTINUATION_PROMPT = [
     'Continue exactly where your previous assistant message stopped.',
     'Do not repeat completed text.',
@@ -559,11 +562,19 @@ async function readResponseText(stream, cancellable) {
 }
 
 export class ServerSentEventDecoder {
-    constructor() {
+    constructor(options = {}) {
+        this._providerName = options.providerName ?? 'Provider';
+        this._maxLineChars = options.maxLineChars ?? MAX_STREAM_LINE_CHARS;
+        this._maxEventChars = options.maxEventChars ?? MAX_STREAM_EVENT_CHARS;
         this._lineBuffer = '';
         this._eventName = '';
         this._dataLines = [];
+        this._dataChars = 0;
         this._atStart = true;
+    }
+
+    _oversizedStreamError(kind) {
+        return createUserVisibleError(`${this._providerName} returned an oversized streaming ${kind}.`);
     }
 
     _dispatch(events) {
@@ -578,6 +589,7 @@ export class ServerSentEventDecoder {
         });
         this._eventName = '';
         this._dataLines = [];
+        this._dataChars = 0;
     }
 
     _consumeLine(line, events) {
@@ -598,8 +610,14 @@ export class ServerSentEventDecoder {
 
         if (field === 'event')
             this._eventName = value;
-        else if (field === 'data')
+        else if (field === 'data') {
+            this._dataChars += value.length + (this._dataLines.length > 0 ? 1 : 0);
+
+            if (this._dataChars > this._maxEventChars)
+                throw this._oversizedStreamError('event');
+
             this._dataLines.push(value);
+        }
     }
 
     push(chunk) {
@@ -626,10 +644,17 @@ export class ServerSentEventDecoder {
                 ? 2
                 : 1;
             const line = this._lineBuffer.slice(0, newlineIndex);
+
+            if (line.length > this._maxLineChars)
+                throw this._oversizedStreamError('line');
+
             this._lineBuffer = this._lineBuffer.slice(newlineIndex + newlineLength);
             this._consumeLine(line, events);
             newlineIndex = this._lineBuffer.search(/[\r\n]/);
         }
+
+        if (this._lineBuffer.length > this._maxLineChars)
+            throw this._oversizedStreamError('line');
 
         return events;
     }
@@ -725,8 +750,9 @@ async function* postJsonStream(url, headers, body, options = {}) {
             throw createHttpStatusError(`${providerName} request failed (${status}): ${messageText}`, status);
         }
 
-        const eventDecoder = new ServerSentEventDecoder();
+        const eventDecoder = new ServerSentEventDecoder({ providerName });
         const unframedResponseParts = [];
+        let unframedResponseChars = 0;
         let sawEvent = false;
 
         const parseEvents = function* (events) {
@@ -751,16 +777,26 @@ async function* postJsonStream(url, headers, body, options = {}) {
         };
 
         for await (const chunk of readResponseStream(inputStream, cancellable)) {
-            if (!sawEvent)
+            if (!sawEvent) {
                 unframedResponseParts.push(chunk);
+                unframedResponseChars += chunk.length;
+
+                if (unframedResponseChars > MAX_UNFRAMED_RESPONSE_CHARS) {
+                    throw createUserVisibleError(
+                        `${providerName} returned an oversized unframed streaming response.`,
+                    );
+                }
+            }
 
             const events = eventDecoder.push(chunk);
 
             for (const event of parseEvents(events))
                 yield event;
 
-            if (sawEvent)
+            if (sawEvent) {
                 unframedResponseParts.length = 0;
+                unframedResponseChars = 0;
+            }
         }
 
         for (const event of parseEvents(eventDecoder.finish()))
@@ -3273,7 +3309,7 @@ class RemoteProvider extends ChatProvider {
                         text: remainingReasoning,
                     };
                 }
-            } else if (streamedReasoning) {
+            } else if (streamedReasoning && response.reasoning) {
                 turnReasoning = response.reasoning;
                 yield {
                     type: 'reasoning',
@@ -3281,9 +3317,9 @@ class RemoteProvider extends ChatProvider {
                     replace: true,
                 };
             } else {
-                turnReasoning = response.reasoning;
+                turnReasoning = streamedReasoning || response.reasoning;
 
-                if (response.reasoning) {
+                if (!streamedReasoning && response.reasoning) {
                     yield {
                         type: 'reasoning',
                         text: response.reasoning,

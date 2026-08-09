@@ -24,7 +24,7 @@ The core runtime path is:
 
 1. `_sendMessage()` appends the user message, proposes memory when relevant, runs an explicit slash-command tool if requested, then starts a provider response.
 2. `_streamAssistantResponse()` injects visible memory context, loads selected skills as hidden provider context, builds provider messages, streams the selected provider, optionally falls back to another provider, then persists the assistant message.
-3. Provider classes normalize Cusco messages into each remote API format. Remote providers currently request the full response and then stream display chunks; true network streaming remains a planned improvement.
+3. Provider classes normalize Cusco messages into each remote API format and reduce each provider's event stream into Cusco text, reasoning, usage, tool-call, and provider-context chunks.
 
 When `agentModeEnabled` is set on a conversation, Cusco adds an Agent Mode system prompt and lets the model request one existing tool at a time with a `<cusco_tool_call>` JSON tag. Cusco validates the request, applies permissions, appends visible tool audit rows, feeds the result back to the model, and repeats until the model returns final text or the iteration limit is reached.
 
@@ -50,7 +50,7 @@ Keep this path boring and explicit. Most agent features should attach around it,
 | Area | Current home | Development direction |
 |---|---|---|
 | Agent loop | `src/window.js` | Move orchestration toward a chat engine module when tool calling, retries, compaction, and background tasks grow beyond UI concerns. |
-| Providers | `src/providers/` | Keep a single async iterator contract and provider/model capability metadata. Add true streaming and tool-call response support here. |
+| Providers | `src/providers/` | Keep the shared async iterator contract, protocol stream reducers, and provider/model capability metadata behind the provider interface. |
 | Tools | `src/tools/tools.js` | Replace slash-only parsing with provider-visible tool definitions when model tool calling is implemented. Keep slash commands as a deterministic user shortcut. |
 | Permissions | `src/window.js`, `src/tools/tools.js` | Centralize permission policy before adding file, shell, browser, or MCP tools. Deny destructive actions by default; ask for external or risky actions. |
 | Skills | `src/skills/skills.js`, `src/workspace/workspace.js` | Keep progressive disclosure: list available skills, then inject selected SKILL.md content only when relevant or user-selected. |
@@ -131,7 +131,7 @@ Compaction must preserve user instructions, current goal, decisions, pending tas
 ### Stage 1: Harden the Single-Agent Harness
 
 - Move response orchestration out of `CuscoWindow` into a chat engine service.
-- Add true provider streaming for remote APIs.
+- Add explicit streaming capability metadata where compatible APIs require provider-specific request extensions.
 - Extend provider capability metadata beyond model/thinking support: streaming, tool calls, vision, system prompt support, max context.
 - Centralize permission checks and audit records.
 - Improve tool result size limits and summaries.

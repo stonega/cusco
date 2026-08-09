@@ -420,69 +420,108 @@ function createAgentIntegrityWindow(responses) {
     };
 }
 
-const recoveredIntegrityRun = createAgentIntegrityWindow([
-    {
-        text: '',
-        reasoning: '',
-        toolCalls: invalidNativeBatch,
-        toolCallIntegrity: truncatedIntegrity,
-        providerParts: [],
-    },
-    {
-        text: 'Recovered without a tool.',
-        reasoning: '',
-        toolCalls: [],
-        toolCallIntegrity: { status: 'valid', reason: '' },
-        providerParts: [],
-    },
-]);
-const recoveredIntegrityText = await CuscoWindow.prototype._runAgentModeResponse.call(
-    recoveredIntegrityRun.window,
-    { id: 'conversation-integrity' },
-    [{ role: 'user', content: 'Create the artifact' }],
-    recoveredIntegrityRun.assistantViewState,
-    null,
-);
+const integrityRecoveryCases = [{
+    name: 'malformed',
+    integrity: { status: 'malformed', reason: 'invalid_tool_arguments' },
+    invalidCallGuidance: ['malformed JSON', 'complete, valid JSON arguments'],
+    siblingGuidance: ['another call in the same batch was incomplete', 'reissue every required call'],
+}, {
+    name: 'truncated',
+    integrity: truncatedIntegrity,
+    invalidCallGuidance: ['cut off by the output limit', 'smaller payload or split the work'],
+    siblingGuidance: ['another call in the same batch was incomplete', 'reissue every required call'],
+}, {
+    name: 'output_limited',
+    integrity: { status: 'output_limited', reason: 'max_output' },
+    invalidCallGuidance: ['reached the output limit', 'smaller payload or split the work'],
+    siblingGuidance: ['reached the output limit', 'smaller payload or split the work'],
+}];
 
-if (recoveredIntegrityText !== 'Recovered without a tool.'
-    || recoveredIntegrityRun.providerCalls.length !== 2
-    || recoveredIntegrityRun.createdRequests.length !== 0
-    || recoveredIntegrityRun.runRequests.length !== 0
-    || recoveredIntegrityRun.providerCalls[1].filter((message) => message.role === 'tool').length !== 2) {
-    throw new Error('First invalid native batch did not recover without tool side effects');
-}
+for (const recoveryCase of integrityRecoveryCases) {
+    const recoveredText = `Recovered from ${recoveryCase.name}.`;
+    const recoveredIntegrityRun = createAgentIntegrityWindow([
+        {
+            text: '',
+            reasoning: '',
+            toolCalls: invalidNativeBatch,
+            toolCallIntegrity: recoveryCase.integrity,
+            providerParts: [],
+        },
+        {
+            text: recoveredText,
+            reasoning: '',
+            toolCalls: [],
+            toolCallIntegrity: { status: 'valid', reason: '' },
+            providerParts: [],
+        },
+    ]);
+    const recoveredIntegrityText = await CuscoWindow.prototype._runAgentModeResponse.call(
+        recoveredIntegrityRun.window,
+        { id: `conversation-integrity-${recoveryCase.name}` },
+        [{ role: 'user', content: 'Create the artifact' }],
+        recoveredIntegrityRun.assistantViewState,
+        null,
+    );
+    const rejectedBatchResults = (recoveredIntegrityRun.providerCalls[1] ?? [])
+        .filter((message) => message.role === 'tool');
 
-const repeatedIntegrityRun = createAgentIntegrityWindow([
-    {
-        text: '',
-        reasoning: '',
-        toolCalls: invalidNativeBatch,
-        toolCallIntegrity: truncatedIntegrity,
-        providerParts: [],
-    },
-    {
-        text: '',
-        reasoning: '',
-        toolCalls: invalidNativeBatch,
-        toolCallIntegrity: truncatedIntegrity,
-        providerParts: [],
-    },
-]);
+    if (recoveredIntegrityText !== recoveredText
+        || recoveredIntegrityRun.providerCalls.length !== 2
+        || recoveredIntegrityRun.createdRequests.length !== 0
+        || recoveredIntegrityRun.runRequests.length !== 0
+        || rejectedBatchResults.length !== 2
+        || rejectedBatchResults[0].toolCallId !== 'call-invalid-json'
+        || rejectedBatchResults[0].toolName !== 'artifact_create'
+        || rejectedBatchResults[1].toolCallId !== 'call-valid-sibling'
+        || rejectedBatchResults[1].toolName !== 'calc'
+        || recoveryCase.invalidCallGuidance.some(
+            guidance => !rejectedBatchResults[0].content.includes(guidance),
+        )
+        || recoveryCase.siblingGuidance.some(
+            guidance => !rejectedBatchResults[1].content.includes(guidance),
+        )) {
+        throw new Error(`${recoveryCase.name} native batch did not recover exactly once without tool side effects`);
+    }
 
-await CuscoWindow.prototype._runAgentModeResponse.call(
-    repeatedIntegrityRun.window,
-    { id: 'conversation-integrity-repeat' },
-    [{ role: 'user', content: 'Create the artifact' }],
-    repeatedIntegrityRun.assistantViewState,
-    null,
-);
+    const repeatedIntegrityRun = createAgentIntegrityWindow([
+        {
+            text: '',
+            reasoning: '',
+            toolCalls: invalidNativeBatch,
+            toolCallIntegrity: recoveryCase.integrity,
+            providerParts: [],
+        },
+        {
+            text: '',
+            reasoning: '',
+            toolCalls: invalidNativeBatch,
+            toolCallIntegrity: recoveryCase.integrity,
+            providerParts: [],
+        },
+        {
+            text: 'This response must not be requested.',
+            reasoning: '',
+            toolCalls: [],
+            toolCallIntegrity: { status: 'valid', reason: '' },
+            providerParts: [],
+        },
+    ]);
+    const repeatedIntegrityText = await CuscoWindow.prototype._runAgentModeResponse.call(
+        repeatedIntegrityRun.window,
+        { id: `conversation-integrity-repeat-${recoveryCase.name}` },
+        [{ role: 'user', content: 'Create the artifact' }],
+        repeatedIntegrityRun.assistantViewState,
+        null,
+    );
 
-if (repeatedIntegrityRun.providerCalls.length !== 2
-    || repeatedIntegrityRun.createdRequests.length !== 0
-    || repeatedIntegrityRun.runRequests.length !== 0
-    || repeatedIntegrityRun.systemMessages.length !== 1
-    || !repeatedIntegrityRun.systemMessages[0].content.includes('repeatedly')) {
-    throw new Error('Repeated invalid native batch did not stop deterministically');
+    if (repeatedIntegrityRun.providerCalls.length !== 2
+        || repeatedIntegrityRun.createdRequests.length !== 0
+        || repeatedIntegrityRun.runRequests.length !== 0
+        || repeatedIntegrityRun.systemMessages.length !== 1
+        || repeatedIntegrityText !== repeatedIntegrityRun.systemMessages[0].content
+        || !repeatedIntegrityText.includes('repeatedly')) {
+        throw new Error(`Repeated ${recoveryCase.name} native batch did not stop deterministically`);
+    }
 }
 
 const finalIterationResponses = Array.from(
