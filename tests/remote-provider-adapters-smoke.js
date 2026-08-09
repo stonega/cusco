@@ -94,6 +94,22 @@ const svgImageMessages = [
         }],
     }),
 ];
+const pdfPath = GLib.build_filenamev([
+    GLib.get_tmp_dir(),
+    'cusco-provider-attachment.pdf',
+]);
+const pdfMessageContent = 'Translate this PDF\n\nPDF attachment: article.pdf (preview unavailable)';
+const fileAttachmentMessages = [
+    createMessage('user', pdfMessageContent, {
+        attachments: [{
+            kind: 'file',
+            name: 'article.pdf',
+            path: pdfPath,
+            contentType: 'application/pdf',
+            binary: true,
+        }],
+    }),
+];
 const nativeToolMessages = [
     createMessage('user', 'Inspect the window'),
     {
@@ -218,6 +234,42 @@ const openAiToolBody = buildOpenAiResponsesBody(messages, 'gpt-test', {
 });
 assertEqual(openAiToolBody.tool_choice, 'auto', 'OpenAI tool choice');
 assertEqual(openAiToolBody.tools[0].name, 'mcp__context7__resolve_library_id', 'OpenAI tool name');
+const fileAttachmentToolContext = [
+    pdfMessageContent,
+    'Local file attachments available to tools (use the exact path values; do not guess):',
+    JSON.stringify([{ name: 'article.pdf', path: pdfPath }]),
+].join('\n\n');
+const openAiFileAttachmentBody = buildOpenAiResponsesBody(fileAttachmentMessages, 'gpt-test', {
+    tools: [mcpTool],
+});
+assertEqual(
+    openAiFileAttachmentBody.input[0].content,
+    fileAttachmentToolContext,
+    'OpenAI tool context includes the exact local attachment path',
+);
+assertEqual(
+    buildOpenAiResponsesBody(fileAttachmentMessages, 'gpt-test').input[0].content,
+    pdfMessageContent,
+    'OpenAI requests without tools omit local attachment paths',
+);
+assertEqual(
+    buildOpenAiCompatibleChatBody(fileAttachmentMessages, 'model-test', { tools: [mcpTool] })
+        .messages[0].content,
+    fileAttachmentToolContext,
+    'Chat Completions tool context includes the exact local attachment path',
+);
+assertEqual(
+    buildAnthropicMessagesBody(fileAttachmentMessages, 'claude-test', { tools: [mcpTool] })
+        .messages[0].content,
+    fileAttachmentToolContext,
+    'Anthropic tool context includes the exact local attachment path',
+);
+assertEqual(
+    buildGeminiGenerateContentBody(fileAttachmentMessages, { tools: [mcpTool] })
+        .contents[0].parts[0].text,
+    fileAttachmentToolContext,
+    'Gemini tool context includes the exact local attachment path',
+);
 const openAiNativeSearchBody = buildOpenAiResponsesBody(messages, 'gpt-test', {
     provider: {
         nativeSearch: {

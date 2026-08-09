@@ -154,6 +154,46 @@ function messageContent(message) {
     return String(message.content ?? '');
 }
 
+function messagesWithLocalAttachmentPaths(messages, tools = []) {
+    if (!Array.isArray(tools) || tools.length === 0)
+        return messages;
+
+    return (messages ?? []).map((message) => {
+        if (message?.role !== 'user')
+            return message;
+
+        const attachments = (message.attachments ?? [])
+            .filter((attachment) => attachment?.kind === 'file')
+            .map((attachment) => {
+                const path = String(attachment?.path ?? '').trim();
+
+                if (!path)
+                    return null;
+
+                return {
+                    name: String(attachment?.name ?? GLib.path_get_basename(path)),
+                    path,
+                };
+            })
+            .filter(Boolean);
+
+        if (attachments.length === 0)
+            return message;
+
+        const attachmentContext = [
+            'Local file attachments available to tools (use the exact path values; do not guess):',
+            JSON.stringify(attachments),
+        ].join('\n\n');
+
+        return {
+            ...message,
+            content: [messageContent(message), attachmentContext]
+                .filter(Boolean)
+                .join('\n\n'),
+        };
+    });
+}
+
 function imageMimeTypeForAttachment(attachment) {
     const explicitMimeType = String(attachment?.mimeType ?? attachment?.mime_type ?? '').trim().toLowerCase();
 
@@ -1757,7 +1797,7 @@ function buildOpenAiCompatibleThinkingConfig(config, model, level) {
 export function buildOpenAiResponsesBody(messages, modelId, options = {}) {
     const body = {
         model: modelId,
-        input: openAiMessages(messages),
+        input: openAiMessages(messagesWithLocalAttachmentPaths(messages, options.tools)),
         max_output_tokens: normalizeMaxOutputTokens(options.maxOutputTokens),
     };
 
@@ -1794,7 +1834,10 @@ export function buildOpenAiCompatibleChatBody(messages, modelId, options = {}) {
         : 'max_tokens';
     const body = {
         model: modelId,
-        messages: openAiCompatibleMessages(messages, options),
+        messages: openAiCompatibleMessages(
+            messagesWithLocalAttachmentPaths(messages, options.tools),
+            options,
+        ),
         stream: false,
     };
     body[maxOutputTokensParameter] = normalizeMaxOutputTokens(options.maxOutputTokens);
@@ -1818,7 +1861,9 @@ export function buildOpenAiCompatibleChatBody(messages, modelId, options = {}) {
 }
 
 export function buildAnthropicMessagesBody(messages, modelId, options = {}) {
-    const { system, messages: conversationMessages } = anthropicPayloadMessages(messages);
+    const { system, messages: conversationMessages } = anthropicPayloadMessages(
+        messagesWithLocalAttachmentPaths(messages, options.tools),
+    );
     const thinkingConfig = buildAnthropicThinkingConfig(
         options.provider ?? options.config,
         options.model,
@@ -1857,7 +1902,7 @@ export function buildAnthropicMessagesBody(messages, modelId, options = {}) {
 }
 
 export function buildGeminiGenerateContentBody(messages, options = {}) {
-    const payload = geminiPayload(messages);
+    const payload = geminiPayload(messagesWithLocalAttachmentPaths(messages, options.tools));
     const thinking = buildGeminiThinkingConfig(options.provider ?? options.config, options.model, options.thinkingLevel);
 
     payload.generationConfig = {

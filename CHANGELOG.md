@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Passed exact local file-attachment paths to Agent tools so models no longer guess incorrect locations for PDFs and other files.
+
 ## [0.5.34] - 2026-08-07
 
 ### Added
