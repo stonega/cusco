@@ -2,6 +2,7 @@ import {
     applyReferenceTextStyles,
     initializeCodeBufferTheme,
     setLoadedPicturePaintable,
+    streamingBlockReusePlan,
 } from '../src/chat/messageView.js';
 
 function assert(condition, message) {
@@ -74,6 +75,30 @@ assert(
 assert(
     appliedCodeStyleScheme === codeStyleScheme,
     'Code block theme was not applied during synchronous initialization',
+);
+
+const mutableMarkdownTail = streamingBlockReusePlan(
+    [
+        { type: 'code', language: 'js', content: 'const stable = true;' },
+        { type: 'markdown', content: 'Streaming' },
+    ],
+    [
+        { type: 'code', language: 'js', content: 'const stable = true;' },
+        { type: 'markdown', content: 'Streaming output' },
+    ],
+);
+assert(
+    mutableMarkdownTail.stablePrefix === 1 && mutableMarkdownTail.canUpdateTail,
+    'Streaming render planning did not retain stable prefix blocks and update the mutable tail',
+);
+
+const replacedBlockShape = streamingBlockReusePlan(
+    [{ type: 'markdown', content: 'Draft' }],
+    [{ type: 'divider' }],
+);
+assert(
+    replacedBlockShape.stablePrefix === 0 && !replacedBlockShape.canUpdateTail,
+    'Streaming render planning reused a widget across incompatible block types',
 );
 
 print('Cusco message view smoke passed');

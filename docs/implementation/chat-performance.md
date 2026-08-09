@@ -22,7 +22,7 @@ Chat navigation is designed to keep GTK's main loop responsive even when the loc
 | Opening a long chat materialized its entire history synchronously. | Only the latest 32 messages are initially materialized, with explicit backward pagination. |
 | An uncached transcript monopolized the GTK main loop while its widgets were created. | Its first render is deferred until GTK gets an idle turn, then widget creation is split into batches with an 8 ms time budget. A stale batch is cancelled when the user selects another chat. |
 | Collapsed reasoning/tool bodies, code highlighting, and image previews still performed expensive work during selection. | Collapsed content is lazy, syntax work is queued at low priority, and bounded image previews are decoded asynchronously before texture creation. |
-| Streaming text repeatedly rebuilt message content and rewrote durable state for small deltas. | Visible content is coalesced to roughly 33 ms, usage display changes to 100 ms, and streaming deltas remain in memory until a terminal persistence point. |
+| Streaming text repeatedly rebuilt the full response and every message widget for small deltas. | Provider fragments are joined into visible snapshots at most once per 33 ms presentation window. The renderer preserves completed block widgets and updates only the mutable Markdown or code tail, while progressively slowing very long output. Streaming deltas remain in memory until a terminal persistence point. |
 | An asynchronous cron refresh could restore a selection made before the refresh started. | A monotonically increasing selection serial prevents stale background work from overriding a newer user selection. |
 
 ## Persistence boundaries
@@ -48,11 +48,14 @@ The relevant limits are deliberately small and centralized near the top of `src/
 - `CONVERSATION_PAGE_CONTEXT_LIMIT = 6`
 - `CONVERSATION_LIST_PAGE_SIZE = 50`
 - `CONVERSATION_RENDER_BATCH_BUDGET_US = 8000`
-- `CONTENT_UPDATE_INTERVAL_MS = 33`
+- `PROVIDER_CONTENT_CALLBACK_INTERVAL_MS = 33`
+- `CONTENT_UPDATE_INTERVAL_MS = 33`, increasing to 100 ms after 25,000 characters and 250 ms after 100,000 characters
 - `STREAMING_USAGE_UPDATE_INTERVAL_MS = 100`
 - artifact previews decode at `360 × 240` and retain at most 24 cached paintables
 
 Treat these as responsiveness and memory tradeoffs, not arbitrary presentation defaults. Increasing page or cache sizes should be accompanied by measurements on large, media-rich transcripts.
+
+Streaming completion intentionally performs one canonical full render. This replaces any temporary stabilization used for incomplete Markdown, applies the selectable-text state, and catches provider final-event replacements without paying for a full widget-tree rebuild on every preceding token.
 
 ## Verification
 

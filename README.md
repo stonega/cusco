@@ -24,7 +24,7 @@ Cusco is a native GNOME AI chat application built with GJS, GTK 4, and libadwait
 
 ## Current Status
 
-Cusco is still a development project, but the main local app surfaces are implemented. Remote provider clients currently return complete responses and then stream display chunks in the UI; true network streaming is still pending.
+Cusco is still a development project, but the main local app surfaces are implemented. OpenAI, Anthropic, Gemini, and compatible providers stream network responses directly into the native GTK transcript.
 
 See [TODO.md](TODO.md) for the roadmap and [docs/user/getting-started.md](docs/user/getting-started.md) for workflow details.
 

@@ -115,6 +115,41 @@ assertEqual(standardEvents[0].data, 'first\nsecond', 'Multiline SSE data');
 assertEqual(standardEvents[1].event, '', 'SSE event name resets without data');
 assertEqual(standardEvents[1].data, 'final', 'UTF-8 BOM and comment handling');
 
+let oversizedLineError = null;
+
+try {
+    new ServerSentEventDecoder({
+        providerName: 'Limited Provider',
+        maxLineChars: 8,
+    }).push('data: oversized');
+} catch (error) {
+    oversizedLineError = error;
+}
+
+assertEqual(
+    oversizedLineError?.userMessage,
+    'Limited Provider returned an oversized streaming line.',
+    'Oversized SSE line error',
+);
+
+let oversizedEventError = null;
+
+try {
+    new ServerSentEventDecoder({
+        providerName: 'Limited Provider',
+        maxLineChars: 32,
+        maxEventChars: 8,
+    }).push('data: 12345\ndata: 6789\n\n');
+} catch (error) {
+    oversizedEventError = error;
+}
+
+assertEqual(
+    oversizedEventError?.userMessage,
+    'Limited Provider returned an oversized streaming event.',
+    'Oversized SSE event error',
+);
+
 async function collectStreamChunks(provider) {
     const chunks = [];
 
@@ -324,6 +359,17 @@ server.add_handler('/v1/chat/strict-streaming', (_server, message) => {
     strictStreamingRequestAccepted = true;
     setEventStreamResponse(message, [
         eventData({ choices: [{ delta: { content: 'Strict stream accepted' }, finish_reason: 'stop' }] }),
+        'data: [DONE]\n\n',
+    ]);
+});
+
+server.add_handler('/v1/chat/utf8-boundary', (_server, message) => {
+    const eventPrefix = 'data: {"choices":[{"delta":{"content":"';
+    const paddingLength = (16 * 1024) - 1 - new TextEncoder().encode(eventPrefix).length;
+    const content = `${'x'.repeat(paddingLength)}🙂tail`;
+
+    setEventStreamResponse(message, [
+        eventData({ choices: [{ delta: { content }, finish_reason: 'stop' }] }),
         'data: [DONE]\n\n',
     ]);
 });
@@ -580,6 +626,16 @@ if (listening) {
             'Strict OpenAI-compatible stream response',
         );
         assertEqual(strictStreamingRequestAccepted, true, 'Strict stream omitted unsupported options');
+
+        const utf8BoundaryProvider = new OpenAiCompatibleChatProvider({
+            ...config,
+            name: 'UTF-8 Boundary Provider',
+            chatPath: '/chat/utf8-boundary',
+        });
+        const utf8BoundaryText = (await collectTextChunks(utf8BoundaryProvider)).join('');
+
+        assertEqual(utf8BoundaryText.endsWith('🙂tail'), true, 'Split UTF-8 stream character');
+        assertEqual(utf8BoundaryText.includes('\uFFFD'), false, 'Split UTF-8 stream replacement character');
 
         const openAiResponsesProvider = new OpenAiResponsesProvider({
             ...config,

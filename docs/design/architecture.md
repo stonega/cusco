@@ -81,6 +81,6 @@ Cusco starts as a standalone native GNOME application.
 - High contrast, reduced motion, and compact-layout hooks are applied with CSS classes controlled by settings and window size.
 - Advanced workspace data is local-first and persisted separately from conversation transcripts, with explicit export and extension registries.
 - MCP servers are loaded from `~/.config/io.github.stonega.Cusco/mcp.json`, which is exposed from Workspace preferences for editing and reload. Enabled MCP tools are exposed to Agent Mode with `mcp__server__tool` names and use the same permission/audit path as built-in tools.
-- Remote providers stream display chunks after receiving a complete provider response; true network streaming is still pending.
+- Remote providers consume their native event streams incrementally, normalize text, reasoning, usage, tool calls, and provider context through one async-iterator contract, and preserve partial output when an interrupted response cannot be replayed safely.
 - Memory must remain visible, editable, disableable, importable, and exportable.
 - Secrets must not be stored in GSettings or local JSON.

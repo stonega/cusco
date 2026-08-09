@@ -323,9 +323,13 @@ function createMarkdownLabel(content, options = {}) {
     });
     label.set_wrap_mode(Pango.WrapMode.WORD_CHAR);
     label.set_use_markup(true);
-    label.set_markup(markdownToPangoMarkup(content) || ' ');
     label.add_css_class('cusco-message-markdown');
-    applyReferenceTextStyles(label, options.references, options.referenceStyles);
+    label.updateMarkdown = (nextContent, nextOptions = options) => {
+        label.set_selectable(nextOptions.selectable !== false);
+        label.set_markup(markdownToPangoMarkup(nextContent) || ' ');
+        applyReferenceTextStyles(label, nextOptions.references, nextOptions.referenceStyles);
+    };
+    label.updateMarkdown(content, options);
 
     return label;
 }
@@ -685,6 +689,7 @@ export function createArtifactCard(artifact, options = {}) {
 }
 
 function createCodeBlock(block, options) {
+    let currentBlock = { ...block };
     const outer = new Gtk.Box({
         orientation: Gtk.Orientation.VERTICAL,
         spacing: 0,
@@ -718,7 +723,7 @@ function createCodeBlock(block, options) {
     });
     copyButton.add_css_class('flat');
     copyButton.connect('clicked', () => {
-        copyTextToClipboard(block.content);
+        copyTextToClipboard(currentBlock.content);
         options.onCopyCode?.();
     });
 
@@ -756,48 +761,195 @@ function createCodeBlock(block, options) {
 
     scheduleSyntaxHighlight(buffer, outer, block.language);
 
+    outer.updateCodeBlock = (nextBlock) => {
+        const nextLanguage = String(nextBlock?.language ?? '');
+        const nextContent = String(nextBlock?.content ?? '');
+        const languageChanged = nextLanguage !== currentBlock.language;
+
+        currentBlock = {
+            type: 'code',
+            language: nextLanguage,
+            content: nextContent,
+        };
+        languageLabel.set_label(nextLanguage || 'code');
+        buffer.set_text(nextContent, -1);
+        scroller.set_min_content_height(Math.min(
+            220,
+            Math.max(72, Math.max(1, nextContent.split('\n').length) * 22),
+        ));
+
+        if (languageChanged) {
+            buffer.set_highlight_syntax(false);
+            scheduleSyntaxHighlight(buffer, outer, nextLanguage);
+        }
+    };
+
     return outer;
 }
 
-export function renderMessageContent(container, body, options = {}) {
-    clearBox(container);
-    const renderedArtifacts = new Set();
-    const renderedBody = options.streaming
-        ? stabilizeStreamingMarkdown(body)
-        : body;
-    const artifactKey = (artifact) => artifact?.artifactId
+function artifactKey(artifact) {
+    return artifact?.artifactId
         ? `${artifact.artifactId}/${artifact.revisionId}`
         : artifact?.id ?? artifact?.path ?? artifact;
+}
 
-    for (const [index, block] of parseMarkdownBlocks(renderedBody).entries()) {
-        if (block.type === 'code') {
-            const artifact = artifactForCodeBlock(options.artifacts, index, block);
+function messageBlockSignature(block) {
+    switch (block?.type) {
+    case 'code':
+        return `code\u0000${block.language ?? ''}\u0000${block.content ?? ''}`;
+    case 'divider':
+        return 'divider';
+    case 'table':
+        return `table\u0000${JSON.stringify([
+            block.headers ?? [],
+            block.alignments ?? [],
+            block.rows ?? [],
+        ])}`;
+    default:
+        return `markdown\u0000${block?.content ?? ''}`;
+    }
+}
 
-            if (artifact)
-                renderedArtifacts.add(artifactKey(artifact));
+export function streamingBlockReusePlan(previousBlocks, nextBlocks) {
+    const previous = Array.isArray(previousBlocks) ? previousBlocks : [];
+    const next = Array.isArray(nextBlocks) ? nextBlocks : [];
+    let stablePrefix = 0;
 
-            container.append(artifact
+    while (stablePrefix < previous.length
+        && stablePrefix < next.length
+        && messageBlockSignature(previous[stablePrefix]) === messageBlockSignature(next[stablePrefix])) {
+        stablePrefix++;
+    }
+
+    const previousTail = previous[stablePrefix];
+    const nextTail = next[stablePrefix];
+    const canUpdateTail = stablePrefix === previous.length - 1
+        && stablePrefix === next.length - 1
+        && previousTail?.type === nextTail?.type
+        && (nextTail?.type === 'markdown' || nextTail?.type === 'code');
+
+    return { stablePrefix, canUpdateTail };
+}
+
+function createMessageBlockDescriptor(block, index, options) {
+    if (block.type === 'code') {
+        const artifact = artifactForCodeBlock(options.artifacts, index, block);
+
+        return {
+            artifactKey: artifact ? artifactKey(artifact) : null,
+            block,
+            widget: artifact
                 ? createArtifactCard(artifact, {
                     ...options,
                     source: block.content,
                     sourceLanguage: block.language,
                 })
-                : createCodeBlock(block, options));
-        } else if (block.type === 'divider') {
-            container.append(createMarkdownDivider());
-        } else if (block.type === 'table') {
-            container.append(createMarkdownTable(block, options));
-        } else {
-            container.append(createMarkdownLabel(block.content, options));
+                : createCodeBlock(block, options),
+        };
+    }
+
+    return {
+        artifactKey: null,
+        block,
+        widget: block.type === 'divider'
+            ? createMarkdownDivider()
+            : block.type === 'table'
+                ? createMarkdownTable(block, options)
+                : createMarkdownLabel(block.content, options),
+    };
+}
+
+function appendUnreferencedArtifacts(container, options, renderedArtifactKeys) {
+    const descriptors = [];
+
+    for (const artifact of Array.isArray(options.artifacts) ? options.artifacts : []) {
+        const key = artifactKey(artifact);
+
+        if (renderedArtifactKeys.has(key))
+            continue;
+
+        const widget = createArtifactCard(artifact, options);
+        container.append(widget);
+        descriptors.push({ key, widget });
+    }
+
+    return descriptors;
+}
+
+function renderMessageBlocks(container, blocks, options) {
+    const descriptors = blocks.map((block, index) => {
+        const descriptor = createMessageBlockDescriptor(block, index, options);
+        container.append(descriptor.widget);
+        return descriptor;
+    });
+    const renderedArtifactKeys = new Set(
+        descriptors.map((descriptor) => descriptor.artifactKey).filter(Boolean),
+    );
+
+    return {
+        blocks: descriptors,
+        artifacts: appendUnreferencedArtifacts(container, options, renderedArtifactKeys),
+    };
+}
+
+function removeDescriptorWidgets(container, descriptors) {
+    for (const descriptor of descriptors) {
+        if (descriptor.widget?.get_parent?.() === container)
+            container.remove(descriptor.widget);
+    }
+}
+
+function updateStreamingMessageContent(container, renderedBody, options, previousState) {
+    const nextBlocks = parseMarkdownBlocks(renderedBody);
+    const previousBlocks = previousState.blocks.map((descriptor) => descriptor.block);
+    const plan = streamingBlockReusePlan(previousBlocks, nextBlocks);
+    const nextDescriptors = previousState.blocks.slice(0, plan.stablePrefix);
+    let appendFrom = plan.stablePrefix;
+
+    if (plan.canUpdateTail) {
+        const previousTail = previousState.blocks[plan.stablePrefix];
+        const nextTail = nextBlocks[plan.stablePrefix];
+        const nextArtifact = nextTail.type === 'code'
+            ? artifactForCodeBlock(options.artifacts, plan.stablePrefix, nextTail)
+            : null;
+
+        if (!previousTail.artifactKey && !nextArtifact) {
+            if (nextTail.type === 'markdown')
+                previousTail.widget.updateMarkdown?.(nextTail.content, options);
+            else
+                previousTail.widget.updateCodeBlock?.(nextTail);
+
+            nextDescriptors.push({ ...previousTail, block: nextTail });
+            appendFrom++;
         }
     }
 
-    for (const artifact of Array.isArray(options.artifacts) ? options.artifacts : []) {
-        if (renderedArtifacts.has(artifactKey(artifact)))
-            continue;
+    removeDescriptorWidgets(container, previousState.blocks.slice(nextDescriptors.length));
+    removeDescriptorWidgets(container, previousState.artifacts);
 
-        container.append(createArtifactCard(artifact, options));
+    for (let index = appendFrom; index < nextBlocks.length; index++) {
+        const descriptor = createMessageBlockDescriptor(nextBlocks[index], index, options);
+        container.append(descriptor.widget);
+        nextDescriptors.push(descriptor);
     }
+
+    const renderedArtifactKeys = new Set(
+        nextDescriptors.map((descriptor) => descriptor.artifactKey).filter(Boolean),
+    );
+
+    return {
+        blocks: nextDescriptors,
+        artifacts: appendUnreferencedArtifacts(container, options, renderedArtifactKeys),
+    };
+}
+
+export function renderMessageContent(container, body, options = {}) {
+    clearBox(container);
+    const renderedBody = options.streaming
+        ? stabilizeStreamingMarkdown(body)
+        : body;
+
+    return renderMessageBlocks(container, parseMarkdownBlocks(renderedBody), options);
 }
 
 export function createMessageContent(body, options = {}) {
@@ -809,12 +961,28 @@ export function createMessageContent(body, options = {}) {
     const renderingOptions = { ...options };
     let currentBody = String(body ?? '');
     let renderedBody = null;
+    let renderedState = null;
     let renderSourceId = 0;
     const render = (force = false) => {
         if (!force && currentBody === renderedBody)
             return;
 
-        renderMessageContent(container, currentBody, renderingOptions);
+        const canUpdateIncrementally = !force
+            && renderingOptions.streaming
+            && renderedState
+            && currentBody.startsWith(renderedBody ?? '');
+        const nextRenderedBody = renderingOptions.streaming
+            ? stabilizeStreamingMarkdown(currentBody)
+            : currentBody;
+
+        renderedState = canUpdateIncrementally
+            ? updateStreamingMessageContent(
+                container,
+                nextRenderedBody,
+                renderingOptions,
+                renderedState,
+            )
+            : renderMessageContent(container, currentBody, renderingOptions);
         renderedBody = currentBody;
     };
     const cancelQueuedRender = () => {

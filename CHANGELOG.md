@@ -19,6 +19,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Retried provider streams that end before visible output, preserved authoritative final text and search sources, and avoided unsupported streaming options on custom compatible APIs.
+- Kept long streamed responses responsive by batching provider snapshots and updating only the unfinished Markdown or code block instead of rebuilding the entire message for every token.
 - Prevented incomplete or output-limited native tool-call batches from executing, and allowed one bounded corrective response before stopping safely.
 - Retried provider requests that receive HTTP 408 responses instead of ending the chat immediately.
 

@@ -149,6 +149,7 @@ const SCROLL_TO_BOTTOM_ANIMATION_INTERVAL_MS = 16;
 const STREAMING_USAGE_UPDATE_INTERVAL_MS = 100;
 const WELCOME_STREAM_INTERVAL_MS = 24;
 const WELCOME_STREAM_CHARACTERS_PER_TICK = 4;
+const PROVIDER_CONTENT_CALLBACK_INTERVAL_MS = 33;
 const CONVERSATION_RENDER_BATCH_BUDGET_US = 8000;
 const CONVERSATION_MESSAGE_PAGE_SIZE = 32;
 const CONVERSATION_PAGE_CONTEXT_LIMIT = 6;
@@ -5859,7 +5860,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                             if (state?.type === 'provider_context')
                                 currentView.set_provider_context?.(state.providerParts);
 
-                            if (state?.type !== 'usage' && state?.type !== 'provider_context')
+                            if (state?.type === 'text')
                                 currentView.set_label(text);
 
                             this._scheduleUsageDisplayUpdate(conversation);
@@ -6014,6 +6015,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
     async _collectProviderResponse(providerId, modelId, providerMessages, cancellable, onChunk = null, collectOptions = {}) {
         const activeProvider = this._providerConfigs.createProvider(providerId);
         const providerConfig = this._providerConfigs.resolve(providerId, modelId);
+        const responseTextParts = [];
+        const reasoningTextParts = [];
         let responseText = '';
         let reasoningText = '';
         let usage = null;
@@ -6021,59 +6024,177 @@ class CuscoWindow extends Adw.ApplicationWindow {
         let toolCallIntegrity = { status: 'valid', reason: '' };
         const serverToolResults = [];
         let providerParts = [];
+        const pendingContent = {
+            text: { parts: [], replace: false },
+            reasoning: { parts: [], replace: false },
+        };
+        const pendingContentOrder = [];
+        let lastContentFlushAt = 0;
+        let contentFlushSourceId = 0;
+        let deferredContentError = null;
+        const cancelScheduledContentFlush = () => {
+            if (!contentFlushSourceId)
+                return;
 
-        for await (const chunk of activeProvider.streamChat(providerMessages, {
-            ...providerConfig,
-            cancellable,
-            timeoutSeconds: this._appSettings.responseTimeoutSeconds,
-            maxOutputTokens: collectOptions.maxOutputTokens,
-            thinkingLevel: this._resolveThinkingLevelForSelection(
-                providerId,
-                modelId,
-                collectOptions.thinkingLevel
-                    ?? this._conversations.activeConversation?.thinkingLevel
-                    ?? this._appSettings.thinkingLevel,
-            ),
-            tools: collectOptions.tools ?? [],
-        })) {
-            const normalizedChunk = normalizeProviderChunk(chunk);
+            GLib.source_remove(contentFlushSourceId);
+            contentFlushSourceId = 0;
+        };
+        const materializeContent = () => {
+            responseText = responseTextParts.join('');
+            reasoningText = reasoningTextParts.join('');
+        };
+        const chunkState = (normalizedChunk) => ({
+            type: normalizedChunk.type,
+            text: responseText,
+            reasoning: reasoningText,
+            replace: normalizedChunk.replace === true,
+            usage,
+            toolCalls,
+            toolCallIntegrity,
+            serverToolResults,
+            providerParts,
+            serverToolResultChunk: normalizedChunk.serverToolResults ?? [],
+            status: normalizedChunk.type === 'status' ? normalizedChunk.text : '',
+            statusKind: normalizedChunk.status ?? '',
+            attempt: normalizedChunk.attempt ?? 0,
+            maxAttempts: normalizedChunk.maxAttempts ?? 0,
+        });
+        const flushPendingContent = () => {
+            if (pendingContentOrder.length === 0)
+                return;
 
-            if (normalizedChunk.type === 'status') {
-                // Status updates are transient UI state, not assistant content.
-            } else if (normalizedChunk.type === 'usage')
-                usage = normalizedChunk.usage;
-            else if (normalizedChunk.type === 'reasoning')
-                reasoningText = normalizedChunk.replace
-                    ? normalizedChunk.text
-                    : reasoningText + normalizedChunk.text;
-            else if (normalizedChunk.type === 'tool_calls') {
-                toolCalls.push(...normalizedChunk.toolCalls);
-                toolCallIntegrity = normalizedChunk.toolCallIntegrity;
-            } else if (normalizedChunk.type === 'server_tool_results')
-                serverToolResults.push(...normalizedChunk.serverToolResults);
-            else if (normalizedChunk.type === 'provider_context')
-                providerParts = normalizedChunk.providerParts;
-            else
-                responseText = normalizedChunk.replace
-                    ? normalizedChunk.text
-                    : responseText + normalizedChunk.text;
+            cancelScheduledContentFlush();
+            materializeContent();
 
-            onChunk?.(responseText, normalizedChunk.text, {
-                type: normalizedChunk.type,
-                text: responseText,
-                reasoning: reasoningText,
-                usage,
-                toolCalls,
-                toolCallIntegrity,
-                serverToolResults,
-                providerParts,
-                serverToolResultChunk: normalizedChunk.serverToolResults ?? [],
-                status: normalizedChunk.type === 'status' ? normalizedChunk.text : '',
-                statusKind: normalizedChunk.status ?? '',
-                attempt: normalizedChunk.attempt ?? 0,
-                maxAttempts: normalizedChunk.maxAttempts ?? 0,
-            });
+            for (const type of pendingContentOrder) {
+                const pending = pendingContent[type];
+                const delta = pending.parts.join('');
+
+                onChunk?.(responseText, delta, chunkState({
+                    type,
+                    text: delta,
+                    replace: pending.replace,
+                }));
+                pending.parts = [];
+                pending.replace = false;
+            }
+
+            pendingContentOrder.length = 0;
+            lastContentFlushAt = GLib.get_monotonic_time();
+        };
+        const scheduleContentFlush = (delayMilliseconds) => {
+            if (!onChunk || contentFlushSourceId)
+                return;
+
+            contentFlushSourceId = GLib.timeout_add(
+                GLib.PRIORITY_DEFAULT,
+                Math.max(1, Math.ceil(delayMilliseconds)),
+                () => {
+                    contentFlushSourceId = 0;
+
+                    try {
+                        flushPendingContent();
+                    } catch (error) {
+                        deferredContentError = error;
+                        cancellable?.cancel?.();
+                    }
+
+                    return GLib.SOURCE_REMOVE;
+                },
+            );
+        };
+        const queueContent = (type, text, replace) => {
+            const targetParts = type === 'reasoning' ? reasoningTextParts : responseTextParts;
+            const pending = pendingContent[type];
+
+            if (replace) {
+                targetParts.length = 0;
+                pending.parts = [];
+                pending.replace = true;
+            }
+
+            targetParts.push(text);
+            pending.parts.push(text);
+
+            if (!pendingContentOrder.includes(type))
+                pendingContentOrder.push(type);
+
+            const now = GLib.get_monotonic_time();
+            const elapsedMilliseconds = (now - lastContentFlushAt) / 1000;
+
+            if (onChunk && (lastContentFlushAt === 0
+                || elapsedMilliseconds >= PROVIDER_CONTENT_CALLBACK_INTERVAL_MS)) {
+                flushPendingContent();
+            } else
+                scheduleContentFlush(PROVIDER_CONTENT_CALLBACK_INTERVAL_MS - elapsedMilliseconds);
+        };
+
+        let providerError = null;
+
+        try {
+            for await (const chunk of activeProvider.streamChat(providerMessages, {
+                ...providerConfig,
+                cancellable,
+                timeoutSeconds: this._appSettings.responseTimeoutSeconds,
+                maxOutputTokens: collectOptions.maxOutputTokens,
+                thinkingLevel: this._resolveThinkingLevelForSelection(
+                    providerId,
+                    modelId,
+                    collectOptions.thinkingLevel
+                        ?? this._conversations.activeConversation?.thinkingLevel
+                        ?? this._appSettings.thinkingLevel,
+                ),
+                tools: collectOptions.tools ?? [],
+            })) {
+                if (deferredContentError)
+                    throw deferredContentError;
+
+                const normalizedChunk = normalizeProviderChunk(chunk);
+
+                if (normalizedChunk.type === 'reasoning' || normalizedChunk.type === 'text') {
+                    queueContent(
+                        normalizedChunk.type,
+                        normalizedChunk.text,
+                        normalizedChunk.replace === true,
+                    );
+                    continue;
+                }
+
+                flushPendingContent();
+
+                if (normalizedChunk.type === 'status') {
+                    // Status updates are transient UI state, not assistant content.
+                } else if (normalizedChunk.type === 'usage')
+                    usage = normalizedChunk.usage;
+                else if (normalizedChunk.type === 'tool_calls') {
+                    toolCalls.push(...normalizedChunk.toolCalls);
+                    toolCallIntegrity = normalizedChunk.toolCallIntegrity;
+                } else if (normalizedChunk.type === 'server_tool_results')
+                    serverToolResults.push(...normalizedChunk.serverToolResults);
+                else if (normalizedChunk.type === 'provider_context')
+                    providerParts = normalizedChunk.providerParts;
+
+                onChunk?.(responseText, normalizedChunk.text, chunkState(normalizedChunk));
+            }
+        } catch (error) {
+            providerError = error;
+        } finally {
+            cancelScheduledContentFlush();
+
+            try {
+                flushPendingContent();
+            } catch (error) {
+                deferredContentError ??= error;
+            }
         }
+
+        if (deferredContentError)
+            throw deferredContentError;
+
+        if (providerError)
+            throw providerError;
+
+        materializeContent();
 
         if (collectOptions.returnState)
             return {
@@ -7053,7 +7174,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
         };
 
         const updatePersistentText = (text, displayText = text) => {
-            currentText = String(text ?? '');
+            const normalizedText = String(text ?? '');
+
+            if (normalizedText === currentText) {
+                ensureView()?.set_label(displayText);
+                return;
+            }
+
+            currentText = normalizedText;
             const message = ensureMessage(currentText);
 
             this._conversations.updateMessageContent(
@@ -7066,7 +7194,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
         };
 
         const updatePersistentReasoning = (reasoning) => {
-            currentReasoning = String(reasoning ?? '');
+            const normalizedReasoning = String(reasoning ?? '');
+
+            if (normalizedReasoning === currentReasoning)
+                return;
+
+            currentReasoning = normalizedReasoning;
             const message = ensureMessage(currentText);
 
             this._conversations.updateMessageReasoning(conversation.id, message.id, {

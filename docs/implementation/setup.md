@@ -94,6 +94,6 @@ trigger. RPM specs should not add manual `%post` or `%postun`
 `glib-compile-schemas` calls for Cusco; those compile every host schema and can
 print unrelated system warnings as Cusco install output.
 
-## Next Implementation Steps
+## Runtime Verification
 
-1. Replace display-level chunking with true provider streaming for remote APIs.
+Run `gjs -m tests/remote-provider-http-smoke.js` to exercise native loopback streaming, protocol reduction, interruption handling, and retry behavior without contacting external providers.

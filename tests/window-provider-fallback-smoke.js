@@ -1,9 +1,20 @@
+import GLib from 'gi://GLib';
+
 import { CuscoWindow } from '../src/window.js';
 import { createOutputCapacityError } from '../src/providers/outputLimits.js';
 
 function assertEqual(actual, expected, label) {
     if (actual !== expected)
         throw new Error(`${label}: expected ${expected}, got ${actual}`);
+}
+
+function delay(milliseconds) {
+    return new Promise((resolve) => {
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, milliseconds, () => {
+            resolve();
+            return GLib.SOURCE_REMOVE;
+        });
+    });
 }
 
 function createFallbackWindow(collectProviderResponse) {
@@ -161,6 +172,82 @@ assertEqual(
     replacementStates.at(-1).text,
     'Final answer',
     'Authoritative replacement callback state',
+);
+
+const streamedChunkCount = 1000;
+const batchedSnapshots = [];
+const batchingWindow = {
+    ...replacementWindow,
+    _providerConfigs: {
+        ...replacementWindow._providerConfigs,
+        createProvider() {
+            return {
+                async *streamChat() {
+                    for (let index = 0; index < streamedChunkCount; index++)
+                        yield 'x';
+                },
+            };
+        },
+    },
+};
+const batchedResponse = await CuscoWindow.prototype._collectProviderResponse.call(
+    batchingWindow,
+    'batching-provider',
+    'batching-model',
+    [],
+    null,
+    (text, _chunk, state) => {
+        if (state.type === 'text')
+            batchedSnapshots.push(text);
+    },
+);
+
+assertEqual(batchedResponse.length, streamedChunkCount, 'Batched stream final response length');
+assertEqual(
+    batchedSnapshots.at(-1),
+    batchedResponse,
+    'Batched stream final callback snapshot',
+);
+
+if (batchedSnapshots.length >= streamedChunkCount)
+    throw new Error('Stream collector materialized the full response for every provider chunk');
+
+let secondChunkVisibleDuringPause = false;
+let latestPausedSnapshot = '';
+const pausedWindow = {
+    ...replacementWindow,
+    _providerConfigs: {
+        ...replacementWindow._providerConfigs,
+        createProvider() {
+            return {
+                async *streamChat() {
+                    yield 'a';
+                    yield 'b';
+                    await delay(80);
+                    secondChunkVisibleDuringPause = latestPausedSnapshot === 'ab';
+                    yield 'c';
+                },
+            };
+        },
+    },
+};
+
+await CuscoWindow.prototype._collectProviderResponse.call(
+    pausedWindow,
+    'paused-provider',
+    'paused-model',
+    [],
+    null,
+    (text, _chunk, state) => {
+        if (state.type === 'text')
+            latestPausedSnapshot = text;
+    },
+);
+
+assertEqual(
+    secondChunkVisibleDuringPause,
+    true,
+    'Queued content flushes while the provider stream is paused',
 );
 
 print('Cusco window provider fallback smoke passed');
