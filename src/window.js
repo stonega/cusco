@@ -56,6 +56,15 @@ import {
     summarizeUsageDashboard,
 } from './chat/usage.js';
 import {
+    buildDailyUsageChartPoints,
+    buildDailyUsageCurveSegments,
+    DAILY_USAGE_CHART_PADDING,
+    dailyUsageDateLabelIndices,
+    dailyUsageIndexAtX,
+    shouldKeepDailyUsageTooltipVisible,
+} from './chat/usageChart.js';
+import { createProviderIconPileView } from './chat/providerIconPileView.js';
+import {
     createWelcomeMessage,
     isLegacyWelcomeConversation,
     isWelcomeMessage,
@@ -349,15 +358,25 @@ function drawContextUsageChart(cr, width, height, fraction, color) {
     cr.restore();
 }
 
-function drawDailyUsageChart(cr, width, height, daily, color) {
-    const values = Array.isArray(daily)
-        ? daily.map((entry) => Math.max(0, Number(entry?.totalTokens) || 0))
-        : [];
-    const padding = { top: 14, right: 8, bottom: 10, left: 8 };
+function appendDailyUsageCurve(cr, segments) {
+    for (const segment of segments) {
+        cr.curveTo(
+            segment.control1X,
+            segment.control1Y,
+            segment.control2X,
+            segment.control2Y,
+            segment.endX,
+            segment.endY,
+        );
+    }
+}
+
+function drawDailyUsageChart(cr, width, height, daily, color, hoveredIndex = -1) {
+    const padding = DAILY_USAGE_CHART_PADDING;
     const chartWidth = Math.max(1, width - padding.left - padding.right);
     const chartHeight = Math.max(1, height - padding.top - padding.bottom);
     const baseline = padding.top + chartHeight;
-    const maximum = Math.max(1, ...values);
+    const points = buildDailyUsageChartPoints(daily, width, height);
 
     cr.save();
     cr.setLineWidth(1);
@@ -370,35 +389,43 @@ function drawDailyUsageChart(cr, width, height, daily, color) {
     }
     cr.stroke();
 
-    if (values.length === 0 || values.every((value) => value === 0)) {
+    if (points.length === 0) {
         cr.restore();
         return;
     }
 
-    const pointFor = (value, index) => ({
-        x: padding.left + (values.length === 1
-            ? chartWidth / 2
-            : (chartWidth * index) / (values.length - 1)),
-        y: baseline - ((value / maximum) * chartHeight),
-    });
-    const points = values.map(pointFor);
+    if (points.some((point) => point.value > 0)) {
+        const curveSegments = buildDailyUsageCurveSegments(points);
 
-    cr.moveTo(points[0].x, baseline);
-    for (const point of points)
-        cr.lineTo(point.x, point.y);
-    cr.lineTo(points.at(-1).x, baseline);
-    cr.closePath();
-    cr.setSourceRGBA(color.red, color.green, color.blue, color.alpha * 0.16);
-    cr.fill();
+        cr.moveTo(points[0].x, baseline);
+        cr.lineTo(points[0].x, points[0].y);
+        appendDailyUsageCurve(cr, curveSegments);
+        cr.lineTo(points.at(-1).x, baseline);
+        cr.closePath();
+        cr.setSourceRGBA(color.red, color.green, color.blue, color.alpha * 0.16);
+        cr.fill();
 
-    cr.setLineWidth(2);
-    cr.setLineJoin(Cairo.LineJoin.ROUND);
-    cr.setLineCap(Cairo.LineCap.ROUND);
-    cr.moveTo(points[0].x, points[0].y);
-    for (const point of points.slice(1))
-        cr.lineTo(point.x, point.y);
-    cr.setSourceRGBA(color.red, color.green, color.blue, Math.max(0.72, color.alpha));
-    cr.stroke();
+        cr.setLineWidth(2);
+        cr.setLineJoin(Cairo.LineJoin.ROUND);
+        cr.setLineCap(Cairo.LineCap.ROUND);
+        cr.moveTo(points[0].x, points[0].y);
+        appendDailyUsageCurve(cr, curveSegments);
+        cr.setSourceRGBA(color.red, color.green, color.blue, Math.max(0.72, color.alpha));
+        cr.stroke();
+    }
+
+    const hoveredPoint = points[hoveredIndex];
+    if (hoveredPoint) {
+        cr.setLineWidth(1);
+        cr.setSourceRGBA(color.red, color.green, color.blue, Math.max(0.38, color.alpha * 0.5));
+        cr.moveTo(hoveredPoint.x, padding.top);
+        cr.lineTo(hoveredPoint.x, baseline);
+        cr.stroke();
+
+        cr.arc(hoveredPoint.x, hoveredPoint.y, 4, 0, Math.PI * 2);
+        cr.setSourceRGBA(color.red, color.green, color.blue, Math.max(0.9, color.alpha));
+        cr.fill();
+    }
     cr.restore();
 }
 
@@ -1234,6 +1261,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 this._usageRefreshSourceId = 0;
             }
 
+            this._usageProviderIconPile?.stop();
+
             if (this._pendingConversationSendSourceId) {
                 GLib.Source.remove(this._pendingConversationSendSourceId);
                 this._pendingConversationSendSourceId = 0;
@@ -1254,6 +1283,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 this._composerUsagePopover.popdown();
                 this._composerUsagePopover.unparent();
                 this._composerUsagePopover = null;
+            }
+
+            this._cancelUsageChartTooltipHide?.();
+            this._cancelUsageChartTooltipHide = null;
+            if (this._usageChartTooltip) {
+                this._usageChartTooltip.popdown();
+                this._usageChartTooltip.unparent();
+                this._usageChartTooltip = null;
             }
 
             this._mcp.shutdown();
@@ -1547,12 +1584,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         sidebarContent.append(this._conversationListScroller);
 
-        sidebarContent.append(new Gtk.Separator({
-            orientation: Gtk.Orientation.HORIZONTAL,
-            margin_start: 12,
-            margin_end: 12,
-        }));
-
         const usageButtonContent = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 10,
@@ -1613,15 +1644,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._primaryStack.add_named(this._usageSurface, 'usage');
     }
 
-    _createUsageMetricCard(title) {
-        const card = new Gtk.Box({
-            orientation: Gtk.Orientation.VERTICAL,
-            spacing: 4,
-            hexpand: true,
-            width_request: 175,
-        });
-        card.add_css_class('card');
-        card.add_css_class('cusco-usage-metric-card');
+    _createUsageMetricLabels(title) {
         const titleLabel = new Gtk.Label({
             label: title,
             xalign: 0,
@@ -1636,6 +1659,19 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         valueLabel.add_css_class('title-2');
         valueLabel.add_css_class('cusco-chat-statistics-value');
+        return { titleLabel, valueLabel };
+    }
+
+    _createUsageMetricCard(title) {
+        const card = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 4,
+            hexpand: true,
+            width_request: 175,
+        });
+        card.add_css_class('card');
+        card.add_css_class('cusco-usage-metric-card');
+        const { titleLabel, valueLabel } = this._createUsageMetricLabels(title);
         const detailLabel = new Gtk.Label({
             label: '',
             xalign: 0,
@@ -1653,11 +1689,29 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._usagePeriodDays = 30;
         const toolbarView = new Adw.ToolbarView();
         const headerBar = new Adw.HeaderBar();
-        this._usageWindowTitle = new Adw.WindowTitle({
-            title: 'Usage',
-            subtitle: 'Last 30 days',
+        const usageTitle = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            halign: Gtk.Align.START,
+            valign: Gtk.Align.CENTER,
+            margin_start: 12,
         });
-        headerBar.set_title_widget(this._usageWindowTitle);
+        const usageTitleLabel = new Gtk.Label({
+            label: 'Usage',
+            halign: Gtk.Align.START,
+            xalign: 0,
+        });
+        usageTitleLabel.add_css_class('heading');
+        this._usageWindowSubtitleLabel = new Gtk.Label({
+            label: 'Last 30 days',
+            halign: Gtk.Align.START,
+            xalign: 0,
+        });
+        this._usageWindowSubtitleLabel.add_css_class('caption');
+        this._usageWindowSubtitleLabel.add_css_class('dim-label');
+        usageTitle.append(usageTitleLabel);
+        usageTitle.append(this._usageWindowSubtitleLabel);
+        headerBar.set_show_title(false);
+        headerBar.pack_start(usageTitle);
 
         const periodButtons = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
@@ -1712,15 +1766,32 @@ class CuscoWindow extends Adw.ApplicationWindow {
             line_homogeneous: false,
             wrap_policy: Adw.WrapPolicy.MINIMUM,
             hexpand: true,
+            vexpand: false,
+            valign: Gtk.Align.START,
         });
 
-        const totalCard = new Gtk.Box({
-            orientation: Gtk.Orientation.VERTICAL,
-            spacing: 7,
+        const totalCard = new Gtk.Overlay({
             width_request: 245,
         });
         totalCard.add_css_class('card');
         totalCard.add_css_class('cusco-usage-total-card');
+        this._usageProviderIconPile = createProviderIconPileView(this._providerConfigs);
+        totalCard.set_child(this._usageProviderIconPile.widget);
+        const totalContent = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 7,
+            hexpand: true,
+            vexpand: true,
+            valign: Gtk.Align.START,
+            can_target: false,
+            margin_top: 20,
+            margin_bottom: 20,
+            margin_start: 20,
+            margin_end: 20,
+        });
+        totalCard.add_overlay(totalContent);
+        totalCard.set_measure_overlay(totalContent, true);
+        totalCard.set_clip_overlay(totalContent, true);
         const totalHeading = new Gtk.Label({
             label: 'TOTAL TOKENS',
             xalign: 0,
@@ -1733,15 +1804,39 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         this._usageTotalTokensLabel.add_css_class('title-1');
         this._usageTotalTokensLabel.add_css_class('cusco-chat-statistics-value');
-        this._usageTotalDetailLabel = new Gtk.Label({
-            label: 'No stored usage',
+        const secondaryTotals = new Gtk.Grid({
+            column_spacing: 20,
+            row_spacing: 12,
+            column_homogeneous: true,
+            margin_top: 8,
+        });
+        const createSecondaryTotal = (title, column, row) => {
+            const metric = new Gtk.Box({
+                orientation: Gtk.Orientation.VERTICAL,
+                spacing: 4,
+                hexpand: true,
+            });
+            const { titleLabel, valueLabel } = this._createUsageMetricLabels(title);
+            metric.append(titleLabel);
+            metric.append(valueLabel);
+            secondaryTotals.attach(metric, column, row, 1, 1);
+            return valueLabel;
+        };
+        this._usageConversationCountLabel = createSecondaryTotal('CONVERSATIONS', 0, 0);
+        this._usageMessageCountLabel = createSecondaryTotal('MESSAGES', 1, 0);
+        this._usageProviderCountLabel = createSecondaryTotal('PROVIDERS', 0, 1);
+        this._usageModelCountLabel = createSecondaryTotal('MODELS', 1, 1);
+        this._usageTotalStatusLabel = new Gtk.Label({
             xalign: 0,
             wrap: true,
+            visible: false,
         });
-        this._usageTotalDetailLabel.add_css_class('dim-label');
-        totalCard.append(totalHeading);
-        totalCard.append(this._usageTotalTokensLabel);
-        totalCard.append(this._usageTotalDetailLabel);
+        this._usageTotalStatusLabel.add_css_class('caption');
+        this._usageTotalStatusLabel.add_css_class('dim-label');
+        totalContent.append(totalHeading);
+        totalContent.append(this._usageTotalTokensLabel);
+        totalContent.append(secondaryTotals);
+        totalContent.append(this._usageTotalStatusLabel);
 
         const chartCard = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
@@ -1756,34 +1851,146 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         chartHeading.add_css_class('heading');
         this._usageChartData = [];
+        this._usageChartHoveredIndex = -1;
         this._usageChart = new Gtk.DrawingArea({
             hexpand: true,
-            vexpand: true,
+            vexpand: false,
+            valign: Gtk.Align.START,
             content_height: 210,
             content_width: 360,
             accessible_role: Gtk.AccessibleRole.IMG,
         });
         this._usageChart.add_css_class('cusco-usage-chart');
         this._usageChart.set_draw_func((widget, cr, width, height) => {
-            drawDailyUsageChart(cr, width, height, this._usageChartData, widget.get_color());
+            drawDailyUsageChart(
+                cr,
+                width,
+                height,
+                this._usageChartData,
+                widget.get_color(),
+                this._usageChartHoveredIndex,
+            );
         });
+        const chartTooltipContent = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 2,
+            margin_top: 8,
+            margin_bottom: 8,
+            margin_start: 10,
+            margin_end: 10,
+        });
+        this._usageChartTooltipDateLabel = new Gtk.Label();
+        this._usageChartTooltipDateLabel.add_css_class('caption');
+        this._usageChartTooltipDateLabel.add_css_class('dim-label');
+        this._usageChartTooltipValueLabel = new Gtk.Label();
+        this._usageChartTooltipValueLabel.add_css_class('heading');
+        chartTooltipContent.append(this._usageChartTooltipDateLabel);
+        chartTooltipContent.append(this._usageChartTooltipValueLabel);
+        this._usageChartTooltip = new Gtk.Popover({
+            child: chartTooltipContent,
+            position: Gtk.PositionType.TOP,
+            autohide: false,
+            can_target: true,
+        });
+        this._usageChartTooltip.set_parent(this._usageChart);
+
+        this._usageChartTooltipHideSourceId = 0;
+        const chartMotionController = new Gtk.EventControllerMotion();
+        const tooltipMotionController = new Gtk.EventControllerMotion();
+        const cancelChartTooltipHide = () => {
+            if (!this._usageChartTooltipHideSourceId)
+                return;
+
+            GLib.Source.remove(this._usageChartTooltipHideSourceId);
+            this._usageChartTooltipHideSourceId = 0;
+        };
+        const hideChartTooltip = () => {
+            this._usageChartHoveredIndex = -1;
+            this._usageChartTooltip.popdown();
+            this._usageChart.queue_draw();
+        };
+        const scheduleChartTooltipHide = () => {
+            if (this._usageChartTooltipHideSourceId)
+                return;
+
+            this._usageChartTooltipHideSourceId = GLib.idle_add(
+                GLib.PRIORITY_DEFAULT_IDLE,
+                () => {
+                    this._usageChartTooltipHideSourceId = 0;
+                    if (shouldKeepDailyUsageTooltipVisible(
+                        chartMotionController.contains_pointer,
+                        tooltipMotionController.contains_pointer,
+                    )) {
+                        return GLib.SOURCE_REMOVE;
+                    }
+
+                    hideChartTooltip();
+                    return GLib.SOURCE_REMOVE;
+                },
+            );
+        };
+        this._cancelUsageChartTooltipHide = cancelChartTooltipHide;
+
+        const updateChartHover = (x) => {
+            cancelChartTooltipHide();
+            const hoveredIndex = dailyUsageIndexAtX(
+                this._usageChartData,
+                this._usageChart.get_width(),
+                x,
+            );
+            if (hoveredIndex < 0)
+                return;
+
+            if (this._usageChartHoveredIndex !== hoveredIndex) {
+                const entry = this._usageChartData[hoveredIndex];
+                const point = buildDailyUsageChartPoints(
+                    this._usageChartData,
+                    this._usageChart.get_width(),
+                    this._usageChart.get_height(),
+                )[hoveredIndex];
+                if (!entry || !point)
+                    return;
+
+                this._usageChartTooltipDateLabel.set_label(formatUsageDate(entry.date));
+                this._usageChartTooltipValueLabel.set_label(
+                    formatStatisticNoun(entry.totalTokens, 'token'),
+                );
+                this._usageChartTooltip.set_pointing_to(new Gdk.Rectangle({
+                    x: Math.round(point.x),
+                    y: Math.round(point.y),
+                    width: 1,
+                    height: 1,
+                }));
+                this._usageChartHoveredIndex = hoveredIndex;
+                this._usageChart.queue_draw();
+            }
+            if (!this._usageChartTooltip.get_visible())
+                this._usageChartTooltip.popup();
+        };
+        chartMotionController.connect('enter', (_controller, x) => updateChartHover(x));
+        chartMotionController.connect('motion', (_controller, x) => updateChartHover(x));
+        chartMotionController.connect('leave', scheduleChartTooltipHide);
+        this._usageChart.add_controller(chartMotionController);
+        tooltipMotionController.connect('enter', cancelChartTooltipHide);
+        tooltipMotionController.connect('leave', scheduleChartTooltipHide);
+        this._usageChartTooltip.add_controller(tooltipMotionController);
+
         const chartDates = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
+            homogeneous: true,
+            spacing: 4,
         });
-        this._usageStartDateLabel = new Gtk.Label({
-            xalign: 0,
-            hexpand: true,
+        this._usageDateLabels = Array.from({ length: 7 }, (_value, index) => {
+            const label = new Gtk.Label({
+                xalign: index === 0 ? 0 : index === 6 ? 1 : 0.5,
+                hexpand: true,
+                visible: false,
+            });
+            label.add_css_class('caption');
+            label.add_css_class('dim-label');
+            chartDates.append(label);
+            return label;
         });
-        this._usageEndDateLabel = new Gtk.Label({
-            xalign: 1,
-            hexpand: true,
-        });
-        this._usageStartDateLabel.add_css_class('caption');
-        this._usageStartDateLabel.add_css_class('dim-label');
-        this._usageEndDateLabel.add_css_class('caption');
-        this._usageEndDateLabel.add_css_class('dim-label');
-        chartDates.append(this._usageStartDateLabel);
-        chartDates.append(this._usageEndDateLabel);
         chartCard.append(chartHeading);
         chartCard.append(this._usageChart);
         chartCard.append(chartDates);
@@ -1894,7 +2101,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
         let incompleteConversationCount = 0;
 
         this._usageTotalTokensLabel.set_label('…');
-        this._usageTotalDetailLabel.set_label('Reading local chat history…');
+        this._usageConversationCountLabel.set_label('…');
+        this._usageMessageCountLabel.set_label('…');
+        this._usageProviderCountLabel.set_label('…');
+        this._usageModelCountLabel.set_label('…');
+        this._usageTotalStatusLabel.set_label('Reading local chat history…');
+        this._usageTotalStatusLabel.set_visible(true);
 
         const finish = () => {
             this._usageRefreshSourceId = 0;
@@ -1943,22 +2155,23 @@ class CuscoWindow extends Adw.ApplicationWindow {
             ? (usage.reportedMessages / usage.assistantMessages) * 100
             : 0;
 
-        this._usageWindowTitle?.set_subtitle(
+        this._usageWindowSubtitleLabel?.set_label(
             `${formatUsageDate(usage.startDate)} – ${formatUsageDate(usage.endDate)}`,
         );
         this._usageTotalTokensLabel.set_label(formatStatisticCount(usage.totalTokens));
-        const totalDetails = [
-            formatStatisticNoun(usage.conversationCount, 'conversation'),
-            formatStatisticNoun(usage.totalMessages, 'message'),
-        ];
-
-        if (incompleteConversationCount > 0) {
-            totalDetails.push(
-                `${formatStatisticNoun(incompleteConversationCount, 'chat')} unavailable`,
-            );
-        }
-
-        this._usageTotalDetailLabel.set_label(totalDetails.join(' · '));
+        this._usageConversationCountLabel.set_label(
+            formatStatisticCount(usage.conversationCount),
+        );
+        this._usageMessageCountLabel.set_label(formatStatisticCount(usage.totalMessages));
+        this._usageProviderCountLabel.set_label(formatStatisticCount(usage.providerCount));
+        this._usageModelCountLabel.set_label(formatStatisticCount(usage.modelCount));
+        this._usageProviderIconPile.setBreakdown(usage.breakdown);
+        this._usageTotalStatusLabel.set_label(
+            incompleteConversationCount > 0
+                ? `${formatStatisticNoun(incompleteConversationCount, 'chat')} unavailable`
+                : '',
+        );
+        this._usageTotalStatusLabel.set_visible(incompleteConversationCount > 0);
         this._usageMetricLabels.cached.valueLabel.set_label(
             formatStatisticCount(usage.cachedInputTokens),
         );
@@ -1988,6 +2201,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
             } assistant messages`,
         );
         this._usageChartData = usage.daily;
+        this._usageChartHoveredIndex = -1;
+        this._cancelUsageChartTooltipHide?.();
+        this._usageChartTooltip?.popdown();
         this._usageChart.queue_draw();
         const dailyDescription = usage.daily
             .filter((entry) => entry.totalTokens > 0)
@@ -1998,13 +2214,24 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const chartDescription = dailyDescription
             ? `Daily token usage. ${dailyDescription}`
             : 'Daily token usage. No provider-reported tokens in this period.';
-        this._usageChart.set_tooltip_text(chartDescription);
         this._usageChart.update_property(
             [Gtk.AccessibleProperty.LABEL],
             [chartDescription],
         );
-        this._usageStartDateLabel.set_label(formatUsageDate(usage.startDate));
-        this._usageEndDateLabel.set_label(formatUsageDate(usage.endDate));
+        const dateLabelIndices = dailyUsageDateLabelIndices(
+            usage.daily.length,
+            this._usageDateLabels.length,
+        );
+        for (let index = 0; index < this._usageDateLabels.length; index += 1) {
+            const label = this._usageDateLabels[index];
+            const dailyIndex = dateLabelIndices[index];
+            const entry = usage.daily[dailyIndex];
+            label.set_visible(Boolean(entry));
+            label.set_label(entry ? formatUsageDate(entry.date) : '');
+            label.set_xalign(index === 0
+                ? 0
+                : index === dateLabelIndices.length - 1 ? 1 : 0.5);
+        }
 
         this._clearBox(this._usageBreakdownList);
 

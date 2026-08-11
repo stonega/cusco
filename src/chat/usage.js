@@ -176,6 +176,8 @@ export function summarizeUsageDashboard(conversations, options = {}) {
         reportedMessages: 0,
         estimatedMessages: 0,
         conversationCount: 0,
+        providerCount: 0,
+        modelCount: 0,
         daily,
         breakdown: [],
     };
@@ -240,5 +242,9 @@ export function summarizeUsageDashboard(conversations, options = {}) {
         || left.providerId.localeCompare(right.providerId)
         || left.modelId.localeCompare(right.modelId)
     ));
+    summary.providerCount = new Set(
+        summary.breakdown.map((entry) => entry.providerId),
+    ).size;
+    summary.modelCount = summary.breakdown.length;
     return summary;
 }
