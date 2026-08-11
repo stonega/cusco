@@ -95,11 +95,37 @@ conversations.updateWorkspaceMetadata(conversation.id, {
 if (!conversationToMarkdown(conversation).includes('# Exportable'))
     throw new Error('Markdown export failed');
 
+conversations.appendMessage(conversation.id, createMessage('assistant', '', {
+    reasoning: {
+        content: 'Internal Agent reasoning',
+        providerId: 'kimi',
+        modelId: 'kimi-k3',
+        thinkingLevel: 'max',
+        agentMode: true,
+    },
+}));
+conversations.appendMessage(conversation.id, createMessage('assistant', 'Exported answer'));
+const reasoningMarkdown = conversationToMarkdown(conversation);
+const assistantHeadings = reasoningMarkdown.match(/^## assistant$/gm) ?? [];
+
+if (assistantHeadings.length !== 1
+    || !reasoningMarkdown.includes('Exported answer')
+    || reasoningMarkdown.includes('Internal Agent reasoning')) {
+    throw new Error('Markdown export emitted an empty Agent reasoning message');
+}
+
 if (!exportConversation(conversation, 'json').includes('"title": "Exportable"'))
     throw new Error('JSON export failed');
 
-if (!conversationToPdf(conversation).startsWith('%PDF-1.4'))
-    throw new Error('PDF export failed');
+const reasoningPdf = conversationToPdf(conversation);
+const pdfAssistantHeadings = reasoningPdf.match(/^\(ASSISTANT:\) Tj T\*$/gm) ?? [];
+
+if (!reasoningPdf.startsWith('%PDF-1.4')
+    || pdfAssistantHeadings.length !== 1
+    || !reasoningPdf.includes('(Exported answer) Tj T*')
+    || reasoningPdf.includes('Internal Agent reasoning')) {
+    throw new Error('PDF export emitted an empty Agent reasoning message');
+}
 
 const tools = new ToolManager();
 tools.registerTool({

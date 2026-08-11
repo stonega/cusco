@@ -3,11 +3,12 @@ import GLib from 'gi://GLib?version=2.0';
 
 import {
     appendToolOutputPreview,
-    attachToolMessagesToAssistant,
+    attachAssistantActivityToAssistant,
     createToolCallFromResult,
     createToolCallFromRequest,
     latestOutputLines,
     normalizeToolCallDisplay,
+    queueAssistantReasoningMessage,
     toolCallBelongsToFollowingAssistant,
 } from '../src/tools/display.js';
 import {
@@ -341,7 +342,7 @@ const pendingToolEntries = [{
         },
     },
 }];
-const attachedToolCount = attachToolMessagesToAssistant(pendingToolEntries, {
+const attachedToolCount = attachAssistantActivityToAssistant(pendingToolEntries, {
     append_tool_result: (message) => {
         attachedToolMessages.push(message);
         return {};
@@ -354,6 +355,133 @@ if (attachedToolCount !== 1
     || !removedStandaloneTool) {
     throw new Error('Explicit tool result was not moved into the following assistant response');
 }
+
+let removedToolWithoutAdapter = false;
+const toolEntryWithoutAdapter = {
+    kind: 'tool',
+    message: {
+        role: 'system',
+        toolCall: { name: 'search' },
+    },
+    view: {
+        remove: () => {
+            removedToolWithoutAdapter = true;
+        },
+    },
+};
+const pendingToolWithoutAdapter = [toolEntryWithoutAdapter];
+const missingAdapterCount = attachAssistantActivityToAssistant(
+    pendingToolWithoutAdapter,
+    {},
+);
+
+if (missingAdapterCount !== 0
+    || pendingToolWithoutAdapter.length !== 1
+    || pendingToolWithoutAdapter[0] !== toolEntryWithoutAdapter
+    || removedToolWithoutAdapter) {
+    throw new Error('Tool activity was lost when the assistant append adapter was missing');
+}
+
+const retriedMissingAdapterCount = attachAssistantActivityToAssistant(
+    pendingToolWithoutAdapter,
+    { append_tool_result: () => ({}) },
+);
+
+if (retriedMissingAdapterCount !== 1
+    || pendingToolWithoutAdapter.length !== 0
+    || !removedToolWithoutAdapter) {
+    throw new Error('Tool activity did not attach after its missing adapter became available');
+}
+
+const reasoningEntryRejectedByAdapter = {
+    kind: 'reasoning',
+    message: {
+        role: 'assistant',
+        content: '',
+        reasoning: { content: 'Retained thought', agentMode: true },
+    },
+    embeddedView: null,
+};
+const pendingReasoningRejectedByAdapter = [reasoningEntryRejectedByAdapter];
+const rejectedAdapterCount = attachAssistantActivityToAssistant(
+    pendingReasoningRejectedByAdapter,
+    { append_reasoning_segment: () => null },
+);
+
+if (rejectedAdapterCount !== 0
+    || pendingReasoningRejectedByAdapter.length !== 1
+    || pendingReasoningRejectedByAdapter[0] !== reasoningEntryRejectedByAdapter
+    || reasoningEntryRejectedByAdapter.embeddedView !== null) {
+    throw new Error('Reasoning activity was lost when its append adapter returned null');
+}
+
+const retriedRejectedAdapterCount = attachAssistantActivityToAssistant(
+    pendingReasoningRejectedByAdapter,
+    { append_reasoning_segment: () => ({}) },
+);
+
+if (retriedRejectedAdapterCount !== 1
+    || pendingReasoningRejectedByAdapter.length !== 0
+    || !reasoningEntryRejectedByAdapter.embeddedView) {
+    throw new Error('Reasoning activity did not attach after a null adapter result was retried');
+}
+
+const pendingAssistantActivity = [];
+const originalReasoningMessage = {
+    role: 'assistant',
+    content: '',
+    reasoning: { content: 'First thought', agentMode: true },
+};
+const updatedReasoningMessage = {
+    ...originalReasoningMessage,
+    reasoning: { content: 'Complete thought', agentMode: true },
+};
+const pendingReasoningView = queueAssistantReasoningMessage(
+    pendingAssistantActivity,
+    originalReasoningMessage,
+);
+pendingAssistantActivity.push({
+    kind: 'tool',
+    message: {
+        role: 'system',
+        toolCall: { name: 'search', agentMode: true },
+    },
+});
+pendingReasoningView.update_reasoning_message(updatedReasoningMessage);
+
+const attachedAssistantActivity = [];
+let updatedEmbeddedReasoning = null;
+const attachedActivityCount = attachAssistantActivityToAssistant(pendingAssistantActivity, {
+    append_reasoning_segment: (message) => {
+        attachedAssistantActivity.push(['reasoning', message]);
+        return {
+            update_reasoning_message: (nextMessage) => {
+                updatedEmbeddedReasoning = nextMessage;
+            },
+        };
+    },
+    append_tool_result: (message) => {
+        attachedAssistantActivity.push(['tool', message]);
+        return {};
+    },
+});
+
+if (attachedActivityCount !== 2
+    || pendingAssistantActivity.length !== 0
+    || attachedAssistantActivity[0]?.[0] !== 'reasoning'
+    || attachedAssistantActivity[0]?.[1] !== updatedReasoningMessage
+    || attachedAssistantActivity[1]?.[0] !== 'tool') {
+    throw new Error('Leading Agent activity was not attached to the following assistant in order');
+}
+
+const finalReasoningMessage = {
+    ...originalReasoningMessage,
+    reasoning: { content: 'Final thought', agentMode: true },
+};
+pendingReasoningView.update_reasoning_message(finalReasoningMessage);
+
+if (updatedEmbeddedReasoning !== finalReasoningMessage)
+    throw new Error('Queued Agent reasoning stopped updating after it was attached');
 
 manager.registerTool({
     name: 'image_gen',
