@@ -30,6 +30,11 @@ function wrapText(text, maxLength = 92) {
     return lines.length > 0 ? lines : [''];
 }
 
+function isTranscriptMessage(message) {
+    return Boolean(String(message?.content ?? '').trim())
+        || !Boolean(message?.reasoning?.agentMode);
+}
+
 export function conversationToMarkdown(conversation) {
     const lines = [
         `# ${escapeMarkdown(conversation.title)}`,
@@ -48,7 +53,7 @@ export function conversationToMarkdown(conversation) {
 
     lines.push('');
 
-    for (const message of conversation.messages ?? []) {
+    for (const message of (conversation.messages ?? []).filter(isTranscriptMessage)) {
         lines.push(`## ${message.role}`);
         lines.push('');
         lines.push(escapeMarkdown(message.content));
@@ -67,7 +72,7 @@ export function conversationToPdf(conversation) {
         conversation.title,
         `Provider: ${conversation.providerId} / ${conversation.modelId || 'none'}`,
         '',
-        ...(conversation.messages ?? []).flatMap((message) => [
+        ...(conversation.messages ?? []).filter(isTranscriptMessage).flatMap((message) => [
             `${message.role.toUpperCase()}:`,
             ...wrapText(message.content),
             '',

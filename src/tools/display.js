@@ -272,10 +272,28 @@ export function toolCallBelongsToFollowingAssistant(toolCall = {}) {
     return Boolean(toolName(toolCall)) && !Boolean(toolCall?.agentMode);
 }
 
-export function attachToolMessagesToAssistant(pendingEntries, assistantView) {
+export function queueAssistantReasoningMessage(pendingEntries, message) {
+    if (!Array.isArray(pendingEntries))
+        return null;
+
+    const entry = {
+        kind: 'reasoning',
+        message,
+        embeddedView: null,
+    };
+    pendingEntries.push(entry);
+
+    return {
+        update_reasoning_message(nextMessage) {
+            entry.message = nextMessage;
+            entry.embeddedView?.update_reasoning_message?.(nextMessage);
+        },
+    };
+}
+
+export function attachAssistantActivityToAssistant(pendingEntries, assistantView) {
     if (!Array.isArray(pendingEntries)
-        || pendingEntries.length === 0
-        || typeof assistantView?.append_tool_result !== 'function') {
+        || pendingEntries.length === 0) {
         return 0;
     }
 
@@ -283,13 +301,23 @@ export function attachToolMessagesToAssistant(pendingEntries, assistantView) {
     let attachedCount = 0;
 
     for (const entry of entries) {
-        const embeddedView = assistantView.append_tool_result(entry.message);
+        const appendActivity = entry.kind === 'reasoning'
+            ? assistantView?.append_reasoning_segment
+            : assistantView?.append_tool_result;
+
+        if (typeof appendActivity !== 'function') {
+            pendingEntries.push(entry);
+            continue;
+        }
+
+        const embeddedView = appendActivity.call(assistantView, entry.message);
 
         if (!embeddedView) {
             pendingEntries.push(entry);
             continue;
         }
 
+        entry.embeddedView = embeddedView;
         entry.view?.remove?.();
         attachedCount += 1;
     }

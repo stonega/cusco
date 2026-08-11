@@ -19,6 +19,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Kept Agent reasoning and tool activity grouped with the assistant response after completion, reload, and transcript export instead of showing an empty assistant card.
 - Retried provider streams that end before visible output, preserved authoritative final text and search sources, and avoided unsupported streaming options on custom compatible APIs.
 - Kept long streamed responses responsive by batching provider snapshots and updating only the unfinished Markdown or code block instead of rebuilding the entire message for every token.
 - Prevented incomplete or output-limited native tool-call batches from executing, and allowed one bounded corrective response before stopping safely.

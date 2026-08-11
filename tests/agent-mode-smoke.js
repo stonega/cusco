@@ -12,6 +12,7 @@ import {
     parseAgentToolCall,
     pruneComputerUseObservationImages,
 } from '../src/chat/agentMode.js';
+import { attachAssistantActivityToAssistant } from '../src/tools/display.js';
 import { CuscoWindow } from '../src/window.js';
 import { createToolPermissionDecision, TOOL_PERMISSION_DENY } from '../src/tools/permissions.js';
 import { createAskUserTool } from '../src/tools/askUser.js';
@@ -48,6 +49,138 @@ const nativeToolPrompt = buildAgentModeSystemPrompt([
         permissionPolicy: 'allow',
     },
 ], { nativeToolCalling: true });
+
+const orderedConversationMessages = [];
+const orderedConversation = {
+    id: 'ordered-reasoning-conversation',
+    providerId: 'kimi',
+    modelId: 'kimi-k3',
+    thinkingLevel: 'max',
+    messages: orderedConversationMessages,
+};
+const orderingHarness = {
+    _appSettings: { thinkingLevel: 'max' },
+    _conversations: {
+        appendMessage(_conversationId, message) {
+            orderedConversationMessages.push(message);
+            return message;
+        },
+        updateMessageReasoning(_conversationId, messageId, reasoning) {
+            const message = orderedConversationMessages.find((candidate) => candidate.id === messageId);
+            message.reasoning = reasoning;
+            return message;
+        },
+        updateMessageContent(_conversationId, messageId, content) {
+            const message = orderedConversationMessages.find((candidate) => candidate.id === messageId);
+            message.content = content;
+            return message;
+        },
+    },
+    _isActiveConversationId: () => false,
+    _addMessageIfActiveConversation: () => null,
+    _scheduleUsageDisplayUpdate: () => {},
+    _scrollToBottom: () => {},
+    _createAgentReasoningPayload: CuscoWindow.prototype._createAgentReasoningPayload,
+};
+const orderingAssistantView = CuscoWindow.prototype._createStreamingAssistantView.call(
+    orderingHarness,
+    orderedConversation,
+);
+
+let orderingReasoningSegment = CuscoWindow.prototype._appendOrUpdateAgentReasoningSegment.call(
+    orderingHarness,
+    orderedConversation,
+    null,
+    'Kimi reasoning',
+);
+orderingReasoningSegment = CuscoWindow.prototype._appendOrUpdateAgentReasoningSegment.call(
+    orderingHarness,
+    orderedConversation,
+    orderingReasoningSegment,
+    'Updated Kimi reasoning',
+);
+
+if (orderedConversationMessages.length !== 1
+    || orderedConversationMessages[0].content !== ''
+    || orderedConversationMessages[0].reasoning?.content !== 'Updated Kimi reasoning') {
+    throw new Error('Agent reasoning created a blank owner assistant before response content');
+}
+
+orderingAssistantView.set_stream_text('Kimi answer', 'Kimi answer');
+
+if (orderedConversationMessages.length !== 2
+    || orderedConversationMessages[0].reasoning?.content !== 'Updated Kimi reasoning'
+    || orderedConversationMessages[1].role !== 'assistant'
+    || orderedConversationMessages[1].content !== 'Kimi answer'
+    || orderedConversationMessages[1].reasoning) {
+    throw new Error('Agent activity was not persisted before the following assistant response');
+}
+
+const legacyReasoningMessage = orderedConversationMessages[0];
+let removedStandaloneTool = false;
+const replayHarness = {
+    _lastAssistantMessageView: null,
+    _pendingAssistantActivityEntries: [],
+    _scrollToBottom: () => {},
+    _addToolMessage: () => ({
+        remove: () => {
+            removedStandaloneTool = true;
+        },
+    }),
+};
+const queuedReasoningView = CuscoWindow.prototype._addMessage.call(
+    replayHarness,
+    '',
+    'assistant',
+    legacyReasoningMessage,
+);
+const replayToolMessage = {
+    role: 'system',
+    content: '',
+    toolCall: {
+        name: 'search',
+        agentMode: true,
+    },
+};
+CuscoWindow.prototype._addMessage.call(
+    replayHarness,
+    '',
+    'system',
+    replayToolMessage,
+);
+
+if (replayHarness._pendingAssistantActivityEntries.length !== 2
+    || replayHarness._pendingAssistantActivityEntries[0].message !== legacyReasoningMessage
+    || replayHarness._pendingAssistantActivityEntries[1].message !== replayToolMessage
+    || typeof queuedReasoningView.update_reasoning_message !== 'function') {
+    throw new Error('Leading Agent activity rendered separately instead of waiting for its response');
+}
+
+const replayedActivity = [];
+const replayedAssistantView = {
+    append_reasoning_segment: (message) => {
+        replayedActivity.push(['reasoning', message]);
+        return {};
+    },
+    append_tool_result: (message) => {
+        replayedActivity.push(['tool', message]);
+        return {};
+    },
+};
+const replayedActivityCount = attachAssistantActivityToAssistant(
+    replayHarness._pendingAssistantActivityEntries,
+    replayedAssistantView,
+);
+
+if (replayedActivityCount !== 2
+    || replayHarness._pendingAssistantActivityEntries.length !== 0
+    || replayedActivity[0]?.[0] !== 'reasoning'
+    || replayedActivity[0]?.[1] !== legacyReasoningMessage
+    || replayedActivity[1]?.[0] !== 'tool'
+    || replayedActivity[1]?.[1] !== replayToolMessage
+    || !removedStandaloneTool) {
+    throw new Error('Queued Agent activity did not embed into the following assistant in order');
+}
 
 if (DEFAULT_AGENT_MAX_ITERATIONS < 100
     || !defaultPrompt.includes(`at most ${DEFAULT_AGENT_MAX_ITERATIONS} tool-use iterations`)) {

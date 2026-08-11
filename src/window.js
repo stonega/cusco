@@ -107,12 +107,13 @@ import { createArtifactTools } from './tools/artifacts.js';
 import { createToolPermissionDecision } from './tools/permissions.js';
 import {
     appendToolOutputPreview,
-    attachToolMessagesToAssistant,
+    attachAssistantActivityToAssistant,
     createToolCallFromFailure,
     createToolCallFromRequest,
     createToolCallFromResult,
     latestOutputLines,
     normalizeToolCallDisplay,
+    queueAssistantReasoningMessage,
     toolCallBelongsToFollowingAssistant,
 } from './tools/display.js';
 import { formatToolResultForTranscript, ToolManager } from './tools/tools.js';
@@ -1199,7 +1200,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._pendingUserMessagesByConversation = new Map();
         this._pendingConversationSendSourceId = 0;
         this._lastAssistantMessageView = null;
-        this._pendingAssistantToolEntries = [];
+        this._pendingAssistantActivityEntries = [];
         this.connect('close-request', () => {
             this._stopAllConversations();
             this._conversations.persist();
@@ -8785,7 +8786,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             conversationId: null,
             fingerprint: '',
             lastAssistantMessageView: null,
-            pendingAssistantToolEntries: [],
+            pendingAssistantActivityEntries: [],
             referenceContents: new Set(),
         };
     }
@@ -8874,7 +8875,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return;
 
         entry.lastAssistantMessageView = this._lastAssistantMessageView;
-        entry.pendingAssistantToolEntries = this._pendingAssistantToolEntries;
+        entry.pendingAssistantActivityEntries = this._pendingAssistantActivityEntries;
         entry.referenceContents = this._userMessageReferenceContents;
     }
 
@@ -8882,7 +8883,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._messages = entry.messages;
         this._messageBottomSpacer = entry.bottomSpacer;
         this._lastAssistantMessageView = entry.lastAssistantMessageView;
-        this._pendingAssistantToolEntries = entry.pendingAssistantToolEntries ?? [];
+        this._pendingAssistantActivityEntries = entry.pendingAssistantActivityEntries ?? [];
         this._userMessageReferenceContents = entry.referenceContents;
         this._renderedConversationId = entry.conversationId;
 
@@ -8957,7 +8958,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _finishConversationViewRender(conversation, entry, staleEntry) {
         entry.lastAssistantMessageView = this._lastAssistantMessageView;
-        entry.pendingAssistantToolEntries = this._pendingAssistantToolEntries;
+        entry.pendingAssistantActivityEntries = this._pendingAssistantActivityEntries;
         entry.referenceContents = this._userMessageReferenceContents;
 
         if (conversation?.id) {
@@ -9100,7 +9101,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         entry.conversationId = conversation?.id ?? null;
         entry.fingerprint = this._conversationViewFingerprint(conversation);
         entry.lastAssistantMessageView = null;
-        entry.pendingAssistantToolEntries = [];
+        entry.pendingAssistantActivityEntries = [];
         entry.referenceContents = new Set();
         this._activateConversationView(entry, { reveal: false });
         const messageStartIndex = this._conversationMessageStartIndex(conversation);
@@ -10072,8 +10073,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _addMessage(body, kind, message = null) {
-        if (isAgentReasoningMessage(message) && this._lastAssistantMessageView?.append_reasoning_segment) {
-            const reasoningView = this._lastAssistantMessageView.append_reasoning_segment(message);
+        if (isAgentReasoningMessage(message)) {
+            const reasoningView = this._lastAssistantMessageView?.append_reasoning_segment
+                ? this._lastAssistantMessageView.append_reasoning_segment(message)
+                : queueAssistantReasoningMessage(this._pendingAssistantActivityEntries, message);
             this._scrollToBottom();
             return reasoningView ?? { set_label: () => {} };
         }
@@ -10087,8 +10090,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (message?.toolCall) {
             const toolView = this._addToolMessage(message);
 
-            if (toolCallBelongsToFollowingAssistant(message.toolCall)) {
-                this._pendingAssistantToolEntries.push({
+            if (toolCallBelongsToFollowingAssistant(message.toolCall) || message.toolCall.agentMode) {
+                this._pendingAssistantActivityEntries.push({
+                    kind: 'tool',
                     message,
                     view: toolView,
                 });
@@ -10319,8 +10323,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         if (kind === 'assistant') {
             this._lastAssistantMessageView = messageView;
-            attachToolMessagesToAssistant(
-                this._pendingAssistantToolEntries,
+            attachAssistantActivityToAssistant(
+                this._pendingAssistantActivityEntries,
                 messageView,
             );
         } else {
