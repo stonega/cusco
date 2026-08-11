@@ -23,7 +23,10 @@ chat_sources = files(
   'chat/conversation.js',
   'chat/markdown.js',
   'chat/messageView.js',
+  'chat/providerIconPile.js',
+  'chat/providerIconPileView.js',
   'chat/usage.js',
+  'chat/usageChart.js',
   'chat/welcome.js',
 )
 

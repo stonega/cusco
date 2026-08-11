@@ -13,12 +13,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- Aligned the Usage page title and date range with a roomier shared left inset.
+- Animated provider icons into a gravity-driven pile inside the Usage summary card.
+- Gave token, conversation, message, provider, and model totals prominent numeric styling.
+- Kept the Usage summary and daily chart row at a stable height as the window grows.
+- Removed the separator above the Usage destination in the sidebar.
+- Replaced the Usage sidebar glyph with a pie-chart icon.
+- Smoothed the daily token usage chart and added immediate per-day hover details, a vertical crosshair, and denser date labels.
 - Streamed model output from OpenAI, Anthropic, Gemini, and compatible providers as it arrives, with stable native Markdown formatting for incomplete responses.
 - Sized model output budgets from each model's configured limit and remaining context, with a 16,384-token default for custom and discovered models.
 - Increased the default provider response timeout from 45 seconds to 300 seconds.
 
 ### Fixed
 
+- Kept daily-usage tooltips stable while moving the pointer between the chart and tooltip.
 - Kept Agent reasoning and tool activity grouped with the assistant response after completion, reload, and transcript export instead of showing an empty assistant card.
 - Retried provider streams that end before visible output, preserved authoritative final text and search sources, and avoided unsupported streaming options on custom compatible APIs.
 - Kept long streamed responses responsive by batching provider snapshots and updating only the unfinished Markdown or code block instead of rebuilding the entire message for every token.
