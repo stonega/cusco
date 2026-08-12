@@ -7,9 +7,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.37] - 2026-08-12
+
 ### Changed
 
 - Styled Usage digits with monospaced semibold numerals while keeping punctuation proportional, and animated the daily token chart from zero with an ease-out reveal.
+
+### Fixed
+
+- Show sent messages immediately while prompt hooks, sidebar updates, and durable conversation storage finish, restoring the draft cleanly when a hook blocks the prompt.
 
 ## [0.5.36] - 2026-08-11
 
@@ -293,7 +299,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.36...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.37...HEAD
+[0.5.37]: https://github.com/stonega/cusco/compare/v0.5.36...v0.5.37
 [0.5.36]: https://github.com/stonega/cusco/compare/v0.5.35...v0.5.36
 [0.5.35]: https://github.com/stonega/cusco/compare/v0.5.34...v0.5.35
 [0.5.34]: https://github.com/stonega/cusco/compare/v0.5.33...v0.5.34

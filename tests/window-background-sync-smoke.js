@@ -52,6 +52,101 @@ function createSyncHarness({ status, ensured, logsAppended = false, activeConver
     return { harness, calls };
 }
 
+function createSendHarness({ sessionHookGate = null, promptAllowed = true } = {}) {
+    const calls = [];
+    const appendedMessages = [];
+    const conversation = {
+        id: 'send-chat',
+        providerId: 'test-provider',
+        modelId: 'test-model',
+        messages: [],
+    };
+    const cancellable = new Gio.Cancellable();
+    const harness = {
+        _conversations: {
+            activeConversation: conversation,
+            appendMessage(conversationId, message) {
+                calls.push('persist-message');
+                appendedMessages.push({ conversationId, message });
+                conversation.messages.push(message);
+            },
+        },
+        _pendingAttachments: [],
+        _composerDraftsByConversation: new Map(),
+        _ensureConversationProviderAvailable: () => true,
+        _beginActiveTurn(_conversationId, _cancellable, options) {
+            calls.push(options?.refreshConversationList === false
+                ? 'begin-with-deferred-sidebar'
+                : 'begin-with-sidebar');
+            return cancellable;
+        },
+        _formatUserMessageContent: (text) => text,
+        _addMessage(_content, _role, message, options) {
+            if (message?.id || options?.preserveLastAssistantMessageView !== true)
+                throw new Error('The immediate user row was not provisional');
+
+            calls.push('show-provisional');
+            return {
+                remove() {
+                    calls.push('remove-provisional');
+                },
+            };
+        },
+        _isActiveConversationId: (conversationId) => conversationId === conversation.id,
+        _syncEmptyConversationState() {},
+        _scrollToBottom() {},
+        _getComposerText: () => '',
+        _updateAttachmentLabel() {},
+        _applyComposerDraft() {
+            calls.push('restore-draft');
+        },
+        focusComposer() {},
+        _refreshConversationList() {
+            calls.push('refresh-sidebar');
+        },
+        async _ensureTurnSessionHooks() {
+            calls.push('session-hooks');
+            if (sessionHookGate)
+                await sessionHookGate;
+            return true;
+        },
+        async _runUserPromptHooks() {
+            calls.push('prompt-hooks');
+            return promptAllowed;
+        },
+        _createAttachmentsForComposerReferences: () => [],
+        _addMessageIfActiveConversation() {
+            calls.push('show-committed');
+        },
+        _promptMemoryProposal() {},
+        async _runRequestedTool() {
+            calls.push('requested-tool');
+            return null;
+        },
+        _drainPendingUserMessages() {},
+        async _streamAssistantResponse() {
+            calls.push('provider-request');
+            return {};
+        },
+        _finishActiveTurn() {
+            calls.push('finish-turn');
+        },
+        _sendQueuedUserMessages: () => Promise.resolve(false),
+        _handleQueuedUserMessageError() {},
+    };
+
+    return { harness, calls, appendedMessages };
+}
+
+function waitForLowPriorityMainLoopTurn() {
+    return new Promise((resolve) => {
+        GLib.timeout_add(GLib.PRIORITY_LOW, 0, () => {
+            resolve();
+            return GLib.SOURCE_REMOVE;
+        });
+    });
+}
+
 const emptyStatus = { available: true, error: '', jobs: [] };
 let test = createSyncHarness({
     status: emptyStatus,
@@ -152,6 +247,52 @@ if (windowPrototype._beginActiveTurn.call(
     || !concurrentTurnHarness._isConversationBusy(runningConversation.id)
     || !concurrentTurnHarness._isConversationBusy(newConversation.id)) {
     throw new Error('A running response prevented a new chat from sending immediately');
+}
+
+let resolveSessionHook;
+const sessionHookGate = new Promise((resolve) => {
+    resolveSessionHook = resolve;
+});
+const immediateSend = createSendHarness({ sessionHookGate });
+const immediateSendPromise = windowPrototype._sendMessage.call(
+    immediateSend.harness,
+    'Show this immediately',
+);
+
+if (immediateSend.calls.join(',')
+    !== 'begin-with-deferred-sidebar,show-provisional') {
+    throw new Error('Sending did work before presenting a provisional user row');
+}
+
+await waitForLowPriorityMainLoopTurn();
+
+if (!immediateSend.calls.includes('session-hooks')
+    || immediateSend.calls.includes('persist-message')) {
+    throw new Error('The provisional row did not remain visible during pre-send hooks');
+}
+
+resolveSessionHook();
+await immediateSendPromise;
+
+const provisionalIndex = immediateSend.calls.indexOf('show-provisional');
+const persistIndex = immediateSend.calls.indexOf('persist-message');
+const replacementIndex = immediateSend.calls.indexOf('show-committed');
+
+if (provisionalIndex < 0
+    || persistIndex <= provisionalIndex
+    || replacementIndex <= persistIndex
+    || immediateSend.appendedMessages.length !== 1) {
+    throw new Error('An approved prompt was not promoted from provisional to durable UI state');
+}
+
+const blockedSend = createSendHarness({ promptAllowed: false });
+await windowPrototype._sendMessage.call(blockedSend.harness, 'Block this prompt');
+
+if (!blockedSend.calls.includes('remove-provisional')
+    || !blockedSend.calls.includes('restore-draft')
+    || blockedSend.calls.includes('persist-message')
+    || blockedSend.appendedMessages.length !== 0) {
+    throw new Error('A blocked prompt did not roll back its provisional user row and draft');
 }
 
 const scheduledConversationIds = [];
