@@ -101,6 +101,11 @@
       <summary>Code block color scheme</summary>
       <description>The GtkSourceView style scheme used for markdown code blocks.</description>
     </key>
+    <key name="stream-animation-style" type="s">
+      <default>'blurIn'</default>
+      <summary>Streaming text animation</summary>
+      <description>The animation used to reveal new assistant text while a response is streaming.</description>
+    </key>
     <key name="empty-chat-image-path" type="s">
       <default>''</default>
       <summary>Empty chat image</summary>

@@ -1,5 +1,7 @@
 import GLib from 'gi://GLib?version=2.0';
 
+const UTF8_ENCODER = new TextEncoder();
+
 function escapeMarkup(value) {
     return GLib.markup_escape_text(String(value ?? ''), -1);
 }
@@ -143,23 +145,6 @@ function isMarkdownDivider(line) {
     return /^ {0,3}([*_-])(?:[ \t]*\1){2,}[ \t]*$/.test(String(line ?? ''));
 }
 
-function consumeWrapped(text, index, delimiter, openTag, closeTag) {
-    const closeIndex = text.indexOf(delimiter, index + delimiter.length);
-
-    if (closeIndex < 0)
-        return null;
-
-    const inner = text.slice(index + delimiter.length, closeIndex);
-
-    if (!inner)
-        return null;
-
-    return {
-        markup: `${openTag}${inlineMarkdownToPangoMarkup(inner)}${closeTag}`,
-        nextIndex: closeIndex + delimiter.length,
-    };
-}
-
 function normalizeLinkTarget(target) {
     const value = String(target ?? '');
 
@@ -171,29 +156,6 @@ function normalizeLinkTarget(target) {
     } catch {
         return value;
     }
-}
-
-function consumeLink(text, index) {
-    const labelEnd = text.indexOf(']', index + 1);
-
-    if (labelEnd < 0 || text[labelEnd + 1] !== '(')
-        return null;
-
-    const urlEnd = text.indexOf(')', labelEnd + 2);
-
-    if (urlEnd < 0)
-        return null;
-
-    const label = text.slice(index + 1, labelEnd);
-    const url = text.slice(labelEnd + 2, urlEnd);
-
-    if (!label || !url)
-        return null;
-
-    return {
-        markup: `<a href="${escapeMarkup(normalizeLinkTarget(url))}">${inlineMarkdownToPangoMarkup(label)}</a>`,
-        nextIndex: urlEnd + 1,
-    };
 }
 
 function matchOpeningFence(line) {
@@ -286,6 +248,7 @@ function streamingMarkdownState(markdown) {
     let boldOpen = false;
     let emphasisOpen = false;
     let lastOpenBracket = -1;
+    let lastCloseBracket = -1;
     let lastLinkStart = -1;
     let lastLinkEnd = -1;
     let linkTargetHasContent = false;
@@ -324,11 +287,13 @@ function streamingMarkdownState(markdown) {
                 if (character === '[')
                     lastOpenBracket = index;
 
-                if (character === ']'
-                    && source[index + 1] === '('
-                    && lastOpenBracket >= 0) {
-                    lastLinkStart = index;
-                    linkTargetHasContent = false;
+                if (character === ']') {
+                    lastCloseBracket = index;
+
+                    if (source[index + 1] === '(' && lastOpenBracket >= 0) {
+                        lastLinkStart = index;
+                        linkTargetHasContent = false;
+                    }
                 } else if (character === ')') {
                     lastLinkEnd = index;
                 } else if (lastLinkStart > lastLinkEnd
@@ -365,6 +330,9 @@ function streamingMarkdownState(markdown) {
         emphasisOpen,
         inCodeBlock,
         inInlineCode,
+        incompleteBracket: lastOpenBracket > lastCloseBracket,
+        incompleteLinkTarget: lastLinkStart > lastLinkEnd && !linkTargetHasContent,
+        lastOpenBracket,
         linkOpen: lastLinkStart > lastLinkEnd && linkTargetHasContent,
     };
 }
@@ -372,78 +340,189 @@ function streamingMarkdownState(markdown) {
 export function stabilizeStreamingMarkdown(markdown) {
     const source = String(markdown ?? '');
     const state = streamingMarkdownState(source);
+    const hideIncompleteBlockPrefix = (candidate) => {
+        const lineStart = candidate.lastIndexOf('\n') + 1;
+        const line = candidate.slice(lineStart);
+        const isBareBlockPrefix = /^ {0,3}(?:#{1,6}|>|[-+*]|\d+\.?)\s*$/u.test(line);
+        const isBareTaskPrefix = /^ {0,3}[-+*]\s+\[[ xX]?\]?\s*$/u.test(line);
+
+        return isBareBlockPrefix || isBareTaskPrefix
+            ? candidate.slice(0, lineStart)
+            : candidate;
+    };
 
     // The block parser already renders an unfinished fence as a code block.
     if (state.inCodeBlock)
         return source;
 
-    if (state.inInlineCode)
+    if (state.inInlineCode) {
+        if (source.endsWith('`'))
+            return source.slice(0, -1);
+
         return `${source}\``;
+    }
+
+    if (state.incompleteBracket || state.incompleteLinkTarget)
+        return hideIncompleteBlockPrefix(source.slice(0, state.lastOpenBracket));
 
     if (state.linkOpen)
         return `${source})`;
 
-    if (state.boldOpen)
+    if (state.boldOpen) {
+        if (source.endsWith('**'))
+            return hideIncompleteBlockPrefix(source.slice(0, -2));
+
+        if (source.endsWith('*') && !source.endsWith('**'))
+            return `${source.slice(0, -1)}**`;
+
         return `${source}**`;
+    }
 
-    if (state.emphasisOpen)
+    if (state.emphasisOpen) {
+        if (source.endsWith('*'))
+            return source.slice(0, -1);
+
         return `${source}*`;
+    }
 
-    return source;
+    if (source.endsWith('*'))
+        return source.slice(0, -1);
+
+    return hideIncompleteBlockPrefix(source);
 }
 
 export function inlineMarkdownToPangoMarkup(text) {
-    let markup = '';
+    return inlineMarkdownToPangoRenderModel(text).markup;
+}
+
+function utf8Length(value) {
+    return UTF8_ENCODER.encode(String(value ?? '')).length;
+}
+
+function emptyRenderModel() {
+    return {
+        markup: '',
+        plainText: '',
+        excludedAnimationRanges: [],
+    };
+}
+
+function appendRenderModel(target, source) {
+    const offset = utf8Length(target.plainText);
+    target.markup += source.markup;
+    target.plainText += source.plainText;
+
+    for (const range of source.excludedAnimationRanges ?? []) {
+        target.excludedAnimationRanges.push({
+            start: offset + range.start,
+            end: offset + range.end,
+        });
+    }
+
+    return target;
+}
+
+function literalRenderModel(value, markup = null) {
+    const text = String(value ?? '');
+
+    return {
+        markup: markup ?? escapeMarkup(text),
+        plainText: text,
+        excludedAnimationRanges: [],
+    };
+}
+
+function wrappedInlineRenderModel(text, index, delimiter, openTag, closeTag, options = {}) {
+    const closeIndex = text.indexOf(delimiter, index + delimiter.length);
+
+    if (closeIndex < 0)
+        return null;
+
+    const inner = text.slice(index + delimiter.length, closeIndex);
+
+    if (!inner)
+        return null;
+
+    const innerModel = inlineMarkdownToPangoRenderModel(inner);
+    const excludedAnimationRanges = [...innerModel.excludedAnimationRanges];
+
+    if (options.excludeAnimation && innerModel.plainText) {
+        excludedAnimationRanges.push({
+            start: 0,
+            end: utf8Length(innerModel.plainText),
+        });
+    }
+
+    return {
+        model: {
+            markup: `${openTag}${innerModel.markup}${closeTag}`,
+            plainText: innerModel.plainText,
+            excludedAnimationRanges,
+        },
+        nextIndex: closeIndex + delimiter.length,
+    };
+}
+
+function linkInlineRenderModel(text, index) {
+    const labelEnd = text.indexOf(']', index + 1);
+
+    if (labelEnd < 0 || text[labelEnd + 1] !== '(')
+        return null;
+
+    const urlEnd = text.indexOf(')', labelEnd + 2);
+
+    if (urlEnd < 0)
+        return null;
+
+    const label = text.slice(index + 1, labelEnd);
+    const url = text.slice(labelEnd + 2, urlEnd);
+
+    if (!label || !url)
+        return null;
+
+    const labelModel = inlineMarkdownToPangoRenderModel(label);
+
+    return {
+        model: {
+            ...labelModel,
+            markup: `<a href="${escapeMarkup(normalizeLinkTarget(url))}">${labelModel.markup}</a>`,
+        },
+        nextIndex: urlEnd + 1,
+    };
+}
+
+export function inlineMarkdownToPangoRenderModel(text) {
+    const source = String(text ?? '');
+    const model = emptyRenderModel();
     let index = 0;
 
-    while (index < text.length) {
-        const char = String.fromCodePoint(text.codePointAt(index));
+    while (index < source.length) {
+        const char = String.fromCodePoint(source.codePointAt(index));
+        let consumed = null;
 
-        if (text.startsWith('**', index)) {
-            const consumed = consumeWrapped(text, index, '**', '<b>', '</b>');
-
-            if (consumed) {
-                markup += consumed.markup;
-                index = consumed.nextIndex;
-                continue;
-            }
+        if (source.startsWith('**', index)) {
+            consumed = wrappedInlineRenderModel(source, index, '**', '<b>', '</b>');
+        } else if (char === '`') {
+            consumed = wrappedInlineRenderModel(source, index, '`', '<tt>', '</tt>', {
+                excludeAnimation: true,
+            });
+        } else if (char === '*') {
+            consumed = wrappedInlineRenderModel(source, index, '*', '<i>', '</i>');
+        } else if (char === '[') {
+            consumed = linkInlineRenderModel(source, index);
         }
 
-        if (char === '`') {
-            const consumed = consumeWrapped(text, index, '`', '<tt>', '</tt>');
-
-            if (consumed) {
-                markup += consumed.markup;
-                index = consumed.nextIndex;
-                continue;
-            }
+        if (consumed) {
+            appendRenderModel(model, consumed.model);
+            index = consumed.nextIndex;
+            continue;
         }
 
-        if (char === '*') {
-            const consumed = consumeWrapped(text, index, '*', '<i>', '</i>');
-
-            if (consumed) {
-                markup += consumed.markup;
-                index = consumed.nextIndex;
-                continue;
-            }
-        }
-
-        if (char === '[') {
-            const consumed = consumeLink(text, index);
-
-            if (consumed) {
-                markup += consumed.markup;
-                index = consumed.nextIndex;
-                continue;
-            }
-        }
-
-        markup += escapeMarkup(char);
+        appendRenderModel(model, literalRenderModel(char));
         index += char.length;
     }
 
-    return markup;
+    return model;
 }
 
 function headingSize(level) {
@@ -476,9 +555,22 @@ function headingText(text) {
     return text.trim().replace(/\s+#+\s*$/, '').trimEnd();
 }
 
-function lineToPangoMarkup(line) {
+function wrapRenderModel(model, openTag, closeTag) {
+    return {
+        ...model,
+        markup: `${openTag}${model.markup}${closeTag}`,
+    };
+}
+
+function prefixedRenderModel(prefix, model) {
+    const result = literalRenderModel(prefix);
+    appendRenderModel(result, model);
+    return result;
+}
+
+function lineToPangoRenderModel(line) {
     if (line.trim() === '')
-        return '';
+        return emptyRenderModel();
 
     const heading = line.match(/^(#{1,6})\s+(.+)$/);
 
@@ -486,39 +578,55 @@ function lineToPangoMarkup(line) {
         const level = heading[1].length;
         const lineHeight = headingLineHeight(level);
         const lineHeightAttribute = lineHeight ? ` line_height="${lineHeight}"` : '';
-
-        return `<span weight="bold" size="${headingSize(level)}"${lineHeightAttribute}>${inlineMarkdownToPangoMarkup(headingText(heading[2]))}</span>`;
+        return wrapRenderModel(
+            inlineMarkdownToPangoRenderModel(headingText(heading[2])),
+            `<span weight="bold" size="${headingSize(level)}"${lineHeightAttribute}>`,
+            '</span>',
+        );
     }
 
     const task = line.match(/^(\s*)[-*+]\s+\[([ xX])\](?:\s+(.*))?$/);
 
     if (task) {
         const marker = task[2].toLowerCase() === 'x' ? '☑' : '☐';
-        return `${escapeMarkup(task[1])}${marker} ${inlineMarkdownToPangoMarkup(task[3] ?? '')}`;
+        return prefixedRenderModel(
+            `${task[1]}${marker} `,
+            inlineMarkdownToPangoRenderModel(task[3] ?? ''),
+        );
     }
 
     const bullet = line.match(/^\s*[-*]\s+(.+)$/);
 
     if (bullet)
-        return `• ${inlineMarkdownToPangoMarkup(bullet[1])}`;
+        return prefixedRenderModel('• ', inlineMarkdownToPangoRenderModel(bullet[1]));
 
     const numbered = line.match(/^\s*(\d+)\.\s+(.+)$/);
 
     if (numbered)
-        return `${escapeMarkup(numbered[1])}. ${inlineMarkdownToPangoMarkup(numbered[2])}`;
+        return prefixedRenderModel(`${numbered[1]}. `, inlineMarkdownToPangoRenderModel(numbered[2]));
 
     const quote = line.match(/^\s*>\s+(.+)$/);
 
     if (quote)
-        return `<i>› ${inlineMarkdownToPangoMarkup(quote[1])}</i>`;
+        return wrapRenderModel(prefixedRenderModel('› ', inlineMarkdownToPangoRenderModel(quote[1])), '<i>', '</i>');
 
-    return inlineMarkdownToPangoMarkup(line);
+    return inlineMarkdownToPangoRenderModel(line);
+}
+
+export function markdownToPangoRenderModel(markdown) {
+    const lines = String(markdown ?? '').replace(/\r\n/g, '\n').split('\n');
+    const model = emptyRenderModel();
+
+    lines.forEach((line, index) => {
+        if (index > 0)
+            appendRenderModel(model, literalRenderModel('\n', '\n'));
+
+        appendRenderModel(model, lineToPangoRenderModel(line));
+    });
+
+    return model;
 }
 
 export function markdownToPangoMarkup(markdown) {
-    return String(markdown ?? '')
-        .replace(/\r\n/g, '\n')
-        .split('\n')
-        .map(lineToPangoMarkup)
-        .join('\n');
+    return markdownToPangoRenderModel(markdown).markup;
 }

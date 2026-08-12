@@ -1,5 +1,6 @@
 import {
     inlineMarkdownToPangoMarkup,
+    markdownToPangoRenderModel,
     markdownToPangoMarkup,
     parseMarkdownBlocks,
     stabilizeStreamingMarkdown,
@@ -112,8 +113,62 @@ const emojiMarkup = inlineMarkdownToPangoMarkup('Hihi! \u{1F44B} How are you?');
 if (!emojiMarkup.includes('\u{1F44B}') || emojiMarkup.includes('\uFFFD'))
     throw new Error(`Emoji was not preserved in markdown markup: ${emojiMarkup}`);
 
+const renderModelSource = '# Hello **bold** and `inline code` with [a link](https://example.com).';
+const renderModel = markdownToPangoRenderModel(renderModelSource);
+
+if (renderModel.markup !== markdownToPangoMarkup(renderModelSource))
+    throw new Error('Markdown render model markup diverged from the existing renderer');
+
+if (renderModel.plainText !== 'Hello bold and inline code with a link.')
+    throw new Error(`Markdown render model plain text is incorrect: ${renderModel.plainText}`);
+
+const inlineCodeStart = new TextEncoder().encode('Hello bold and ').length;
+const inlineCodeEnd = inlineCodeStart + new TextEncoder().encode('inline code').length;
+
+if (!renderModel.excludedAnimationRanges.some((range) => (
+    range.start === inlineCodeStart && range.end === inlineCodeEnd
+))) {
+    throw new Error(`Inline code was not excluded from animation: ${JSON.stringify(renderModel)}`);
+}
+
+for (const source of [
+    'Plain <unsafe> text',
+    '## Heading ##',
+    '- Bullet with *emphasis*',
+    '3. Ordered **item**',
+    '- [x] Finished task',
+    '> Quoted `code`',
+    '[Local file](/tmp/My File.txt)',
+    'Emoji 🙂 and 中文',
+]) {
+    const candidate = markdownToPangoRenderModel(source);
+
+    if (candidate.markup !== markdownToPangoMarkup(source))
+        throw new Error(`Render model changed existing Markdown output for: ${source}`);
+}
+
 if (stabilizeStreamingMarkdown('Writing **bold') !== 'Writing **bold**')
     throw new Error('Streaming markdown did not stabilize an unfinished bold span');
+
+if (stabilizeStreamingMarkdown('*') !== '')
+    throw new Error('Streaming markdown exposed an unfinished emphasis delimiter');
+
+if (stabilizeStreamingMarkdown('**bold*') !== '**bold**')
+    throw new Error('Streaming markdown exposed half of a closing bold delimiter');
+
+if (stabilizeStreamingMarkdown('Opening **') !== 'Opening ')
+    throw new Error('Streaming markdown turned an opening bold delimiter into visible content');
+
+if (stabilizeStreamingMarkdown('[link](') !== '')
+    throw new Error('Streaming markdown exposed an incomplete link before its target arrived');
+
+if (stabilizeStreamingMarkdown('`') !== '')
+    throw new Error('Streaming markdown exposed an unfinished inline-code delimiter');
+
+for (const prefix of ['# ', '- ', '> ', '1', '1. ', '- [ ] ']) {
+    if (stabilizeStreamingMarkdown(prefix) !== '')
+        throw new Error(`Streaming markdown exposed an incomplete block prefix: ${prefix}`);
+}
 
 if (stabilizeStreamingMarkdown('Writing `code') !== 'Writing `code`')
     throw new Error('Streaming markdown did not stabilize an unfinished code span');

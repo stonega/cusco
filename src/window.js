@@ -159,6 +159,7 @@ const COMPUTER_USE_ACCENT_COLOR = '#42e6f5';
 const SCROLL_TO_BOTTOM_ANIMATION_MS = 180;
 const SCROLL_TO_BOTTOM_ANIMATION_INTERVAL_MS = 16;
 const STREAMING_USAGE_UPDATE_INTERVAL_MS = 100;
+const COMPOSER_USAGE_UPDATE_DELAY_MS = 80;
 const DAILY_USAGE_CHART_REVEAL_DURATION_US = 280 * 1000;
 const WELCOME_STREAM_INTERVAL_MS = 24;
 const WELCOME_STREAM_CHARACTERS_PER_TICK = 4;
@@ -1175,6 +1176,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._userMessageReferenceContents = new Set();
         this._composerSuggestionItems = [];
         this._composerSuggestionRefreshSourceId = 0;
+        this._composerUsageSyncSourceId = 0;
         this._composerSuggestionRowsKey = '';
         this._activeComposerTrigger = null;
         this._dismissedComposerTrigger = '';
@@ -1265,6 +1267,15 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._pendingConversationSendSourceId = 0;
         this._lastAssistantMessageView = null;
         this._pendingAssistantActivityEntries = [];
+        this._gtkAnimationsChangedSignalId = 0;
+        const gtkSettings = Gtk.Settings.get_default();
+
+        if (gtkSettings) {
+            this._gtkAnimationsChangedSignalId = gtkSettings.connect(
+                'notify::gtk-enable-animations',
+                () => this._refreshStreamPresentationPreferences(),
+            );
+        }
         this.connect('close-request', () => {
             this._stopAllConversations();
             this._conversations.persist();
@@ -1280,6 +1291,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (this._composerSuggestionRefreshSourceId) {
                 GLib.Source.remove(this._composerSuggestionRefreshSourceId);
                 this._composerSuggestionRefreshSourceId = 0;
+            }
+
+            if (this._composerUsageSyncSourceId) {
+                GLib.Source.remove(this._composerUsageSyncSourceId);
+                this._composerUsageSyncSourceId = 0;
             }
 
             for (const sourceId of this._welcomeStreamSourceIds)
@@ -1309,6 +1325,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
             if (this._composerStyleManagerSignalId) {
                 Adw.StyleManager.get_default().disconnect(this._composerStyleManagerSignalId);
                 this._composerStyleManagerSignalId = 0;
+            }
+
+            if (this._gtkAnimationsChangedSignalId) {
+                Gtk.Settings.get_default()?.disconnect(this._gtkAnimationsChangedSignalId);
+                this._gtkAnimationsChangedSignalId = 0;
             }
 
             if (this._chatStatisticsPopover) {
@@ -2765,13 +2786,44 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             if (this._isConversationBusy(conversationId)) {
                 if (text) {
-                    this._enqueuePendingUserMessageWithHooks(text, references, conversationId).then((message) => {
-                        if (message)
-                            this._setComposerText('');
-                    }).catch((error) => {
-                        logError(error, 'Failed to run queued prompt hooks');
-                        this._showToast('The queued message could not be checked by hooks.');
-                    });
+                    const restoreQueuedText = () => {
+                        if (this._conversations.activeConversation?.id !== conversationId) {
+                            const draft = this._composerDraftsByConversation.get(conversationId) ?? {};
+
+                            if (!String(draft.text ?? '').trim()) {
+                                this._composerDraftsByConversation.set(conversationId, {
+                                    ...draft,
+                                    text,
+                                    references: normalizeComposerReferences(references),
+                                });
+                            }
+                            return;
+                        }
+
+                        if (this._getComposerText().trim())
+                            return;
+
+                        this._composerReferences = normalizeComposerReferences(references);
+                        this._setComposerText(text, { preserveReferences: true });
+                    };
+
+                    this._setComposerText('');
+                    this._composerDraftsByConversation.delete(conversationId);
+                    waitForUiPresentation()
+                        .then(() => this._enqueuePendingUserMessageWithHooks(
+                            text,
+                            references,
+                            conversationId,
+                        ))
+                        .then((message) => {
+                            if (!message)
+                                restoreQueuedText();
+                        })
+                        .catch((error) => {
+                            restoreQueuedText();
+                            logError(error, 'Failed to run queued prompt hooks');
+                            this._showToast('The queued message could not be checked by hooks.');
+                        });
                 } else if (hasAttachments) {
                     this._showToast('Attachments can be sent after the current response finishes.');
                 }
@@ -2819,7 +2871,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._composer.add_controller(composerKeyController);
         this._composerBuffer.connect('changed', () => {
             this._syncComposerPlaceholder();
-            this._syncComposerUsageChart();
+            this._scheduleComposerUsageChartSync();
             this._syncComposerHint();
             this._syncComposerReferenceTags();
             this._scheduleComposerSuggestionRefresh();
@@ -4151,6 +4203,21 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._composerUsageChart.queue_draw();
     }
 
+    _scheduleComposerUsageChartSync() {
+        if (this._composerUsageSyncSourceId)
+            GLib.Source.remove(this._composerUsageSyncSourceId);
+
+        this._composerUsageSyncSourceId = GLib.timeout_add(
+            GLib.PRIORITY_LOW,
+            COMPOSER_USAGE_UPDATE_DELAY_MS,
+            () => {
+                this._composerUsageSyncSourceId = 0;
+                this._syncComposerUsageChart();
+                return GLib.SOURCE_REMOVE;
+            },
+        );
+    }
+
     _syncComposerHint(
         isBusy = false,
         computerUseActive = this._isConversationUsingComputer(
@@ -4755,6 +4822,28 @@ class CuscoWindow extends Adw.ApplicationWindow {
         ].join('\n');
     }
 
+    _streamPresentationPreferences() {
+        return {
+            streamAnimationStyle: () => this._appSettings.streamAnimationStyle,
+            motionEnabled: () => (
+                !this._appSettings.reducedMotionEnabled
+                && Adw.get_enable_animations(this)
+            ),
+        };
+    }
+
+    _refreshStreamPresentationPreferences() {
+        const views = new Set([this._lastAssistantMessageView]);
+
+        for (const entry of this._conversationViewCache.values())
+            views.add(entry.lastAssistantMessageView);
+
+        const preferences = this._streamPresentationPreferences();
+
+        for (const view of views)
+            view?.set_stream_preferences?.(preferences);
+    }
+
     _handleProviderSettingsChanged(change = {}) {
         if (change?.errorMessage)
             this._showToast(change.errorMessage);
@@ -4783,6 +4872,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._refreshPromptMenu();
         this._syncComposerHint();
         this._applyAccessibilityPreferences();
+        this._refreshStreamPresentationPreferences();
         this._refreshConversationList();
 
         if (change?.codeThemeChanged)
@@ -5008,16 +5098,50 @@ class CuscoWindow extends Adw.ApplicationWindow {
     async _sendMessage(text, references = [], pendingAttachments = []) {
         const conversation = this._conversations.activeConversation
             ?? this._createConversationWithDefaults();
+        const submissionDraft = {
+            text,
+            references: normalizeComposerReferences(references),
+            attachments: pendingAttachments.map((attachment) => ({ ...attachment })),
+        };
+        const restoreComposerDraft = () => {
+            if (!this._isActiveConversationId(conversation.id)) {
+                this._composerDraftsByConversation.set(conversation.id, submissionDraft);
+                return;
+            }
 
-        if (!this._ensureConversationProviderAvailable(conversation))
+            if (this._getComposerText().trim() || this._pendingAttachments.length > 0) {
+                const existingPaths = new Set(this._pendingAttachments.map((attachment) => attachment.path));
+
+                for (const attachment of submissionDraft.attachments) {
+                    if (!existingPaths.has(attachment.path))
+                        this._pendingAttachments.push({ ...attachment });
+                }
+                this._updateAttachmentLabel();
+                return;
+            }
+
+            this._applyComposerDraft(submissionDraft);
+            this.focusComposer();
+        };
+
+        // The submit handler has already cleared the composer. Yield before
+        // provider validation and provisional message construction so GTK can
+        // paint the empty input immediately.
+        await waitForUiPresentation();
+
+        if (!this._ensureConversationProviderAvailable(conversation)) {
+            restoreComposerDraft();
             return;
+        }
 
         const cancellable = this._beginActiveTurn(conversation.id, null, {
             refreshConversationList: false,
         });
 
-        if (!cancellable)
+        if (!cancellable) {
+            restoreComposerDraft();
             return;
+        }
 
         let shouldSendQueued = false;
         let userMessageCommitted = false;
@@ -5046,33 +5170,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 this._scrollToBottom();
             }
         };
-        const restoreComposerDraft = () => {
-            const draft = {
-                text,
-                references: normalizeComposerReferences(references),
-                attachments: pendingAttachments.map((attachment) => ({ ...attachment })),
-            };
-
-            if (!this._isActiveConversationId(conversation.id)) {
-                this._composerDraftsByConversation.set(conversation.id, draft);
-                return;
-            }
-
-            if (this._getComposerText().trim() || this._pendingAttachments.length > 0) {
-                const existingPaths = new Set(this._pendingAttachments.map((attachment) => attachment.path));
-
-                for (const attachment of draft.attachments) {
-                    if (!existingPaths.has(attachment.path))
-                        this._pendingAttachments.push({ ...attachment });
-                }
-                this._updateAttachmentLabel();
-                return;
-            }
-
-            this._applyComposerDraft(draft);
-            this.focusComposer();
-        };
-
         try {
             // Let GTK paint the provisional row before hook discovery, sidebar
             // rebuilding, transcript persistence, or provider work can run.
@@ -6315,6 +6412,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                     this._materializeAssistantArtifacts(assistantText, conversation.id),
                 );
                 assistantView.persist?.();
+                await assistantView.finish_stream?.();
                 assistantView.finish_working?.();
                 this._appendHookNotice(
                     conversation,
@@ -6353,8 +6451,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 }
                 assistantView.persist?.();
                 this._refreshConversationList();
-                if (this._isActiveConversationId(conversation.id))
-                    this._renderActiveConversation();
                 shouldSendQueued = ownsActiveTurn;
             }
         } catch (error) {
@@ -6386,14 +6482,32 @@ class CuscoWindow extends Adw.ApplicationWindow {
             }
         } finally {
             const finalAssistantView = assistantViewState?.view ?? assistantView;
-            finalAssistantView?.finish_stream?.();
+            const presentationPromise = finalAssistantView?.finish_stream?.({
+                flush: isCancellableCancelled(cancellable),
+            });
+            const presentationFinished = presentationPromise
+                ? Promise.resolve(presentationPromise).catch((error) => {
+                    logError(error, 'Failed to finish streaming message presentation');
+                })
+                : null;
             finalAssistantView?.finish_working?.();
             this._stopLongResponseNotification(cancellable);
             if (this._isActiveConversationId(conversation.id))
                 this._setFollowLatestMessage(false);
 
-            if (ownsActiveTurn)
-                this._finishActiveTurn(cancellable);
+            if (ownsActiveTurn) {
+                this._finishActiveTurn(cancellable, {
+                    deferActiveConversationRender: Boolean(presentationFinished),
+                });
+            }
+
+            presentationFinished?.then(() => {
+                if (this._isActiveConversationId(conversation.id)
+                    && !this._isConversationBusy(conversation.id)) {
+                    this._renderActiveConversation({ forceRebuild: true });
+                    this._setFollowLatestMessage(false);
+                }
+            });
         }
 
         if (shouldSendQueued) {
@@ -7305,6 +7419,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return null;
         }
 
+        // A new turn establishes a new visual ordering boundary. Flush any
+        // presentation tail from the preceding response so the new user row
+        // cannot appear beneath an assistant message that is still revealing.
+        const precedingAssistantView = this._conversations.activeConversation?.id === resolvedConversationId
+            ? this._lastAssistantMessageView
+            : this._conversationViewCache?.get(resolvedConversationId)?.lastAssistantMessageView;
+        precedingAssistantView?.finish_stream?.({ flush: true });
+
         let resolveFinished;
         const finished = new Promise((resolve) => {
             resolveFinished = resolve;
@@ -7327,7 +7449,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return cancellable;
     }
 
-    _finishActiveTurn(cancellable) {
+    _finishActiveTurn(cancellable, options = {}) {
         this._computerUse.finishTurn(cancellable);
         const runtimeEntry = this._activeTurnEntryForCancellable(cancellable);
         const finishedConversationId = runtimeEntry?.[0] ?? null;
@@ -7344,7 +7466,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
         if (finishedConversationId
             && this._isActiveConversationId(finishedConversationId)
-            && this._conversationStack) {
+            && this._conversationStack
+            && !options.deferActiveConversationRender) {
             this._renderActiveConversation({ forceRebuild: true });
         }
 
@@ -7681,7 +7804,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
             set_status: (text) => ensureView()?.set_status(text),
             clear_status: () => view?.clear_loading?.(),
             finish_working: () => view?.finish_working?.(),
-            finish_stream: () => view?.finish_stream?.(),
+            finish_stream: (finishOptions) => view?.finish_stream?.(finishOptions),
+            set_stream_preferences: (streamOptions) => view?.set_stream_preferences?.(streamOptions),
             persist: () => this._conversations.persist(),
             remove: () => view?.remove?.(),
             hasContent: () => currentText.length > 0 || currentReasoning.length > 0 || Boolean(currentUsage),
@@ -9589,6 +9713,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
             onOpenImage: (image) => this._openImageViewer(image),
             onExternalLink: (uri) => this._confirmOpenArtifactLink(uri),
             onArtifactTerminated: () => this._showToast('The artifact preview stopped unexpectedly.'),
+            ...this._streamPresentationPreferences(),
+            onStreamFrame: () => this._scrollToBottom(),
             ...options,
         };
     }
@@ -10682,9 +10808,15 @@ class CuscoWindow extends Adw.ApplicationWindow {
             clear_loading: clearLoading,
             start_working: startWorking,
             finish_working: finishWorking,
-            finish_stream: () => {
-                bodyContent.finishStreaming?.({ selectable: true });
-                reasoningContent?.finishStreaming?.({ selectable: true });
+            finish_stream: (finishOptions = {}) => {
+                return Promise.all([
+                    bodyContent.finishStreaming?.({ selectable: true, ...finishOptions }),
+                    reasoningContent?.finishStreaming?.({ selectable: true, ...finishOptions }),
+                ]);
+            },
+            set_stream_preferences: (streamOptions) => {
+                bodyContent.setStreamPreferences?.(streamOptions);
+                reasoningContent?.setStreamPreferences?.(streamOptions);
             },
             set_reasoning: (text) => {
                 if (!reasoningExpander)

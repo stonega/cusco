@@ -15,6 +15,10 @@ import {
     getCodeThemeOptions,
     normalizeCodeTheme,
 } from '../chat/codeThemes.js';
+import {
+    DEFAULT_STREAM_ANIMATION_STYLE,
+    normalizeStreamAnimationStyle,
+} from '../chat/streamingText.js';
 
 const SETTINGS_SCHEMA_ID = 'io.github.stonega.Cusco';
 const PERSISTENT_SETTINGS_KEYS = [
@@ -25,6 +29,7 @@ const PERSISTENT_SETTINGS_KEYS = [
     'hooks-enabled',
     'thinking-level',
     'code-theme',
+    'stream-animation-style',
     'empty-chat-image-path',
     'high-contrast-enabled',
     'reduced-motion-enabled',
@@ -71,8 +76,15 @@ const FALLBACK_UINT_DEFAULTS = {
 const FALLBACK_STRING_DEFAULTS = {
     'thinking-level': DEFAULT_THINKING_LEVEL,
     'code-theme': DEFAULT_CODE_THEME_ID,
+    'stream-animation-style': DEFAULT_STREAM_ANIMATION_STYLE,
     'empty-chat-image-path': '',
 };
+const STREAM_ANIMATION_OPTIONS = [
+    { id: 'blurIn', label: 'Blur in' },
+    { id: 'fadeIn', label: 'Fade in' },
+    { id: 'slideUp', label: 'Slide up' },
+    { id: 'none', label: 'Off' },
+];
 
 function defaultFallbackSettingsPath() {
     return GLib.build_filenamev([
@@ -316,6 +328,7 @@ export class AppSettingsStore {
         this._hooksEnabled = DEFAULT_HOOKS_ENABLED;
         this._thinkingLevel = DEFAULT_THINKING_LEVEL;
         this._codeTheme = DEFAULT_CODE_THEME_ID;
+        this._streamAnimationStyle = DEFAULT_STREAM_ANIMATION_STYLE;
         this._emptyChatImagePath = '';
         this._highContrastEnabled = DEFAULT_HIGH_CONTRAST_ENABLED;
         this._reducedMotionEnabled = DEFAULT_REDUCED_MOTION_ENABLED;
@@ -395,6 +408,16 @@ export class AppSettingsStore {
         this._codeTheme = normalizeCodeTheme(value);
         this._setString('code-theme', this._codeTheme);
         return this._codeTheme;
+    }
+
+    get streamAnimationStyle() {
+        return this._streamAnimationStyle;
+    }
+
+    setStreamAnimationStyle(value) {
+        this._streamAnimationStyle = normalizeStreamAnimationStyle(value);
+        this._setString('stream-animation-style', this._streamAnimationStyle);
+        return this._streamAnimationStyle;
     }
 
     get emptyChatImagePath() {
@@ -566,6 +589,9 @@ export class AppSettingsStore {
         this._hooksEnabled = this._getBoolean('hooks-enabled', this._hooksEnabled);
         this._thinkingLevel = normalizeThinkingLevel(this._getString('thinking-level', this._thinkingLevel));
         this._codeTheme = normalizeCodeTheme(this._getString('code-theme', this._codeTheme));
+        this._streamAnimationStyle = normalizeStreamAnimationStyle(
+            this._getString('stream-animation-style', this._streamAnimationStyle),
+        );
         this._emptyChatImagePath = this._getString('empty-chat-image-path', this._emptyChatImagePath);
         this._highContrastEnabled = this._getBoolean('high-contrast-enabled', this._highContrastEnabled);
         this._reducedMotionEnabled = this._getBoolean('reduced-motion-enabled', this._reducedMotionEnabled);
@@ -601,6 +627,15 @@ function createCodeThemeList(options) {
     const list = new Gtk.StringList();
 
     for (const option of options)
+        list.append(option.label);
+
+    return list;
+}
+
+function createStreamAnimationList() {
+    const list = new Gtk.StringList();
+
+    for (const option of STREAM_ANIMATION_OPTIONS)
         list.append(option.label);
 
     return list;
@@ -795,8 +830,29 @@ export function createApplicationSettingsPage(appSettings, onChanged, options = 
     providerGroup.add(thinkingLevelRow);
 
     const appearanceGroup = new Adw.PreferencesGroup({
-        title: 'Code Blocks',
+        title: 'Appearance',
     });
+    const selectedStreamAnimationIndex = Math.max(
+        0,
+        STREAM_ANIMATION_OPTIONS.findIndex((option) => option.id === appSettings.streamAnimationStyle),
+    );
+    const streamAnimationRow = new Adw.ComboRow({
+        title: 'Streaming text animation',
+        subtitle: 'Smooth how new assistant words appear while a response is streaming.',
+        model: createStreamAnimationList(),
+        selected: selectedStreamAnimationIndex,
+    });
+    streamAnimationRow.connect('notify::selected', () => {
+        const option = STREAM_ANIMATION_OPTIONS[streamAnimationRow.get_selected()];
+
+        if (!option)
+            return;
+
+        appSettings.setStreamAnimationStyle(option.id);
+        onChanged?.({ streamAnimationChanged: true });
+    });
+    appearanceGroup.add(streamAnimationRow);
+
     const codeThemeOptions = getCodeThemeOptions();
     const selectedCodeTheme = normalizeCodeTheme(appSettings.codeTheme);
     const selectedCodeThemeIndex = Math.max(

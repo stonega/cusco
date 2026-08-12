@@ -226,9 +226,16 @@ if (!runtimeHarness._isConversationBusy(runningConversation.id)
 
 const firstTurnCancellable = {};
 const secondTurnCancellable = {};
+let precedingPresentationFlushes = 0;
 const concurrentTurnHarness = {
     _activeTurnsByConversation: new Map(),
     _conversations: { activeConversation: newConversation },
+    _lastAssistantMessageView: {
+        finish_stream(options) {
+            if (options?.flush)
+                precedingPresentationFlushes += 1;
+        },
+    },
     _setComposerBusy() {},
     _refreshConversationList() {},
     _isConversationBusy: windowPrototype._isConversationBusy,
@@ -245,8 +252,48 @@ if (windowPrototype._beginActiveTurn.call(
         secondTurnCancellable,
     ) !== secondTurnCancellable
     || !concurrentTurnHarness._isConversationBusy(runningConversation.id)
-    || !concurrentTurnHarness._isConversationBusy(newConversation.id)) {
+    || !concurrentTurnHarness._isConversationBusy(newConversation.id)
+    || precedingPresentationFlushes !== 1) {
     throw new Error('A running response prevented a new chat from sending immediately');
+}
+
+let deferredFinishResolved = false;
+let deferredFinishRenders = 0;
+const deferredFinishCancellable = {};
+const deferredFinishHarness = {
+    _activeTurnsByConversation: new Map([[
+        runningConversation.id,
+        {
+            cancellable: deferredFinishCancellable,
+            resolveFinished() {
+                deferredFinishResolved = true;
+            },
+        },
+    ]]),
+    _computerUse: { finishTurn() {} },
+    _conversations: { activeConversation: runningConversation },
+    _conversationStack: {},
+    _activeTurnEntryForCancellable: windowPrototype._activeTurnEntryForCancellable,
+    _isActiveConversationId: windowPrototype._isActiveConversationId,
+    _isConversationBusy: windowPrototype._isConversationBusy,
+    _setComposerBusy() {},
+    _refreshConversationList() {},
+    _renderActiveConversation() {
+        deferredFinishRenders += 1;
+    },
+    _schedulePendingConversationSend() {},
+};
+
+windowPrototype._finishActiveTurn.call(
+    deferredFinishHarness,
+    deferredFinishCancellable,
+    { deferActiveConversationRender: true },
+);
+
+if (deferredFinishHarness._activeTurnsByConversation.size !== 0
+    || !deferredFinishResolved
+    || deferredFinishRenders !== 0) {
+    throw new Error('Visual tail pacing blocked turn cleanup or triggered an early transcript rebuild');
 }
 
 let resolveSessionHook;
@@ -259,14 +306,13 @@ const immediateSendPromise = windowPrototype._sendMessage.call(
     'Show this immediately',
 );
 
-if (immediateSend.calls.join(',')
-    !== 'begin-with-deferred-sidebar,show-provisional') {
-    throw new Error('Sending did work before presenting a provisional user row');
-}
+if (immediateSend.calls.length !== 0)
+    throw new Error('Sending performed expensive work before GTK could paint the cleared composer');
 
 await waitForLowPriorityMainLoopTurn();
 
 if (!immediateSend.calls.includes('session-hooks')
+    || !immediateSend.calls.includes('show-provisional')
     || immediateSend.calls.includes('persist-message')) {
     throw new Error('The provisional row did not remain visible during pre-send hooks');
 }
@@ -342,6 +388,36 @@ cacheHarness._activeTurnsByConversation.clear();
 
 if (windowPrototype._getCachedConversationView.call(cacheHarness, runningConversation) !== null)
     throw new Error('A completed conversation reused a genuinely stale cached view');
+
+const preferenceUpdates = [];
+const activePreferenceView = {
+    set_stream_preferences(preferences) {
+        preferenceUpdates.push(['active', preferences]);
+    },
+};
+const cachedPreferenceView = {
+    set_stream_preferences(preferences) {
+        preferenceUpdates.push(['cached', preferences]);
+    },
+};
+const preferenceHarness = {
+    _lastAssistantMessageView: activePreferenceView,
+    _conversationViewCache: new Map([[
+        'cached-chat',
+        { lastAssistantMessageView: cachedPreferenceView },
+    ]]),
+    _streamPresentationPreferences: () => ({
+        streamAnimationStyle: () => 'none',
+        motionEnabled: () => false,
+    }),
+};
+
+windowPrototype._refreshStreamPresentationPreferences.call(preferenceHarness);
+
+if (preferenceUpdates.length !== 2
+    || preferenceUpdates.some(([, preferences]) => preferences.motionEnabled() !== false)) {
+    throw new Error('Motion preferences were not propagated to active and cached streams');
+}
 
 const busyUiStates = [];
 const followLatestStates = [];

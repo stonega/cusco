@@ -10,7 +10,7 @@ import { createManagedArtifactCard } from '../artifacts/views/artifactCard.js';
 import { artifactForCodeBlock } from './artifacts.js';
 import {
     inlineMarkdownToPangoMarkup,
-    markdownToPangoMarkup,
+    markdownToPangoRenderModel,
     parseMarkdownBlocks,
     stabilizeStreamingMarkdown,
 } from './markdown.js';
@@ -18,6 +18,11 @@ import {
     getCodeThemeStyleScheme,
     getCodeThemeVariant,
 } from './codeThemes.js';
+import { AnimatedMarkdownLabel } from './streamAnimation.js';
+import {
+    normalizeStreamAnimationStyle,
+    StreamingTextSmoother,
+} from './streamingText.js';
 
 const LANGUAGE_ALIASES = {
     bash: 'sh',
@@ -315,20 +320,30 @@ function getLanguage(languageId) {
 }
 
 function createMarkdownLabel(content, options = {}) {
-    const label = new Gtk.Label({
+    const label = new AnimatedMarkdownLabel({
         wrap: true,
         selectable: options.selectable !== false,
         xalign: 0,
         max_width_chars: options.role === 'user' ? 36 : 82,
     });
+    let initialized = false;
     label.set_wrap_mode(Pango.WrapMode.WORD_CHAR);
     label.set_use_markup(true);
     label.add_css_class('cusco-message-markdown');
     label.updateMarkdown = (nextContent, nextOptions = options) => {
+        label.configureStreamAnimation({
+            style: nextOptions.streamAnimationStyle ?? 'none',
+            motionEnabled: nextOptions.motionEnabled,
+        });
         label.set_selectable(nextOptions.selectable !== false);
-        label.set_markup(markdownToPangoMarkup(nextContent) || ' ');
+        label.setRenderModel(markdownToPangoRenderModel(nextContent), {
+            animate: initialized && nextOptions.streaming === true,
+            replace: nextOptions.streamReplace === true,
+        });
         applyReferenceTextStyles(label, nextOptions.references, nextOptions.referenceStyles);
+        initialized = true;
     };
+    label.finishAnimation = () => label.waitForAnimations();
     label.updateMarkdown(content, options);
 
     return label;
@@ -960,20 +975,47 @@ export function createMessageContent(body, options = {}) {
     });
     const renderingOptions = { ...options };
     let currentBody = String(body ?? '');
+
+    if (renderingOptions.streaming && !currentBody.trim())
+        currentBody = '';
+
+    let displayBody = currentBody;
     let renderedBody = null;
     let renderedState = null;
     let renderSourceId = 0;
+    let smoother = null;
+    let finishPromise = null;
+    let wasRooted = false;
+    let wasMapped = false;
+    let streamAnimationPreference = renderingOptions.streamAnimationStyle;
+    const motionEnabled = () => {
+        try {
+            return renderingOptions.motionEnabled?.() !== false;
+        } catch (_error) {
+            return false;
+        }
+    };
+    const streamAnimationStyle = () => normalizeStreamAnimationStyle(
+        typeof streamAnimationPreference === 'function'
+            ? streamAnimationPreference()
+            : streamAnimationPreference,
+    );
+    const streamPresentationEnabled = () => renderingOptions.streaming
+        && streamAnimationStyle() !== 'none'
+        && motionEnabled()
+        && (!wasMapped || container.get_mapped());
     const render = (force = false) => {
-        if (!force && currentBody === renderedBody)
+        if (!force && displayBody === renderedBody)
             return;
 
         const canUpdateIncrementally = !force
             && renderingOptions.streaming
             && renderedState
-            && currentBody.startsWith(renderedBody ?? '');
+            && displayBody.startsWith(renderedBody ?? '');
         const nextRenderedBody = renderingOptions.streaming
-            ? stabilizeStreamingMarkdown(currentBody)
-            : currentBody;
+            ? stabilizeStreamingMarkdown(displayBody)
+            : displayBody;
+        renderingOptions.streamAnimationStyle = streamAnimationStyle();
 
         renderedState = canUpdateIncrementally
             ? updateStreamingMessageContent(
@@ -982,8 +1024,12 @@ export function createMessageContent(body, options = {}) {
                 renderingOptions,
                 renderedState,
             )
-            : renderMessageContent(container, currentBody, renderingOptions);
-        renderedBody = currentBody;
+            : renderMessageContent(container, displayBody, renderingOptions);
+        renderedBody = displayBody;
+        renderingOptions.streamReplace = false;
+
+        if (renderingOptions.streaming)
+            renderingOptions.onStreamFrame?.();
     };
     const cancelQueuedRender = () => {
         if (!renderSourceId)
@@ -992,6 +1038,60 @@ export function createMessageContent(body, options = {}) {
         GLib.source_remove(renderSourceId);
         renderSourceId = 0;
     };
+
+    const requestRender = (defer = false, force = false) => {
+        if (!defer) {
+            cancelQueuedRender();
+            render(force);
+            return;
+        }
+
+        if (renderSourceId)
+            return;
+
+        renderSourceId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT,
+            contentUpdateInterval(displayBody),
+            () => {
+                renderSourceId = 0;
+                render(force);
+                return GLib.SOURCE_REMOVE;
+            },
+        );
+    };
+
+    const ensureSmoother = () => {
+        if (smoother || !streamPresentationEnabled())
+            return smoother;
+
+        smoother = new StreamingTextSmoother({
+            initialText: displayBody,
+            onUpdate: (visibleText, state) => {
+                displayBody = visibleText;
+                renderingOptions.streamReplace = state.replace;
+                // The smoother is already the render throttle. Deferring this
+                // again can merge multiple reveal units into one visible frame.
+                requestRender(false);
+            },
+        });
+        return smoother;
+    };
+
+    const disposeSmoother = (flush = false) => {
+        smoother?.dispose({ flush });
+        smoother = null;
+    };
+
+    const revealCanonicalContent = () => {
+        disposeSmoother();
+        displayBody = currentBody;
+        cancelQueuedRender();
+        render(true);
+    };
+
+    const activeAnimationPromises = () => (renderedState?.blocks ?? [])
+        .map((descriptor) => descriptor.widget?.finishAnimation?.())
+        .filter(Boolean);
 
     render();
     container.updateContent = (nextBody, updateOptions = {}) => {
@@ -1002,24 +1102,15 @@ export function createMessageContent(body, options = {}) {
 
         currentBody = normalizedBody;
 
-        if (!updateOptions.defer) {
-            cancelQueuedRender();
-            render(Boolean(updateOptions.force));
+        if (streamPresentationEnabled() && !updateOptions.force) {
+            ensureSmoother()?.push(currentBody);
             return;
         }
 
-        if (renderSourceId)
-            return;
-
-        renderSourceId = GLib.timeout_add(
-            GLib.PRIORITY_DEFAULT,
-            contentUpdateInterval(currentBody),
-            () => {
-                renderSourceId = 0;
-                render();
-                return GLib.SOURCE_REMOVE;
-            },
-        );
+        disposeSmoother();
+        displayBody = currentBody;
+        renderingOptions.streamReplace = updateOptions.replace === true;
+        requestRender(Boolean(updateOptions.defer), Boolean(updateOptions.force));
     };
     container.updateReferenceStyles = (referenceStyles) => {
         renderingOptions.referenceStyles = referenceStyles;
@@ -1037,17 +1128,70 @@ export function createMessageContent(body, options = {}) {
         render(true);
     };
     container.finishStreaming = (finishOptions = {}) => {
+        if (finishPromise) {
+            if (finishOptions.flush)
+                smoother?.flush();
+
+            return finishPromise;
+        }
+
         const selectable = finishOptions.selectable === undefined
             ? renderingOptions.selectable
             : Boolean(finishOptions.selectable);
 
         if (!renderingOptions.streaming && renderingOptions.selectable === selectable)
-            return;
+            return Promise.resolve();
 
-        renderingOptions.streaming = false;
-        renderingOptions.selectable = selectable;
-        cancelQueuedRender();
-        render(true);
+        finishPromise = (async () => {
+            if (finishOptions.flush) {
+                smoother?.flush();
+            } else {
+                await smoother?.finish();
+            }
+
+            displayBody = currentBody;
+            cancelQueuedRender();
+            render();
+            await Promise.all(activeAnimationPromises());
+            disposeSmoother();
+            renderingOptions.streaming = false;
+            renderingOptions.selectable = selectable;
+            render(true);
+        })();
+
+        return finishPromise;
     };
+    container.setStreamPreferences = (streamOptions = {}) => {
+        if (Object.hasOwn(streamOptions, 'streamAnimationStyle'))
+            streamAnimationPreference = streamOptions.streamAnimationStyle;
+
+        if (Object.hasOwn(streamOptions, 'motionEnabled'))
+            renderingOptions.motionEnabled = streamOptions.motionEnabled;
+
+        if (!streamPresentationEnabled()) {
+            revealCanonicalContent();
+        } else {
+            cancelQueuedRender();
+            render(true);
+        }
+    };
+    container.connect('notify::root', () => {
+        if (container.get_root()) {
+            wasRooted = true;
+        } else if (wasRooted) {
+            cancelQueuedRender();
+            disposeSmoother();
+        }
+    });
+    container.connect('notify::mapped', () => {
+        if (container.get_mapped()) {
+            wasMapped = true;
+        } else if (wasMapped && renderingOptions.streaming) {
+            // Cached Gtk.Stack children stay rooted while hidden, but they do
+            // not receive frame-clock ticks. Never leave pacing or animations
+            // waiting on an unmapped conversation view.
+            revealCanonicalContent();
+        }
+    });
     return container;
 }

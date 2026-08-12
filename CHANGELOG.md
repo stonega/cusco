@@ -7,6 +7,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Added Blur in, Fade in, Slide up, and Off preferences for native assistant streaming text animations.
+
+### Changed
+
+- Smoothed uneven provider output into a steady, language-aware one-piece-per-tick reveal, while preserving immediate canonical response state, stable Markdown, accessibility, and reduced-motion behavior.
+
+### Fixed
+
+- Cleared the message composer before send setup work so the submitted draft disappears immediately.
+- Prevented streamed response tails from appearing all at once at completion or stalling when their conversation is hidden.
+
 ## [0.5.37] - 2026-08-12
 
 ### Changed

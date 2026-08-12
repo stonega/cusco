@@ -72,6 +72,7 @@ const settings = new MemorySettings({
     strings: {
         'thinking-level': 'high',
         'code-theme': initialCodeTheme,
+        'stream-animation-style': 'slideUp',
         'empty-chat-image-path': '/tmp/custom-empty-chat.png',
     },
 });
@@ -98,6 +99,9 @@ if (appSettings.thinkingLevel !== 'high')
 if (appSettings.codeTheme !== initialCodeTheme)
     throw new Error(`Code theme preference was not loaded: ${appSettings.codeTheme}`);
 
+if (appSettings.streamAnimationStyle !== 'slideUp')
+    throw new Error(`Streaming animation preference was not loaded: ${appSettings.streamAnimationStyle}`);
+
 if (appSettings.emptyChatImagePath !== '/tmp/custom-empty-chat.png')
     throw new Error('Empty chat image preference was not loaded');
 
@@ -118,6 +122,7 @@ appSettings.setProviderFallbackEnabled(false);
 appSettings.setHooksEnabled(true);
 appSettings.setThinkingLevel('low');
 appSettings.setCodeTheme(nextCodeTheme);
+appSettings.setStreamAnimationStyle('fadeIn');
 appSettings.setEmptyChatImagePath('/tmp/next-empty-chat.webp');
 appSettings.setHighContrastEnabled(false);
 appSettings.setReducedMotionEnabled(true);
@@ -147,6 +152,9 @@ if (settings.get_string('thinking-level') !== 'low')
 
 if (settings.get_string('code-theme') !== nextCodeTheme)
     throw new Error('Code theme preference was not persisted');
+
+if (settings.get_string('stream-animation-style') !== 'fadeIn')
+    throw new Error('Streaming animation preference was not persisted');
 
 if (settings.get_string('empty-chat-image-path') !== '/tmp/next-empty-chat.webp')
     throw new Error('Empty chat image preference was not persisted');
@@ -202,6 +210,7 @@ try {
 
     staleSchemaAppSettings.setResponseTimeoutSeconds(240);
     staleSchemaAppSettings.setCodeTheme(nextCodeTheme);
+    staleSchemaAppSettings.setStreamAnimationStyle('slideUp');
     staleSchemaAppSettings.setEmptyChatImagePath('/tmp/fallback-empty-chat.jpg');
     staleSchemaAppSettings.setHighContrastEnabled(true);
 
@@ -216,6 +225,9 @@ try {
 
     if (reloadedStaleSchemaAppSettings.codeTheme !== nextCodeTheme)
         throw new Error(`Fallback code theme preference was not reloaded: ${reloadedStaleSchemaAppSettings.codeTheme}`);
+
+    if (reloadedStaleSchemaAppSettings.streamAnimationStyle !== 'slideUp')
+        throw new Error('Fallback streaming animation preference was not reloaded');
 
     if (reloadedStaleSchemaAppSettings.emptyChatImagePath !== '/tmp/fallback-empty-chat.jpg')
         throw new Error('Fallback empty chat image preference was not reloaded');

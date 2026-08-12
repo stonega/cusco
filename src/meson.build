@@ -25,6 +25,8 @@ chat_sources = files(
   'chat/messageView.js',
   'chat/providerIconPile.js',
   'chat/providerIconPileView.js',
+  'chat/streamAnimation.js',
+  'chat/streamingText.js',
   'chat/usage.js',
   'chat/usageChart.js',
   'chat/welcome.js',
