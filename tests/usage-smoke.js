@@ -9,6 +9,8 @@ import {
     buildDailyUsageCurveSegments,
     dailyUsageDateLabelIndices,
     dailyUsageIndexAtX,
+    easeOutCubic,
+    revealDailyUsageChartPoints,
     shouldKeepDailyUsageTooltipVisible,
 } from '../src/chat/usageChart.js';
 import {
@@ -260,6 +262,22 @@ if (middleChartPoint?.x !== 58 || middleChartPoint?.y !== 34
     || middleChartPoint?.value !== 20
     || buildDailyUsageChartPoints([], 116, 84).length !== 0) {
     throw new Error(`Unexpected hovered chart point: ${JSON.stringify(middleChartPoint)}`);
+}
+
+const hiddenChartGeometry = revealDailyUsageChartPoints(chartGeometry, 84, 0);
+const halfwayChartGeometry = revealDailyUsageChartPoints(
+    chartGeometry,
+    84,
+    easeOutCubic(0.5),
+);
+const revealedChartGeometry = revealDailyUsageChartPoints(chartGeometry, 84, 1);
+if (hiddenChartGeometry.some((point) => point.y !== 74)
+    || halfwayChartGeometry[1]?.y !== 39
+    || revealedChartGeometry[1]?.y !== middleChartPoint.y
+    || easeOutCubic(0) !== 0
+    || easeOutCubic(0.5) !== 0.875
+    || easeOutCubic(1) !== 1) {
+    throw new Error('Chart reveal should ease from the baseline to its final geometry');
 }
 
 const denseDateIndices = dailyUsageDateLabelIndices(30);

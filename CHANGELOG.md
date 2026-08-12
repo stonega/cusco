@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- Styled Usage digits with monospaced semibold numerals while keeping punctuation proportional, and animated the daily token chart from zero with an ease-out reveal.
+
 ## [0.5.36] - 2026-08-11
 
 ### Added

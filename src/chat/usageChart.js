@@ -5,6 +5,27 @@ export const DAILY_USAGE_CHART_PADDING = Object.freeze({
     left: 8,
 });
 
+export function easeOutCubic(progress) {
+    const clampedProgress = Math.min(1, Math.max(0, Number(progress) || 0));
+    return 1 - ((1 - clampedProgress) ** 3);
+}
+
+export function revealDailyUsageChartPoints(points, height, progress) {
+    if (!Array.isArray(points) || points.length === 0)
+        return [];
+
+    const baseline = Math.max(
+        DAILY_USAGE_CHART_PADDING.top + 1,
+        (Number(height) || 0) - DAILY_USAGE_CHART_PADDING.bottom,
+    );
+    const clampedProgress = Math.min(1, Math.max(0, Number(progress) || 0));
+
+    return points.map((point) => ({
+        ...point,
+        y: baseline + ((point.y - baseline) * clampedProgress),
+    }));
+}
+
 export function buildDailyUsageCurveSegments(points) {
     if (!Array.isArray(points) || points.length < 2)
         return [];

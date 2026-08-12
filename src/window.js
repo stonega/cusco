@@ -61,6 +61,8 @@ import {
     DAILY_USAGE_CHART_PADDING,
     dailyUsageDateLabelIndices,
     dailyUsageIndexAtX,
+    easeOutCubic,
+    revealDailyUsageChartPoints,
     shouldKeepDailyUsageTooltipVisible,
 } from './chat/usageChart.js';
 import { createProviderIconPileView } from './chat/providerIconPileView.js';
@@ -157,6 +159,7 @@ const COMPUTER_USE_ACCENT_COLOR = '#42e6f5';
 const SCROLL_TO_BOTTOM_ANIMATION_MS = 180;
 const SCROLL_TO_BOTTOM_ANIMATION_INTERVAL_MS = 16;
 const STREAMING_USAGE_UPDATE_INTERVAL_MS = 100;
+const DAILY_USAGE_CHART_REVEAL_DURATION_US = 280 * 1000;
 const WELCOME_STREAM_INTERVAL_MS = 24;
 const WELCOME_STREAM_CHARACTERS_PER_TICK = 4;
 const PROVIDER_CONTENT_CALLBACK_INTERVAL_MS = 33;
@@ -327,6 +330,19 @@ function formatStatisticNoun(count, singular, plural = `${singular}s`) {
     return `${formatStatisticCount(count)} ${count === 1 ? singular : plural}`;
 }
 
+export function formatUsageNumberMarkup(value) {
+    return String(value ?? '')
+        .split(/(\d+)/)
+        .map((part) => /^\d+$/.test(part)
+            ? `<span font_family="monospace">${part}</span>`
+            : GLib.markup_escape_text(part, -1))
+        .join('');
+}
+
+function setUsageNumberLabel(label, value) {
+    label.set_markup(formatUsageNumberMarkup(value));
+}
+
 function drawContextUsageChart(cr, width, height, fraction, color) {
     const size = Math.min(width, height);
     const centerX = width / 2;
@@ -371,12 +387,24 @@ function appendDailyUsageCurve(cr, segments) {
     }
 }
 
-function drawDailyUsageChart(cr, width, height, daily, color, hoveredIndex = -1) {
+function drawDailyUsageChart(
+    cr,
+    width,
+    height,
+    daily,
+    color,
+    hoveredIndex = -1,
+    revealProgress = 1,
+) {
     const padding = DAILY_USAGE_CHART_PADDING;
     const chartWidth = Math.max(1, width - padding.left - padding.right);
     const chartHeight = Math.max(1, height - padding.top - padding.bottom);
     const baseline = padding.top + chartHeight;
-    const points = buildDailyUsageChartPoints(daily, width, height);
+    const points = revealDailyUsageChartPoints(
+        buildDailyUsageChartPoints(daily, width, height),
+        height,
+        revealProgress,
+    );
 
     cr.save();
     cr.setLineWidth(1);
@@ -1261,6 +1289,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 this._usageRefreshSourceId = 0;
             }
 
+            this._stopUsageChartAnimation?.();
             this._usageProviderIconPile?.stop();
 
             if (this._pendingConversationSendSourceId) {
@@ -1659,6 +1688,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         valueLabel.add_css_class('title-2');
         valueLabel.add_css_class('cusco-chat-statistics-value');
+        valueLabel.add_css_class('cusco-usage-number');
+        setUsageNumberLabel(valueLabel, '0');
         return { titleLabel, valueLabel };
     }
 
@@ -1804,6 +1835,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         this._usageTotalTokensLabel.add_css_class('title-1');
         this._usageTotalTokensLabel.add_css_class('cusco-chat-statistics-value');
+        this._usageTotalTokensLabel.add_css_class('cusco-usage-number');
+        setUsageNumberLabel(this._usageTotalTokensLabel, '0');
         const secondaryTotals = new Gtk.Grid({
             column_spacing: 20,
             row_spacing: 12,
@@ -1852,6 +1885,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
         chartHeading.add_css_class('heading');
         this._usageChartData = [];
         this._usageChartHoveredIndex = -1;
+        this._usageChartAnimationProgress = 1;
+        this._usageChartAnimationTickId = 0;
         this._usageChart = new Gtk.DrawingArea({
             hexpand: true,
             vexpand: false,
@@ -1869,6 +1904,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 this._usageChartData,
                 widget.get_color(),
                 this._usageChartHoveredIndex,
+                this._usageChartAnimationProgress,
             );
         });
         const chartTooltipContent = new Gtk.Box({
@@ -1884,6 +1920,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._usageChartTooltipDateLabel.add_css_class('dim-label');
         this._usageChartTooltipValueLabel = new Gtk.Label();
         this._usageChartTooltipValueLabel.add_css_class('heading');
+        this._usageChartTooltipValueLabel.add_css_class('cusco-usage-number');
         chartTooltipContent.append(this._usageChartTooltipDateLabel);
         chartTooltipContent.append(this._usageChartTooltipValueLabel);
         this._usageChartTooltip = new Gtk.Popover({
@@ -1943,16 +1980,21 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             if (this._usageChartHoveredIndex !== hoveredIndex) {
                 const entry = this._usageChartData[hoveredIndex];
-                const point = buildDailyUsageChartPoints(
-                    this._usageChartData,
-                    this._usageChart.get_width(),
+                const point = revealDailyUsageChartPoints(
+                    buildDailyUsageChartPoints(
+                        this._usageChartData,
+                        this._usageChart.get_width(),
+                        this._usageChart.get_height(),
+                    ),
                     this._usageChart.get_height(),
+                    this._usageChartAnimationProgress,
                 )[hoveredIndex];
                 if (!entry || !point)
                     return;
 
                 this._usageChartTooltipDateLabel.set_label(formatUsageDate(entry.date));
-                this._usageChartTooltipValueLabel.set_label(
+                setUsageNumberLabel(
+                    this._usageChartTooltipValueLabel,
                     formatStatisticNoun(entry.totalTokens, 'token'),
                 );
                 this._usageChartTooltip.set_pointing_to(new Gdk.Rectangle({
@@ -2080,6 +2122,51 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return toolbarView;
     }
 
+    _stopUsageChartAnimation() {
+        if (!this._usageChartAnimationTickId)
+            return;
+
+        this._usageChart?.remove_tick_callback(this._usageChartAnimationTickId);
+        this._usageChartAnimationTickId = 0;
+    }
+
+    _startUsageChartAnimation() {
+        this._stopUsageChartAnimation();
+
+        if (!this._usageChart)
+            return;
+
+        if (!Adw.get_enable_animations(this._usageChart)) {
+            this._usageChartAnimationProgress = 1;
+            this._usageChart.queue_draw();
+            return;
+        }
+
+        this._usageChartAnimationProgress = 0;
+        let startTime = 0;
+        this._usageChartAnimationTickId = this._usageChart.add_tick_callback(
+            (widget, frameClock) => {
+                const frameTime = frameClock.get_frame_time();
+                if (startTime === 0)
+                    startTime = frameTime;
+
+                const linearProgress = Math.min(
+                    1,
+                    (frameTime - startTime) / DAILY_USAGE_CHART_REVEAL_DURATION_US,
+                );
+                this._usageChartAnimationProgress = easeOutCubic(linearProgress);
+                widget.queue_draw();
+
+                if (linearProgress < 1)
+                    return GLib.SOURCE_CONTINUE;
+
+                this._usageChartAnimationTickId = 0;
+                return GLib.SOURCE_REMOVE;
+            },
+        );
+        this._usageChart.queue_draw();
+    }
+
     _refreshUsageDashboard() {
         if (!this._usageTotalTokensLabel || !this._conversations)
             return;
@@ -2100,11 +2187,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
         let conversationIndex = 0;
         let incompleteConversationCount = 0;
 
-        this._usageTotalTokensLabel.set_label('…');
-        this._usageConversationCountLabel.set_label('…');
-        this._usageMessageCountLabel.set_label('…');
-        this._usageProviderCountLabel.set_label('…');
-        this._usageModelCountLabel.set_label('…');
+        setUsageNumberLabel(this._usageTotalTokensLabel, '…');
+        setUsageNumberLabel(this._usageConversationCountLabel, '…');
+        setUsageNumberLabel(this._usageMessageCountLabel, '…');
+        setUsageNumberLabel(this._usageProviderCountLabel, '…');
+        setUsageNumberLabel(this._usageModelCountLabel, '…');
         this._usageTotalStatusLabel.set_label('Reading local chat history…');
         this._usageTotalStatusLabel.set_visible(true);
 
@@ -2158,13 +2245,26 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._usageWindowSubtitleLabel?.set_label(
             `${formatUsageDate(usage.startDate)} – ${formatUsageDate(usage.endDate)}`,
         );
-        this._usageTotalTokensLabel.set_label(formatStatisticCount(usage.totalTokens));
-        this._usageConversationCountLabel.set_label(
+        setUsageNumberLabel(
+            this._usageTotalTokensLabel,
+            formatStatisticCount(usage.totalTokens),
+        );
+        setUsageNumberLabel(
+            this._usageConversationCountLabel,
             formatStatisticCount(usage.conversationCount),
         );
-        this._usageMessageCountLabel.set_label(formatStatisticCount(usage.totalMessages));
-        this._usageProviderCountLabel.set_label(formatStatisticCount(usage.providerCount));
-        this._usageModelCountLabel.set_label(formatStatisticCount(usage.modelCount));
+        setUsageNumberLabel(
+            this._usageMessageCountLabel,
+            formatStatisticCount(usage.totalMessages),
+        );
+        setUsageNumberLabel(
+            this._usageProviderCountLabel,
+            formatStatisticCount(usage.providerCount),
+        );
+        setUsageNumberLabel(
+            this._usageModelCountLabel,
+            formatStatisticCount(usage.modelCount),
+        );
         this._usageProviderIconPile.setBreakdown(usage.breakdown);
         this._usageTotalStatusLabel.set_label(
             incompleteConversationCount > 0
@@ -2172,19 +2272,22 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 : '',
         );
         this._usageTotalStatusLabel.set_visible(incompleteConversationCount > 0);
-        this._usageMetricLabels.cached.valueLabel.set_label(
+        setUsageNumberLabel(
+            this._usageMetricLabels.cached.valueLabel,
             formatStatisticCount(usage.cachedInputTokens),
         );
         this._usageMetricLabels.cached.detailLabel.set_label(
             `${cachedPercentage.toFixed(1)}% of reported input`,
         );
-        this._usageMetricLabels.uncached.valueLabel.set_label(
+        setUsageNumberLabel(
+            this._usageMetricLabels.uncached.valueLabel,
             formatStatisticCount(usage.uncachedInputTokens),
         );
         this._usageMetricLabels.uncached.detailLabel.set_label(
             `${formatStatisticCount(usage.inputTokens)} total input tokens`,
         );
-        this._usageMetricLabels.output.valueLabel.set_label(
+        setUsageNumberLabel(
+            this._usageMetricLabels.output.valueLabel,
             formatStatisticCount(usage.outputTokens),
         );
         this._usageMetricLabels.output.detailLabel.set_label(
@@ -2192,7 +2295,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 ? formatStatisticNoun(usage.estimatedMessages, 'estimate')
                 : 'Provider-reported output',
         );
-        this._usageMetricLabels.coverage.valueLabel.set_label(
+        setUsageNumberLabel(
+            this._usageMetricLabels.coverage.valueLabel,
             `${coveragePercentage.toFixed(1)}%`,
         );
         this._usageMetricLabels.coverage.detailLabel.set_label(
@@ -2204,7 +2308,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._usageChartHoveredIndex = -1;
         this._cancelUsageChartTooltipHide?.();
         this._usageChartTooltip?.popdown();
-        this._usageChart.queue_draw();
+        this._startUsageChartAnimation();
         const dailyDescription = usage.daily
             .filter((entry) => entry.totalTokens > 0)
             .map((entry) => `${formatUsageDate(entry.date)}: ${
@@ -2289,6 +2393,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 xalign: 1,
             });
             tokenLabel.add_css_class('cusco-chat-statistics-value');
+            tokenLabel.add_css_class('cusco-usage-number');
+            setUsageNumberLabel(tokenLabel, formatStatisticCount(entry.totalTokens));
             const shareLabel = new Gtk.Label({
                 label: `${share.toFixed(1)}%`,
                 xalign: 1,

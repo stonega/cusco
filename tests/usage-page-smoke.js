@@ -1,4 +1,11 @@
-import { CuscoWindow } from '../src/window.js';
+import { CuscoWindow, formatUsageNumberMarkup } from '../src/window.js';
+
+const numberMarkup = formatUsageNumberMarkup('1,234.5%');
+if (numberMarkup !== '<span font_family="monospace">1</span>,'
+    + '<span font_family="monospace">234</span>.'
+    + '<span font_family="monospace">5</span>%') {
+    throw new Error(`Usage number punctuation should remain proportional: ${numberMarkup}`);
+}
 
 const calls = {
     artifactClosed: 0,
