@@ -53,8 +53,32 @@ assert(
     'Markdown delimiters were split into visibly unstable reveal pieces',
 );
 assert(
+    JSON.stringify(streamRevealUnits('**bold** text', {
+        wordSegmenter: null,
+        graphemeSegmenter: null,
+    })) === JSON.stringify(['**', 'bold', '** ', 'text']),
+    'Fallback reveal segmentation split Markdown delimiters',
+);
+const coarseWordSegmenter = {
+    segment(value) {
+        return [{ segment: value }];
+    },
+};
+assert(
+    JSON.stringify(streamRevealUnits('**bold** text', {
+        wordSegmenter: coarseWordSegmenter,
+    })) === JSON.stringify(['**', 'bold', '** ', 'text']),
+    'Coarse runtime segmentation split Markdown delimiters',
+);
+assert(
     streamRevealUnits('[link](https://example.com)').includes(']('),
     'Markdown link transition was split between its label and target opener',
+);
+assert(
+    streamRevealUnits('[link](https://example.com)', {
+        wordSegmenter: coarseWordSegmenter,
+    }).includes(']('),
+    'Coarse runtime segmentation split a Markdown link transition',
 );
 
 const scheduler = createScheduler();

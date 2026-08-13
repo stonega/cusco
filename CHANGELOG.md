@@ -20,6 +20,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 
 - Cleared the message composer before send setup work so the submitted draft disappears immediately.
+- Kept streaming Markdown delimiters stable across GJS and ICU versions with different word-boundary behavior.
 - Prevented streamed response tails from appearing all at once at completion or stalling when their conversation is hidden.
 
 ## [0.5.37] - 2026-08-12

@@ -42,11 +42,20 @@ export function normalizeStreamAnimationStyle(value) {
         : DEFAULT_STREAM_ANIMATION_STYLE;
 }
 
-function splitScriptSensitiveSegment(segment) {
+function splitScriptSensitiveSegment(segment, graphemeSegmenter) {
     if (!CJK_OR_THAI_RE.test(segment))
         return [segment];
 
-    return Array.from(GRAPHEME_SEGMENTER.segment(segment), (entry) => entry.segment);
+    if (!graphemeSegmenter)
+        return Array.from(segment);
+
+    return Array.from(graphemeSegmenter.segment(segment), (entry) => entry.segment);
+}
+
+function fallbackWordSegments(text) {
+    return text.match(
+        /[\p{L}\p{N}\p{M}]+(?:['’][\p{L}\p{N}\p{M}]+)*|[^\p{L}\p{N}\p{M}\s]+|\s+/gu,
+    ) ?? [];
 }
 
 function mergeMarkdownSyntaxUnits(units) {
@@ -70,19 +79,29 @@ function mergeMarkdownSyntaxUnits(units) {
     return merged;
 }
 
-export function streamRevealUnits(value) {
+export function streamRevealUnits(value, options = {}) {
     const text = String(value ?? '');
 
     if (!text)
         return [];
 
-    if (!WORD_SEGMENTER || !GRAPHEME_SEGMENTER)
-        return Array.from(text);
+    const wordSegmenter = options.wordSegmenter === undefined
+        ? WORD_SEGMENTER
+        : options.wordSegmenter;
+    const graphemeSegmenter = options.graphemeSegmenter === undefined
+        ? GRAPHEME_SEGMENTER
+        : options.graphemeSegmenter;
 
     const rawUnits = [];
 
-    for (const entry of WORD_SEGMENTER.segment(text))
-        rawUnits.push(...splitScriptSensitiveSegment(entry.segment));
+    const coarseSegments = wordSegmenter
+        ? Array.from(wordSegmenter.segment(text), (entry) => entry.segment)
+        : fallbackWordSegments(text);
+
+    for (const coarseSegment of coarseSegments) {
+        for (const segment of fallbackWordSegments(coarseSegment))
+            rawUnits.push(...splitScriptSensitiveSegment(segment, graphemeSegmenter));
+    }
 
     const units = [];
     let leadingWhitespace = '';
