@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.38] - 2026-08-13
+
 ### Added
 
 - Added Blur in, Fade in, Slide up, and Off preferences for native assistant streaming text animations.
@@ -312,7 +314,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.37...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.38...HEAD
+[0.5.38]: https://github.com/stonega/cusco/compare/v0.5.37...v0.5.38
 [0.5.37]: https://github.com/stonega/cusco/compare/v0.5.36...v0.5.37
 [0.5.36]: https://github.com/stonega/cusco/compare/v0.5.35...v0.5.36
 [0.5.35]: https://github.com/stonega/cusco/compare/v0.5.34...v0.5.35
