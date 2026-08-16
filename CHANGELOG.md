@@ -7,6 +7,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Show today's total token usage in the top-right of the Daily tokens panel.
+
+### Fixed
+
+- Prevent sending from silently stalling by running GTK through GJS's async-aware application loop.
+- Hide the empty-chat illustration as soon as the first message appears.
+- Represent custom providers in Usage and Settings with their name initial on a distinct background.
+- Use contained, low-rebound rigid-body physics for compact, stable Usage provider-icon piles that cannot be knocked out of the card.
+
 ## [0.5.38] - 2026-08-13
 
 ### Added

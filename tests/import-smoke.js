@@ -219,6 +219,13 @@ const versionMatch = /version:\s*'([^']+)'/.exec(mesonBuild);
 if (!versionMatch)
     throw new Error('Could not read project version from meson.build');
 
+const [, mainSourceBytes] = GLib.file_get_contents('src/main.js');
+const mainSource = new TextDecoder().decode(mainSourceBytes);
+if (!mainSource.includes('await application.runAsync(')
+    || /application\.run\s*\(/.test(mainSource)) {
+    throw new Error('The application entry point must preserve the GJS Promise job queue');
+}
+
 if (APP_VERSION !== versionMatch[1])
     throw new Error(`App info version ${APP_VERSION} does not match Meson version ${versionMatch[1]}`);
 

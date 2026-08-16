@@ -4,20 +4,30 @@ set -eu
 sh -n scripts/update-computer-use-extension.sh
 
 missing_sources=$(
-  find src -type f -name '*.js' | sort | while IFS= read -r source; do
-    relative=${source#src/}
+  find src packages -type f -name '*.js' | sort | while IFS= read -r source; do
+    case "$source" in
+      src/*)
+        relative=${source#src/}
+        source_manifest=src/meson.build
+        ;;
+      packages/*)
+        relative=${source#packages/}
+        source_manifest=packages/meson.build
+        ;;
+    esac
+
     if [ "$relative" = "appInfo.js" ] \
       && grep -F "output: 'appInfo.js'" src/meson.build >/dev/null 2>&1; then
       continue
     fi
-    if ! grep -F "'$relative'" src/meson.build >/dev/null 2>&1; then
+    if ! grep -F "'$relative'" "$source_manifest" >/dev/null 2>&1; then
       printf '%s\n' "$source"
     fi
   done
 )
 
 if [ -n "$missing_sources" ]; then
-  printf 'src/meson.build is missing install entries for:\n%s\n' "$missing_sources" >&2
+  printf 'Meson source manifests are missing install entries for:\n%s\n' "$missing_sources" >&2
   exit 1
 fi
 

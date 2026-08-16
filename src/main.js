@@ -10,4 +10,4 @@ Adw.init();
 const application = new CuscoApplication();
 const programName = GLib.get_prgname() ?? 'cusco';
 
-application.run([programName, ...ARGV]);
+await application.runAsync([programName, ...ARGV]);

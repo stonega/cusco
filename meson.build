@@ -19,6 +19,7 @@ conf.set('APP_ID', application_id)
 conf.set('VERSION', meson.project_version())
 conf.set('PKGDATADIR', pkgdatadir)
 
+subdir('packages')
 subdir('src')
 subdir('data')
 

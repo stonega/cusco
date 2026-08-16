@@ -1908,11 +1908,38 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         chartCard.add_css_class('card');
         chartCard.add_css_class('cusco-usage-chart-card');
+        const chartHeader = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 12,
+        });
         const chartHeading = new Gtk.Label({
             label: 'Daily tokens',
             xalign: 0,
+            hexpand: true,
+            valign: Gtk.Align.CENTER,
         });
         chartHeading.add_css_class('heading');
+        const chartTodayTotal = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 1,
+            halign: Gtk.Align.END,
+        });
+        const chartTodayTotalHeading = new Gtk.Label({
+            label: 'TODAY TOTAL',
+            xalign: 1,
+        });
+        chartTodayTotalHeading.add_css_class('caption');
+        chartTodayTotalHeading.add_css_class('dim-label');
+        this._usageTodayTotalLabel = new Gtk.Label({
+            label: '0 tokens',
+            xalign: 1,
+        });
+        this._usageTodayTotalLabel.add_css_class('cusco-usage-number');
+        setUsageNumberLabel(this._usageTodayTotalLabel, '0 tokens');
+        chartTodayTotal.append(chartTodayTotalHeading);
+        chartTodayTotal.append(this._usageTodayTotalLabel);
+        chartHeader.append(chartHeading);
+        chartHeader.append(chartTodayTotal);
         this._usageChartData = [];
         this._usageChartHoveredIndex = -1;
         this._usageChartAnimationProgress = 1;
@@ -2063,7 +2090,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             chartDates.append(label);
             return label;
         });
-        chartCard.append(chartHeading);
+        chartCard.append(chartHeader);
         chartCard.append(this._usageChart);
         chartCard.append(chartDates);
         overview.append(totalCard);
@@ -2222,6 +2249,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         setUsageNumberLabel(this._usageMessageCountLabel, '…');
         setUsageNumberLabel(this._usageProviderCountLabel, '…');
         setUsageNumberLabel(this._usageModelCountLabel, '…');
+        setUsageNumberLabel(this._usageTodayTotalLabel, '…');
         this._usageTotalStatusLabel.set_label('Reading local chat history…');
         this._usageTotalStatusLabel.set_visible(true);
 
@@ -2294,6 +2322,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
         setUsageNumberLabel(
             this._usageModelCountLabel,
             formatStatisticCount(usage.modelCount),
+        );
+        setUsageNumberLabel(
+            this._usageTodayTotalLabel,
+            formatStatisticNoun(usage.daily.at(-1)?.totalTokens ?? 0, 'token'),
         );
         this._usageProviderIconPile.setBreakdown(usage.breakdown);
         this._usageTotalStatusLabel.set_label(
@@ -11094,8 +11126,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _appendMessageWidget(widget) {
-        if (!this._isBatchRenderingConversation)
-            this._hideEmptyConversationState();
+        this._hideEmptyConversationState();
 
         if (this._messageBottomSpacer?.get_parent?.() === this._messages)
             this._messages.remove(this._messageBottomSpacer);

@@ -13,6 +13,7 @@ import {
     revealDailyUsageChartPoints,
     shouldKeepDailyUsageTooltipVisible,
 } from '../src/chat/usageChart.js';
+import { customProviderIconSpec } from '../src/providers/providerIconAvatar.js';
 import {
     arrangeProviderIconBodies,
     createProviderIconBodies,
@@ -333,6 +334,37 @@ if (pileProviderIds.join(',') !== 'openai,anthropic') {
 if (providerIdsForUsageBreakdown([{ providerId: 'openai' }], 0).length !== 0)
     throw new Error('Provider icon pile should honor a zero-icon limit');
 
+const customProviderIcon = customProviderIconSpec({
+    id: 'openai-compatible-renamed',
+    name: '  renamed API  ',
+    customizable: true,
+});
+const repeatedCustomProviderIcon = customProviderIconSpec({
+    id: 'openai-compatible-renamed',
+    name: 'Renamed API',
+    customizable: true,
+});
+if (customProviderIcon?.initial !== 'R'
+    || JSON.stringify(customProviderIcon.background)
+        !== JSON.stringify(repeatedCustomProviderIcon.background)
+    || customProviderIconSpec({
+        id: 'openai-compatible-unicode',
+        name: '  深度 API',
+        customizable: true,
+    })?.initial !== '深'
+    || customProviderIconSpec({
+        id: 'openai-compatible-uppercase-expansion',
+        name: 'ßystem',
+        customizable: true,
+    })?.initial !== 'S'
+    || customProviderIconSpec({ id: 'openai', name: 'OpenAI' }) !== null) {
+    throw new Error(
+        `Custom provider icon should use a stable name initial: ${
+            JSON.stringify(customProviderIcon)
+        }`,
+    );
+}
+
 const fallingBodies = createProviderIconBodies(pileProviderIds, 220);
 if (fallingBodies.length !== 2
     || fallingBodies.some((body) => body.y >= 0)
@@ -346,39 +378,229 @@ if (fallingBodies[0].y <= initialY) {
     throw new Error(`Gravity should move provider icons downward: ${JSON.stringify(fallingBodies[0])}`);
 }
 
+const paintedBounds = (body) => {
+    const halfSize = body.size / 2;
+    const halfExtent = halfSize * (
+        Math.abs(Math.cos(body.angle)) + Math.abs(Math.sin(body.angle))
+    );
+    const centerX = body.x + halfSize;
+    const centerY = body.y + halfSize;
+
+    return {
+        left: centerX - halfExtent,
+        right: centerX + halfExtent,
+        top: centerY - halfExtent,
+        bottom: centerY + halfExtent,
+    };
+};
+
+const projectedBodyRange = (body, axis) => {
+    const halfSize = body.size / 2;
+    const centerX = body.x + halfSize;
+    const centerY = body.y + halfSize;
+    const localX = { x: Math.cos(body.angle), y: Math.sin(body.angle) };
+    const localY = { x: -localX.y, y: localX.x };
+    const center = centerX * axis.x + centerY * axis.y;
+    const radius = halfSize * (
+        Math.abs(localX.x * axis.x + localX.y * axis.y)
+        + Math.abs(localY.x * axis.x + localY.y * axis.y)
+    );
+
+    return { minimum: center - radius, maximum: center + radius };
+};
+
+const providerBodiesOverlap = (left, right) => {
+    const axes = [left.angle, right.angle].flatMap((angle) => [
+        { x: Math.cos(angle), y: Math.sin(angle) },
+        { x: -Math.sin(angle), y: Math.cos(angle) },
+    ]);
+
+    return axes.every((axis) => {
+        const leftRange = projectedBodyRange(left, axis);
+        const rightRange = projectedBodyRange(right, axis);
+        const overlap = Math.min(leftRange.maximum, rightRange.maximum)
+            - Math.max(leftRange.minimum, rightRange.minimum);
+
+        return overlap > 0.5;
+    });
+};
+
 arrangeProviderIconBodies(fallingBodies, 220, 250);
-if (Math.max(...fallingBodies.map((body) => body.y + body.size)) !== 246)
+if (Math.abs(Math.max(...fallingBodies.map((body) => paintedBounds(body).bottom)) - 246) > 0.5)
     throw new Error(`Provider icons should settle just inside the card edge: ${JSON.stringify(fallingBodies)}`);
 
 for (const body of fallingBodies) {
-    if (body.x < 0
-        || body.x + body.size > 220
-        || body.y < 0
-        || body.y + body.size > 250
+    const bounds = paintedBounds(body);
+
+    if (bounds.left < -0.5
+        || bounds.right > 220.5
+        || bounds.top < -0.5
+        || bounds.bottom > 250.5
         || Math.abs(body.vx) > 0.01
-        || Math.abs(body.vy) > 0.01) {
+        || Math.abs(body.vy) > 0.01
+        || Math.abs(body.angularVelocity) > 0.01) {
         throw new Error(`Settled provider icon escaped the card: ${JSON.stringify(body)}`);
     }
 }
 
 arrangeProviderIconBodies(fallingBodies, 130, 180);
 for (const body of fallingBodies) {
-    if (body.x < 0
-        || body.x + body.size > 130
-        || body.y < 0
-        || body.y + body.size > 180) {
+    const bounds = paintedBounds(body);
+
+    if (bounds.left < -0.5
+        || bounds.right > 130.5
+        || bounds.top < -0.5
+        || bounds.bottom > 180.5) {
         throw new Error(`Resized provider icon pile escaped the card: ${JSON.stringify(body)}`);
     }
 }
 
-const touchingDistance = Math.hypot(
-    (fallingBodies[0].x + fallingBodies[0].size / 2)
-        - (fallingBodies[1].x + fallingBodies[1].size / 2),
-    (fallingBodies[0].y + fallingBodies[0].size / 2)
-        - (fallingBodies[1].y + fallingBodies[1].size / 2),
-);
-if (touchingDistance + 0.5 < (fallingBodies[0].size + fallingBodies[1].size) * 0.44) {
+if (providerBodiesOverlap(fallingBodies[0], fallingBodies[1])) {
     throw new Error(`Settled provider icons should not overlap: ${JSON.stringify(fallingBodies)}`);
+}
+
+const animatedProviderIds = [
+    'openai-compatible',
+    'gemini',
+    'kimi',
+    'openai',
+    'deepseek',
+    'anthropic',
+    'grok',
+    'zai',
+];
+
+for (const cardWidth of [456, 320, 220, 130]) {
+    const animatedBodies = createProviderIconBodies(animatedProviderIds, cardWidth);
+    const enteredBodies = new Set();
+    let animatedBodiesMoving = true;
+    for (let frame = 0; frame < 8 * 120 && animatedBodiesMoving; frame += 1) {
+        animatedBodiesMoving = stepProviderIconBodies(
+            animatedBodies,
+            cardWidth,
+            294,
+            1 / 120,
+        );
+
+        for (const body of animatedBodies) {
+            const bounds = paintedBounds(body);
+
+            if (bounds.top >= -0.5)
+                enteredBodies.add(body);
+            if (bounds.left < -0.5
+                || bounds.right > cardWidth + 0.5
+                || (enteredBodies.has(body) && bounds.top < -0.5)) {
+                throw new Error(
+                    `Provider icon escaped during its drop at ${cardWidth}px: ${
+                        JSON.stringify(body)
+                    }`,
+                );
+            }
+            if (Math.abs(body.vx) > 90.5 || body.vy < -48.5) {
+                throw new Error(
+                    `Provider icon retained too much rebound energy: ${JSON.stringify(body)}`,
+                );
+            }
+        }
+    }
+
+    if (animatedBodiesMoving) {
+        throw new Error(
+            `Provider icon drop should reach a stable resting state at ${cardWidth}px: ${
+                JSON.stringify(animatedBodies)
+            }`,
+        );
+    }
+
+    for (const body of animatedBodies) {
+        const bounds = paintedBounds(body);
+
+        if (bounds.left < -0.5
+            || bounds.right > cardWidth + 0.5
+            || bounds.top < -0.5
+            || bounds.bottom > 294.5
+            || Math.abs(body.vx) > 0.01
+            || Math.abs(body.vy) > 0.01
+            || Math.abs(body.angularVelocity) > 0.01) {
+            throw new Error(
+                `Dropped provider icon should finish at rest inside the card: ${JSON.stringify(body)}`,
+            );
+        }
+    }
+
+    for (let leftIndex = 0; leftIndex < animatedBodies.length; leftIndex += 1) {
+        const left = animatedBodies[leftIndex];
+
+        for (let rightIndex = leftIndex + 1; rightIndex < animatedBodies.length; rightIndex += 1) {
+            const right = animatedBodies[rightIndex];
+            if (providerBodiesOverlap(left, right)) {
+                throw new Error(
+                    `Dropped provider icons should not overlap at ${cardWidth}px: ${
+                        JSON.stringify([left, right])
+                    }`,
+                );
+            }
+        }
+    }
+
+    if (cardWidth >= 320 && !animatedBodies.some((body) => (
+        paintedBounds(body).bottom < 294 - 4 - 4
+    ))) {
+        throw new Error(
+            `Provider-icon physics should retain a visible pile at ${cardWidth}px: ${
+                JSON.stringify(animatedBodies)
+            }`,
+        );
+    }
+}
+
+const densePileBodies = createProviderIconBodies(
+    ['openai-compatible', 'gemini', 'kimi', 'grok', 'deepseek'],
+    456,
+);
+let densePileMoving = true;
+for (let frame = 0; frame < 8 * 120 && densePileMoving; frame += 1) {
+    densePileMoving = stepProviderIconBodies(
+        densePileBodies,
+        456,
+        294,
+        1 / 120,
+    );
+}
+const densePileLeft = Math.min(...densePileBodies.map((body) => paintedBounds(body).left));
+const densePileRight = Math.max(...densePileBodies.map((body) => paintedBounds(body).right));
+if (densePileMoving || densePileRight - densePileLeft > 456 * 0.68) {
+    throw new Error(
+        `Provider icons should settle into a compact pile: ${JSON.stringify(densePileBodies)}`,
+    );
+}
+
+const collisionBodies = [
+    {
+        providerId: 'collision-left',
+        size: 40,
+        x: 75,
+        y: 80,
+        vx: 60,
+        vy: 0,
+        angle: 0,
+        angularVelocity: 0,
+    },
+    {
+        providerId: 'collision-right',
+        size: 40,
+        x: 125,
+        y: 80,
+        vx: -60,
+        vy: 0,
+        angle: 0,
+        angularVelocity: 0,
+    },
+];
+for (let step = 0; step < 20; step += 1)
+    stepProviderIconBodies(collisionBodies, 220, 250, 1 / 120);
+if (collisionBodies[0].vx >= 0 || collisionBodies[1].vx <= 0) {
+    throw new Error(`Provider icons should bounce off each other: ${JSON.stringify(collisionBodies)}`);
 }
 
 print('Cusco usage smoke passed');

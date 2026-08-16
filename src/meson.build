@@ -2,6 +2,7 @@ cusco_sources = files(
   'main.js',
   'application.js',
   'bundledIcons.js',
+  'packageLoader.js',
   'searchProvider.js',
   'window.js',
 )
@@ -75,6 +76,7 @@ provider_sources = files(
   'providers/config.js',
   'providers/imageGeneration.js',
   'providers/icons.js',
+  'providers/providerIconAvatar.js',
   'providers/provider.js',
   'providers/outputLimits.js',
   'providers/remoteProvider.js',

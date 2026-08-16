@@ -1144,30 +1144,62 @@ export const ImageViewerWindow = GObject.registerClass({
         this.add_controller(keys);
     }
 
-    async _load() {
+    _finishLoad(source) {
+        this._source = source;
+        this._document = new ImageDocument({
+            width: this._source.width,
+            height: this._source.height,
+            historyLimit: 100,
+        });
+        this._document.markSaved();
+        this._updatePreviewPixbuf();
+        this._startAnimation();
+        this._setStatus('', false);
+        this._surfaceDirty = true;
+        this._drawingArea.queue_draw();
+        this._syncActionSensitivity();
+    }
+
+    _failLoad(error) {
+        if (isCancellation(error))
+            return;
+
+        this._renderError = error;
+        logError(error, `Failed to load image: ${this._image.path}`);
+        this._setStatus(error.message || 'The image could not be loaded.', false, true);
+        this._syncActionSensitivity(false);
+    }
+
+    _load() {
         this._setStatus('Loading image…', true);
 
-        try {
-            const load = ImageRenderer.loadImageSourceAsync ?? (async path => ImageRenderer.loadImageSource(path));
-            this._source = await load(this._image.path, this._loadCancellable);
-            this._document = new ImageDocument({
-                width: this._source.width,
-                height: this._source.height,
-                historyLimit: 100,
+        if (ImageRenderer.loadImageSourceAsync) {
+            let completed = false;
+            const operation = ImageRenderer.loadImageSourceAsync(
+                this._image.path,
+                this._loadCancellable,
+                (source, error) => {
+                    completed = true;
+
+                    if (error)
+                        this._failLoad(error);
+                    else
+                        this._finishLoad(source);
+                },
+            );
+
+            return operation.catch((error) => {
+                if (!completed)
+                    this._failLoad(error);
             });
-            this._document.markSaved();
-            this._updatePreviewPixbuf();
-            this._startAnimation();
-            this._setStatus('', false);
-            this._surfaceDirty = true;
-            this._drawingArea.queue_draw();
-            this._syncActionSensitivity();
+        }
+
+        try {
+            this._finishLoad(ImageRenderer.loadImageSource(this._image.path));
+            return Promise.resolve();
         } catch (error) {
-            if (isCancellation(error))
-                return;
-            logError(error, `Failed to load image: ${this._image.path}`);
-            this._setStatus(error.message || 'The image could not be loaded.', false, true);
-            this._syncActionSensitivity(false);
+            this._failLoad(error);
+            return Promise.resolve();
         }
     }
 

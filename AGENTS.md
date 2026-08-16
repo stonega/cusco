@@ -39,6 +39,7 @@ Do not run `meson install -C builddir`, copy files into `~/.local/share/cusco`, 
 ## Structure
 
 - `src/`: GJS application, window, and UI code.
+- `packages/`: reusable, self-contained subsystems and vendored integrations.
 - `data/`: desktop entry, app metadata, schema, icon, and resources.
 - `docs/design/`: product and architecture notes.
 - `docs/implementation/`: setup and development notes.
@@ -56,6 +57,7 @@ Do not run `meson install -C builddir`, copy files into `~/.local/share/cusco`, 
 
 ## Coding Notes
 
+- Place reusable, self-contained implementations and vendored third-party integrations under the top-level `packages/<name>/` directory, with a clear entry point and package-local documentation or licensing as needed. Keep feature-specific GTK views and thin compatibility facades with their feature, and do not create a package for a one-off helper.
 - Keep the first app surface native to GNOME: prefer GTK 4/libadwaita widgets over web views unless a feature needs web content.
 - Keep provider-specific code behind a small provider interface before adding individual API clients.
 - Store secrets through the desktop Secret Service, not plain settings files.

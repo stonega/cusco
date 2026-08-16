@@ -10,6 +10,10 @@ import {
     providerIdsForUsageBreakdown,
     stepProviderIconBodies,
 } from './providerIconPile.js';
+import {
+    customProviderIconSpec,
+    drawCustomProviderIcon,
+} from '../providers/providerIconAvatar.js';
 import { getProviderIconPath } from '../providers/icons.js';
 
 const ICON_TEXTURE_SIZE = 64;
@@ -17,7 +21,7 @@ const MAX_ANIMATION_SECONDS = 8;
 
 export function createProviderIconPileView(providerConfigStore) {
     const iconCache = new Map();
-    const activePixbufs = new Map();
+    const activeIcons = new Map();
     let bodies = [];
     let tickId = 0;
 
@@ -35,14 +39,21 @@ export function createProviderIconPileView(providerConfigStore) {
         tickId = 0;
     };
 
-    const pixbufForProvider = (providerId) => {
+    const iconForProvider = (providerId) => {
         const provider = providerConfigStore.getProvider(providerId);
+        const customIcon = customProviderIconSpec(provider);
+
+        if (customIcon)
+            return { type: 'custom', ...customIcon };
+
         const iconPath = getProviderIconPath(provider ?? providerId);
 
         if (!iconPath)
             return null;
-        if (iconCache.has(iconPath))
-            return iconCache.get(iconPath);
+        if (iconCache.has(iconPath)) {
+            const pixbuf = iconCache.get(iconPath);
+            return pixbuf ? { type: 'pixbuf', pixbuf } : null;
+        }
 
         try {
             const pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
@@ -52,7 +63,7 @@ export function createProviderIconPileView(providerConfigStore) {
                 true,
             );
             iconCache.set(iconPath, pixbuf);
-            return pixbuf;
+            return { type: 'pixbuf', pixbuf };
         } catch (error) {
             iconCache.set(iconPath, null);
             logError(error, `Failed to load usage icon for ${providerId}`);
@@ -62,19 +73,25 @@ export function createProviderIconPileView(providerConfigStore) {
 
     layer.set_draw_func((_widget, cr) => {
         for (const body of bodies) {
-            const pixbuf = activePixbufs.get(body.providerId);
+            const icon = activeIcons.get(body.providerId);
 
-            if (!pixbuf)
+            if (!icon)
                 continue;
 
-            const scale = body.size / Math.max(1, pixbuf.get_width());
             cr.save();
             cr.translate(body.x + body.size / 2, body.y + body.size / 2);
             cr.rotate(body.angle);
             cr.translate(-body.size / 2, -body.size / 2);
-            cr.scale(scale, scale);
-            Gdk.cairo_set_source_pixbuf(cr, pixbuf, 0, 0);
-            cr.paint();
+
+            if (icon.type === 'custom') {
+                drawCustomProviderIcon(cr, icon, body.size);
+            } else {
+                const scale = body.size / Math.max(1, icon.pixbuf.get_width());
+                cr.scale(scale, scale);
+                Gdk.cairo_set_source_pixbuf(cr, icon.pixbuf, 0, 0);
+                cr.paint();
+            }
+
             cr.restore();
         }
     });
@@ -90,17 +107,17 @@ export function createProviderIconPileView(providerConfigStore) {
     const setBreakdown = (breakdown) => {
         stop();
         bodies = [];
-        activePixbufs.clear();
+        activeIcons.clear();
 
         for (const providerId of providerIdsForUsageBreakdown(breakdown)) {
-            const pixbuf = pixbufForProvider(providerId);
+            const icon = iconForProvider(providerId);
 
-            if (pixbuf)
-                activePixbufs.set(providerId, pixbuf);
+            if (icon)
+                activeIcons.set(providerId, icon);
         }
 
         layer.queue_draw();
-        if (activePixbufs.size === 0)
+        if (activeIcons.size === 0)
             return;
 
         let lastFrameTime = 0;
@@ -114,7 +131,7 @@ export function createProviderIconPileView(providerConfigStore) {
 
             if (bodies.length === 0) {
                 bodies = createProviderIconBodies(
-                    [...activePixbufs.keys()],
+                    [...activeIcons.keys()],
                     width,
                 );
             }

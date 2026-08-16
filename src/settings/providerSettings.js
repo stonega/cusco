@@ -2,7 +2,7 @@ import Adw from 'gi://Adw?version=1';
 import Gtk from 'gi://Gtk?version=4.0';
 import Pango from 'gi://Pango?version=1.0';
 
-import { createProviderIcon } from '../providers/icons.js';
+import { createProviderIcon, updateProviderIcon } from '../providers/icons.js';
 import { createAppInfoSettingsPage } from './appInfoSettings.js';
 import { createApplicationSettingsPage } from './appSettings.js';
 import { createMemorySettingsPage } from './memorySettings.js';
@@ -167,7 +167,8 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows, 
         title: provider.name,
         subtitle: provider.description,
     });
-    row.add_prefix(createProviderIcon(provider, { pixelSize: 32 }));
+    const providerIcon = createProviderIcon(provider, { pixelSize: 32 });
+    row.add_prefix(providerIcon);
 
     const enabledSwitch = createProviderEnabledSwitch();
     enabledSwitch.connect('notify::active', () => {
@@ -476,6 +477,7 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows, 
         const canEnableProvider = providerConfigs.canEnableProvider(providerId);
 
         row.set_title(currentProvider.name);
+        updateProviderIcon(providerIcon, currentProvider);
 
         enabledSwitch._syncing = true;
         enabledSwitch.set_active(currentProvider.enabled);

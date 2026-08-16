@@ -54,6 +54,27 @@ function applyPlan(text, cursorOffset, action, {
 const control = Gdk.ModifierType.CONTROL_MASK;
 const alt = Gdk.ModifierType.ALT_MASK;
 
+let emptyConversationStateHidden = false;
+let appendedMessageWidget = null;
+const batchMessageWidget = {};
+CuscoWindow.prototype._appendMessageWidget.call({
+    _isBatchRenderingConversation: true,
+    _messageBottomSpacer: null,
+    _messages: {
+        append(widget) {
+            appendedMessageWidget = widget;
+        },
+    },
+    _hideEmptyConversationState() {
+        emptyConversationStateHidden = true;
+    },
+    _appendMessageBottomSpacer() {},
+}, batchMessageWidget);
+assert(
+    emptyConversationStateHidden && appendedMessageWidget === batchMessageWidget,
+    'Appending a message during incremental rendering did not hide the empty state',
+);
+
 assert(
     composerReadlineAction(Gdk.KEY_a, control) === 'beginning-of-line'
     && composerReadlineAction(Gdk.KEY_F, alt) === 'forward-word'

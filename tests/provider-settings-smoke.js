@@ -102,6 +102,20 @@ function findButtonByIconName(root, iconName) {
     return found;
 }
 
+function findProviderInitialIcon(root) {
+    let found = null;
+
+    walkWidgets(root, (widget) => {
+        if (!found
+            && widget instanceof Gtk.DrawingArea
+            && widget.has_css_class('provider-initial-icon')) {
+            found = widget;
+        }
+    });
+
+    return found;
+}
+
 if (Gtk.init_check()) {
     Adw.init();
 
@@ -170,9 +184,16 @@ if (Gtk.init_check()) {
     if (!findActionRowByTitle(customGroup, 'Add Custom API'))
         throw new Error('Custom provider list did not include an add action');
 
-    if (!findExpanderRowByTitle(customGroup, 'Local Models')
-        || !findExpanderRowByTitle(customGroup, 'Hosted Models')) {
+    const localModelsRow = findExpanderRowByTitle(customGroup, 'Local Models');
+    const hostedModelsRow = findExpanderRowByTitle(customGroup, 'Hosted Models');
+    if (!localModelsRow || !hostedModelsRow) {
         throw new Error('Multiple custom providers were not shown in the custom provider list');
+    }
+
+    if (!findProviderInitialIcon(localModelsRow)
+        || !findProviderInitialIcon(hostedModelsRow)
+        || findProviderInitialIcon(findExpanderRowByTitle(builtInGroup, 'OpenAI'))) {
+        throw new Error('Settings provider rows did not limit initial icons to custom providers');
     }
 
     if (findActionRowByTitle(builtInGroup, 'Model discovery'))
