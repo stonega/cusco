@@ -17,18 +17,39 @@ configure_file(
 
 chat_sources = files(
   'chat/agentMode.js',
+  'chat/agentActivity.js',
+  'chat/agentActivityPresenter.js',
+  'chat/agentRuntime.js',
   'chat/artifacts.js',
+  'chat/assistantStreamRunner.js',
   'chat/attachments.js',
   'chat/codeThemes.js',
   'chat/compaction.js',
+  'chat/composerUsage.js',
+  'chat/contextBuilder.js',
   'chat/conversation.js',
+  'chat/conversationActions.js',
+  'chat/conversationSidebar.js',
+  'chat/emptyConversationPresenter.js',
   'chat/markdown.js',
+  'chat/messageActions.js',
   'chat/messageView.js',
+  'chat/messagePresenter.js',
+  'chat/pendingMessages.js',
+  'chat/presentation.js',
+  'chat/providerStream.js',
+  'chat/scrollController.js',
   'chat/providerIconPile.js',
   'chat/providerIconPileView.js',
   'chat/streamAnimation.js',
+  'chat/streamingAssistantView.js',
   'chat/streamingText.js',
+  'chat/transcriptRenderer.js',
+  'chat/turnCoordinator.js',
+  'chat/turnSubmission.js',
   'chat/usage.js',
+  'chat/usagePage.js',
+  'chat/usagePagePresentation.js',
   'chat/usageChart.js',
   'chat/welcome.js',
 )
@@ -54,8 +75,16 @@ artifact_web_sources = files(
 )
 
 composer_sources = files(
+  'composer/agentQuestions.js',
+  'composer/chatSurface.js',
+  'composer/attachmentsController.js',
+  'composer/attachmentPresentation.js',
+  'composer/inputController.js',
+  'composer/menus.js',
+  'composer/presentation.js',
   'composer/readline.js',
   'composer/references.js',
+  'composer/suggestions.js',
 )
 
 computer_use_sources = files(
@@ -73,9 +102,11 @@ image_editor_sources = files(
 )
 
 provider_sources = files(
+  'providers/chatSelection.js',
   'providers/config.js',
   'providers/imageGeneration.js',
   'providers/icons.js',
+  'providers/modelPicker.js',
   'providers/providerIconAvatar.js',
   'providers/provider.js',
   'providers/outputLimits.js',
@@ -96,12 +127,14 @@ mcp_sources = files(
 )
 
 cron_sources = files(
+  'cron/conversationSync.js',
   'cron/manager.js',
 )
 
 hook_sources = files(
   'hooks/auditStore.js',
   'hooks/config.js',
+  'hooks/coordinator.js',
   'hooks/manager.js',
   'hooks/protocol.js',
   'hooks/runner.js',
@@ -140,6 +173,7 @@ tool_sources = files(
   'tools/askUser.js',
   'tools/display.js',
   'tools/permissions.js',
+  'tools/requestedToolRunner.js',
   'tools/tools.js',
 )
 

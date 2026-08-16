@@ -16,6 +16,7 @@ import { buildCompactionPrompt, getContextUsageState } from '../src/chat/compact
 import { ConversationManager } from '../src/chat/conversation.js';
 import { markdownToPangoMarkup, parseMarkdownBlocks } from '../src/chat/markdown.js';
 import { createMessageContent } from '../src/chat/messageView.js';
+import { ComposerAttachments } from '../src/composer/attachmentsController.js';
 import { estimateConversationUsage } from '../src/chat/usage.js';
 import {
     createWelcomeMessage,
@@ -190,19 +191,25 @@ const fakeTextClipboard = {
     },
     read_text_finish: () => 'Clipboard text',
 };
-const fakeClipboardPasteWindow = {
-    _composer: {
-        get_clipboard: () => fakeTextClipboard,
-    },
-    _clipboardPasteCancellables: new Set(),
-    _handlePastedText(text) {
-        pastedClipboardText = text;
-    },
+const clipboardAttachments = new ComposerAttachments({
+    providerConfigs: { getProvider: () => ({ supportsImageAttachments: true }) },
+    conversations: { activeConversation: null },
+    getProviderPicker: () => null,
+    getComposer: () => ({ get_clipboard: () => fakeTextClipboard }),
+    getComposerBuffer: () => null,
+    getAttachmentRow: () => null,
+    getAttachmentPreviewList: () => null,
+    getParentWindow: () => null,
+    showToast: () => {},
+    presentWindow: () => {},
+    focusComposer: () => {},
+});
+clipboardAttachments.handlePastedText = (text) => {
+    pastedClipboardText = text;
 };
 
-if (!CuscoWindow.prototype._pasteClipboardTextIfAvailable.call(fakeClipboardPasteWindow)
-    || pastedClipboardText !== 'Clipboard text'
-    || fakeClipboardPasteWindow._clipboardPasteCancellables.size !== 0) {
+if (!clipboardAttachments.pasteClipboardText()
+    || pastedClipboardText !== 'Clipboard text') {
     throw new Error('Composer text paste was not routed through the long-text handler');
 }
 
@@ -305,27 +312,33 @@ const editedComposerAttachment = {
     kind: 'image',
     path: 'data/icons/hicolor/64x64/apps/io.github.stonega.Cusco.png',
 };
-const fakeComposerWindow = {
-    _pendingAttachments: [composerAttachment, siblingAttachment],
-    _imageAttachCapability: () => ({ allowed: true, reason: '' }),
-    _createAttachmentFromPath: () => editedComposerAttachment,
-    _updateAttachmentLabel: () => attachmentRefreshes++,
-    _showToast: (message) => {
+const composerAttachments = new ComposerAttachments({
+    providerConfigs: { getProvider: () => ({ supportsImageAttachments: true }) },
+    conversations: { activeConversation: null },
+    getProviderPicker: () => null,
+    getComposer: () => null,
+    getComposerBuffer: () => null,
+    getAttachmentRow: () => null,
+    getAttachmentPreviewList: () => null,
+    getParentWindow: () => null,
+    showToast: (message) => {
         attachmentToast = message;
     },
-    present() {},
-    focusComposer() {},
-};
-const didReplaceComposerAttachment = CuscoWindow.prototype._attachEditedImageToComposer.call(
-    fakeComposerWindow,
+    presentWindow: () => {},
+    focusComposer: () => {},
+});
+composerAttachments.attachments = [composerAttachment, siblingAttachment];
+composerAttachments.createAttachmentFromPath = () => editedComposerAttachment;
+composerAttachments.updatePreview = () => attachmentRefreshes++;
+const didReplaceComposerAttachment = composerAttachments.attachEditedImage(
     editedComposerAttachment.path,
     composerAttachment,
 );
 
 if (!didReplaceComposerAttachment
-    || fakeComposerWindow._pendingAttachments.length !== 2
-    || fakeComposerWindow._pendingAttachments[0] !== editedComposerAttachment
-    || fakeComposerWindow._pendingAttachments[1] !== siblingAttachment
+    || composerAttachments.attachments.length !== 2
+    || composerAttachments.attachments[0] !== editedComposerAttachment
+    || composerAttachments.attachments[1] !== siblingAttachment
     || attachmentRefreshes !== 1
     || attachmentToast !== 'Attachment replaced with the edited image.') {
     throw new Error('The image editor callback did not replace its composer attachment');
