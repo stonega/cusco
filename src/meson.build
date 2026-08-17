@@ -38,6 +38,7 @@ chat_sources = files(
   'chat/pendingMessages.js',
   'chat/presentation.js',
   'chat/providerStream.js',
+  'chat/reasoningPreview.js',
   'chat/scrollController.js',
   'chat/providerIconPile.js',
   'chat/providerIconPileView.js',

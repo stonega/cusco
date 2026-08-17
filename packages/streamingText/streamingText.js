@@ -150,7 +150,6 @@ export class StreamingTextSmoother {
         this._allowPartial = false;
         this._disposed = false;
         this._finishResolvers = [];
-        this._hasReceivedUpdate = false;
     }
 
     get targetText() {
@@ -174,16 +173,27 @@ export class StreamingTextSmoother {
         if (normalized === this._target)
             return this._visible;
 
-        const shouldReplace = this._hasReceivedUpdate && !normalized.startsWith(this._target);
-        this._hasReceivedUpdate = true;
+        if (!normalized.startsWith(this._visible)) {
+            const previous = this._visible;
+            const sharedLength = this._sharedPrefixLength(previous, normalized);
 
-        if (shouldReplace || !normalized.startsWith(this._visible)) {
+            this._cancelSources();
             this._target = normalized;
-            this.flush({ replace: true });
-            return this._visible;
+            this._visible = normalized.slice(0, sharedLength);
+            const firstUnit = streamRevealUnits(normalized.slice(sharedLength))[0] ?? '';
+
+            this._visible += firstUnit;
+            this._onUpdate(this._visible, {
+                addedText: this._visible.startsWith(previous)
+                    ? this._visible.slice(previous.length)
+                    : this._visible,
+                previousText: previous,
+                replace: true,
+            });
+        } else {
+            this._target = normalized;
         }
 
-        this._target = normalized;
         this._finishing = false;
         this._allowPartial = false;
         this._cancelIdle();
@@ -199,9 +209,21 @@ export class StreamingTextSmoother {
                 this._reveal({ allowPartial: true, maximumUnits: 1 });
                 this._scheduleTick();
             });
+        } else {
+            this._resolveFinished();
         }
 
         return this._visible;
+    }
+
+    _sharedPrefixLength(first, second) {
+        const limit = Math.min(first.length, second.length);
+        let length = 0;
+
+        while (length < limit && first[length] === second[length])
+            length++;
+
+        return length;
     }
 
     finish() {

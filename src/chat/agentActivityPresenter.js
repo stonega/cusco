@@ -22,6 +22,10 @@ import {
     createMessageContent,
 } from './messageView.js';
 import {
+    createReasoningPreviewLabel,
+    reasoningPreviewText,
+} from './reasoningPreview.js';
+import {
     latestOutputLines,
     normalizeToolCallDisplay,
 } from '../tools/display.js';
@@ -34,6 +38,8 @@ function getMessageReasoningContent(message) {
 
     return String(message?.reasoning?.content ?? '').trim();
 }
+
+export { createReasoningPreviewLabel, reasoningPreviewText };
 
 export class AgentActivityPresenter {
     constructor({
@@ -279,6 +285,13 @@ export class AgentActivityPresenter {
             spacing: 6,
             valign: Gtk.Align.CENTER,
         });
+        const body = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            hexpand: true,
+        });
+        const previewLabel = (options.showPreview ?? options.isActive)
+            ? createReasoningPreviewLabel(this._messageContentOptions())
+            : null;
         const chevron = new Gtk.Image({
             icon_name: 'pan-end-symbolic',
             pixel_size: 14,
@@ -294,18 +307,27 @@ export class AgentActivityPresenter {
         header.append(this._createThinkingLabelWidget(options.isActive));
         header.append(chevron);
         headerButton.set_child(header);
+        revealer.set_child(body);
+        let loadingPreviewActive = Boolean(previewLabel);
+        let previewCollapsedByUser = false;
 
         const ensureContent = () => {
+            if (loadingPreviewActive)
+                return null;
+
             if (!content && contentFactory) {
                 content = contentFactory();
-                revealer.set_child(content);
+                body.append(content);
             }
 
             return content;
         };
 
         if (content)
-            revealer.set_child(content);
+            body.append(content);
+
+        if (previewLabel)
+            body.append(previewLabel);
 
         const updateExpandedState = (expanded) => {
             headerButton.set_tooltip_text(expanded ? 'Collapse reasoning' : 'Expand reasoning');
@@ -322,6 +344,9 @@ export class AgentActivityPresenter {
             if (expanded)
                 ensureContent();
 
+            if (loadingPreviewActive)
+                previewCollapsedByUser = !expanded;
+
             revealer.set_reveal_child(expanded);
             updateExpandedState(expanded);
         });
@@ -330,12 +355,41 @@ export class AgentActivityPresenter {
         container.append(headerButton);
         container.append(revealer);
         container.ensureContent = ensureContent;
+        container.updatePreview = (text) => {
+            if (!previewLabel)
+                return;
+
+            const preview = reasoningPreviewText(text);
+            const hasPreview = Boolean(preview);
+
+            previewLabel.set_visible(hasPreview);
+            if (hasPreview && !previewCollapsedByUser) {
+                revealer.set_reveal_child(true);
+                updateExpandedState(true);
+            }
+
+            previewLabel.updateReasoningPreview(preview);
+        };
+        container.clearPreview = () => {
+            loadingPreviewActive = false;
+            previewCollapsedByUser = false;
+            previewLabel?.set_visible(false);
+            revealer.set_reveal_child(false);
+            updateExpandedState(false);
+        };
+        container.setStreamPreferences = (streamOptions) => {
+            previewLabel?.setStreamPreferences(streamOptions);
+        };
+        container.finishPreviewAnimation = () => (
+            previewLabel?.finishReasoningPreview() ?? Promise.resolve()
+        );
         return container;
     }
 
-    _createAgentReasoningSegment(message) {
+    _createAgentReasoningSegment(message, options = {}) {
         let currentMessage = message;
         let content = null;
+        let loading = options.loading === true;
         const createContent = () => {
             content = createMessageContent(
                 getMessageReasoningContent(currentMessage) || ' ',
@@ -347,11 +401,24 @@ export class AgentActivityPresenter {
             );
             return content;
         };
-        const expander = this._createReasoningExpander(createContent);
+        const expander = this._createReasoningExpander(createContent, {
+            showPreview: loading,
+        });
 
         expander.updateReasoningMessage = (nextMessage) => {
             currentMessage = nextMessage;
+            if (loading)
+                expander.updatePreview(getMessageReasoningContent(nextMessage));
+
             content?.updateContent(getMessageReasoningContent(nextMessage) || ' ', { defer: true });
+        };
+        expander.startReasoningLoading = () => {
+            if (loading)
+                expander.updatePreview(getMessageReasoningContent(currentMessage));
+        };
+        expander.finishReasoningLoading = () => {
+            loading = false;
+            expander.clearPreview();
         };
 
         return expander;

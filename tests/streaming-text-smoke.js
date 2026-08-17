@@ -123,8 +123,74 @@ const replacement = new StreamingTextSmoother({
 });
 replacement.push('Draft response');
 replacement.push('Authoritative answer');
-assert(replacement.visibleText === 'Authoritative answer', 'Authoritative replacement was delayed');
+assert(
+    replacement.visibleText === 'Authoritative ',
+    'Authoritative replacement did not reveal one corrected unit immediately',
+);
+assert(
+    replacement.visibleText !== replacement.targetText,
+    'Authoritative replacement flushed the complete response',
+);
 assert(replacementState?.replace === true, 'Authoritative replacement was not identified');
+replacementScheduler.drain();
+assert(
+    replacement.visibleText === replacement.targetText,
+    'Authoritative replacement did not finish revealing',
+);
+
+const queuedCorrectionScheduler = createScheduler();
+const queuedCorrectionUpdates = [];
+const queuedCorrection = new StreamingTextSmoother({
+    schedule: queuedCorrectionScheduler.schedule,
+    cancel: queuedCorrectionScheduler.cancel,
+    onUpdate: (text, state) => queuedCorrectionUpdates.push({ text, state }),
+});
+queuedCorrection.push('Shared introduction followed by a draft response tail');
+const visibleCorrectionPrefix = queuedCorrection.visibleText;
+queuedCorrection.push('Shared introduction followed by the authoritative response tail');
+assert(
+    queuedCorrection.visibleText === visibleCorrectionPrefix,
+    'Correcting an unseen queued suffix changed already visible text',
+);
+assert(
+    queuedCorrection.visibleText !== queuedCorrection.targetText,
+    'Correcting an unseen queued suffix skipped the remaining reveal',
+);
+queuedCorrectionScheduler.drain();
+assert(
+    queuedCorrection.visibleText === queuedCorrection.targetText,
+    'Corrected queued content did not finish revealing',
+);
+assert(
+    queuedCorrectionUpdates.every((entry) => (
+        streamRevealUnits(entry.state.addedText).length <= 1
+    )),
+    'Corrected queued content batched multiple reveal pieces into one update',
+);
+
+const quotedCjkScheduler = createScheduler();
+const quotedCjk = new StreamingTextSmoother({
+    schedule: quotedCjkScheduler.schedule,
+    cancel: quotedCjkScheduler.cancel,
+});
+const quotedCjkPrefix = '2020《信条》（Tenet）：围绕';
+
+quotedCjk.push(`${quotedCjkPrefix}“时间逆转”`);
+quotedCjkScheduler.drain();
+quotedCjk.push(`${quotedCjkPrefix}"时间逆转"的谍战科幻\n2023《奥本海默》`);
+assert(
+    quotedCjk.visibleText === `${quotedCjkPrefix}"`,
+    'Revising a streamed Chinese quote revealed more than one corrected unit',
+);
+assert(
+    quotedCjk.visibleText !== quotedCjk.targetText,
+    'Revising a streamed Chinese quote flushed the remaining response',
+);
+quotedCjkScheduler.drain();
+assert(
+    quotedCjk.visibleText === quotedCjk.targetText,
+    'Quoted Chinese content did not finish its paced reveal',
+);
 
 const finishScheduler = createScheduler();
 const finishUpdates = [];

@@ -13,12 +13,28 @@ import {
     pruneComputerUseObservationImages,
 } from '../src/chat/agentMode.js';
 import { attachAssistantActivityToAssistant } from '../src/tools/display.js';
+import { MessagePresenter } from '../src/chat/messagePresenter.js';
 import { CuscoWindow } from '../src/window.js';
 import { createToolPermissionDecision, TOOL_PERMISSION_DENY } from '../src/tools/permissions.js';
 import { createAskUserTool } from '../src/tools/askUser.js';
 import { ToolManager } from '../src/tools/tools.js';
 
 const tools = new ToolManager();
+
+const reasoningOptionsHarness = Object.create(MessagePresenter.prototype);
+let forwardedReasoningOptions = null;
+
+reasoningOptionsHarness._agentActivityPresenter = {
+    _createAgentReasoningSegment(_message, options) {
+        forwardedReasoningOptions = options;
+        return null;
+    },
+};
+reasoningOptionsHarness._createAgentReasoningSegment({}, { loading: true });
+
+if (forwardedReasoningOptions?.loading !== true)
+    throw new Error('Message presenter dropped the live reasoning loading state');
+
 const prompt = buildAgentModeSystemPrompt(tools.listTools(), { maxIterations: 2 });
 const defaultPrompt = buildAgentModeSystemPrompt(tools.listTools());
 const nativeSearchPrompt = buildAgentModeSystemPrompt(
@@ -77,7 +93,10 @@ const orderingHarness = {
         },
     },
     _isActiveConversationId: () => false,
-    _addMessageIfActiveConversation: () => null,
+    _addMessageIfActiveConversation(_conversationId, _message, options) {
+        this.reasoningPresentationOptions = options;
+        return { update_reasoning_message: () => {} };
+    },
     _scheduleUsageDisplayUpdate: () => {},
     _scrollToBottom: () => {},
     _createAgentReasoningPayload: CuscoWindow.prototype._createAgentReasoningPayload,
@@ -102,7 +121,8 @@ orderingReasoningSegment = CuscoWindow.prototype._appendOrUpdateAgentReasoningSe
 
 if (orderedConversationMessages.length !== 1
     || orderedConversationMessages[0].content !== ''
-    || orderedConversationMessages[0].reasoning?.content !== 'Updated Kimi reasoning') {
+    || orderedConversationMessages[0].reasoning?.content !== 'Updated Kimi reasoning'
+    || orderingHarness.reasoningPresentationOptions?.reasoningLoading !== true) {
     throw new Error('Agent reasoning created a blank owner assistant before response content');
 }
 
@@ -552,6 +572,35 @@ function createAgentIntegrityWindow(responses) {
         assistantViewState: { view, workingStartedAt: 0 },
     };
 }
+
+let reasoningLoadingFinished = false;
+const reasoningLifecycleRun = createAgentIntegrityWindow([{
+    text: 'Answer after reasoning',
+    reasoning: 'Reasoning still loading',
+    toolCalls: [],
+    toolCallIntegrity: { status: 'valid', reason: '' },
+    providerParts: [],
+}]);
+reasoningLifecycleRun.window._appendOrUpdateAgentReasoningSegment = (
+    _conversation,
+    segment,
+) => segment ?? {
+    view: {
+        finish_reasoning_loading() {
+            reasoningLoadingFinished = true;
+        },
+    },
+};
+await CuscoWindow.prototype._runAgentModeResponse.call(
+    reasoningLifecycleRun.window,
+    { id: 'reasoning-lifecycle-conversation' },
+    [{ role: 'user', content: 'Think first' }],
+    reasoningLifecycleRun.assistantViewState,
+    null,
+);
+
+if (!reasoningLoadingFinished)
+    throw new Error('Agent reasoning kept its loading preview after the provider response completed');
 
 const integrityRecoveryCases = [{
     name: 'malformed',

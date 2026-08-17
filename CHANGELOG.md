@@ -9,10 +9,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Keep live reasoning expanded in a three-line ticker that slides completed lines upward and brings new lines in from below.
 - Show today's total token usage in the top-right of the Daily tokens panel.
+
+### Changed
+
+- Reserve the available assistant-message width from the first streamed token while keeping user messages compact.
 
 ### Fixed
 
+- Keep animating streamed messages when a provider revises its partial response, instead of showing the remaining response immediately.
 - Prevent sending from silently stalling by running GTK through GJS's async-aware application loop.
 - Hide the empty-chat illustration as soon as the first message appears.
 - Represent custom providers in Usage and Settings with their name initial on a distinct background.

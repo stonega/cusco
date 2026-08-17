@@ -108,7 +108,9 @@ export class AgentRuntime {
                 reasoning: this._createAgentReasoningPayload(conversation, reasoningContent),
             });
             this._conversations.appendMessage(conversation.id, message, { persist: false });
-            const view = this._addMessageIfActiveConversation(conversation.id, message);
+            const view = this._addMessageIfActiveConversation(conversation.id, message, {
+                reasoningLoading: true,
+            });
 
             this._scheduleUsageDisplayUpdate(conversation);
             this._scrollToBottom();
@@ -193,57 +195,69 @@ export class AgentRuntime {
                 clearAssistantStatus();
 
             let reasoningSegment = null;
-            const responseState = await this._collectProviderResponseWithFallback(
-                conversation,
-                runtimeMessages,
-                cancellable,
-                (text, _chunk, state) => {
-                    if (state?.type === 'status') {
-                        setAssistantStatus(state.status);
-                        this._scrollToBottom();
-                        return;
-                    }
+            let responseState;
 
-                    if (state?.type === 'usage')
-                        getAssistantView()?.set_usage?.(state.usage);
+            try {
+                responseState = await this._collectProviderResponseWithFallback(
+                    conversation,
+                    runtimeMessages,
+                    cancellable,
+                    (text, _chunk, state) => {
+                        if (state?.type === 'status') {
+                            setAssistantStatus(state.status);
+                            this._scrollToBottom();
+                            return;
+                        }
 
-                    if (state?.type === 'reasoning') {
-                        clearAssistantStatus();
-                        reasoningSegment = this._appendOrUpdateAgentReasoningSegment(
-                            conversation,
-                            reasoningSegment,
-                            state.reasoning,
-                        );
-                    }
+                        if (state?.type === 'usage')
+                            getAssistantView()?.set_usage?.(state.usage);
 
-                    if (state?.type === 'server_tool_results') {
-                        this._appendProviderSearchResults(
-                            conversation,
-                            state.serverToolResultChunk,
-                        );
-                    }
+                        if (state?.type === 'reasoning') {
+                            clearAssistantStatus();
+                            reasoningSegment = this._appendOrUpdateAgentReasoningSegment(
+                                conversation,
+                                reasoningSegment,
+                                state.reasoning,
+                            );
+                        }
 
-                    if (state?.type === 'provider_context')
-                        getAssistantView()?.set_provider_context?.(state.providerParts);
+                        if (state?.type === 'server_tool_results') {
+                            this._appendProviderSearchResults(
+                                conversation,
+                                state.serverToolResultChunk,
+                            );
+                        }
 
-                    if (state?.type !== 'usage'
-                        && state?.type !== 'tool_calls'
-                        && state?.type !== 'reasoning'
-                        && state?.type !== 'server_tool_results'
-                        && state?.type !== 'provider_context') {
-                        this._updateAgentModeAssistantView(conversation, getAssistantView(), text);
-                    }
-                },
-                {
-                    returnState: true,
-                    tools: this._tools.listTools(),
-                },
-            );
+                        if (state?.type === 'provider_context')
+                            getAssistantView()?.set_provider_context?.(state.providerParts);
+
+                        if (state?.type !== 'usage'
+                            && state?.type !== 'tool_calls'
+                            && state?.type !== 'reasoning'
+                            && state?.type !== 'server_tool_results'
+                            && state?.type !== 'provider_context') {
+                            this._updateAgentModeAssistantView(
+                                conversation,
+                                getAssistantView(),
+                                text,
+                            );
+                        }
+                    },
+                    {
+                        returnState: true,
+                        tools: this._tools.listTools(),
+                    },
+                );
+            } finally {
+                reasoningSegment?.view?.finish_reasoning_loading?.();
+            }
+
             reasoningSegment = this._appendOrUpdateAgentReasoningSegment(
                 conversation,
                 reasoningSegment,
                 responseState.reasoning,
             );
+            reasoningSegment?.view?.finish_reasoning_loading?.();
             const responseText = responseState.text;
 
             if (isCancellableCancelled(cancellable))

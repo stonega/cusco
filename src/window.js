@@ -2549,11 +2549,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return this._turnCoordinator.isUsingComputer(conversationId);
     }
 
-    _addMessageIfActiveConversation(conversationId, message) {
+    _addMessageIfActiveConversation(conversationId, message, options = {}) {
         if (!this._isActiveConversationId(conversationId))
             return null;
 
-        return this._addMessage(message.content, message.role, message);
+        return this._addMessage(message.content, message.role, message, options);
     }
 
     _appendStoppedMessage(conversationId, text) {
@@ -3232,9 +3232,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return this._messagePresenter._createReasoningExpander(contentOrFactory, options);
     }
 
-    _createAgentReasoningSegment(message) {
+    _createAgentReasoningSegment(message, options = {}) {
         this._messagePresenter ??= createMessagePresenter(this);
-        return this._messagePresenter._createAgentReasoningSegment(message);
+        return this._messagePresenter._createAgentReasoningSegment(message, options);
     }
 
     _createBashOutputPreview(initialOutput = '') {

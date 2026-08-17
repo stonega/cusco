@@ -40,6 +40,25 @@ function isAgentReasoningMessage(message) {
     return Boolean(message?.reasoning?.agentMode && getMessageReasoningContent(message));
 }
 
+export function createMessageWrapper(kind) {
+    const isAssistant = kind === 'assistant';
+    const halign = isAssistant
+        ? Gtk.Align.FILL
+        : kind === 'user'
+            ? Gtk.Align.END
+            : Gtk.Align.START;
+    const wrapper = new Gtk.Box({
+        orientation: Gtk.Orientation.VERTICAL,
+        spacing: 4,
+        margin_top: 4,
+        margin_bottom: 4,
+        hexpand: isAssistant,
+        halign,
+    });
+
+    return wrapper;
+}
+
 export class MessagePresenter {
     constructor({
         appSettings,
@@ -182,8 +201,8 @@ export class MessagePresenter {
         return this._agentActivityPresenter._createReasoningExpander(contentOrFactory, options);
     }
 
-    _createAgentReasoningSegment(message) {
-        return this._agentActivityPresenter._createAgentReasoningSegment(message);
+    _createAgentReasoningSegment(message, options = {}) {
+        return this._agentActivityPresenter._createAgentReasoningSegment(message, options);
     }
 
     _createBashOutputPreview(initialOutput = '') {
@@ -277,7 +296,9 @@ export class MessagePresenter {
     _addMessage(body, kind, message = null, options = {}) {
         if (isAgentReasoningMessage(message)) {
             const reasoningView = this._lastAssistantMessageView?.append_reasoning_segment
-                ? this._lastAssistantMessageView.append_reasoning_segment(message)
+                ? this._lastAssistantMessageView.append_reasoning_segment(message, {
+                    loading: options.reasoningLoading === true,
+                })
                 : queueAssistantReasoningMessage(this._pendingAssistantActivityEntries, message);
             this._scrollToBottom();
             return reasoningView ?? { set_label: () => {} };
@@ -303,13 +324,7 @@ export class MessagePresenter {
             return toolView;
         }
 
-        const wrapper = new Gtk.Box({
-            orientation: Gtk.Orientation.VERTICAL,
-            spacing: 4,
-            margin_top: 4,
-            margin_bottom: 4,
-            halign: kind === 'user' ? Gtk.Align.END : Gtk.Align.START,
-        });
+        const wrapper = createMessageWrapper(kind);
         const reasoningText = kind === 'assistant'
             ? getMessageReasoningContent(message)
             : '';
@@ -443,14 +458,21 @@ export class MessagePresenter {
 
             return agentActivityBox;
         };
-        const appendReasoningSegment = (reasoningMessage) => {
+        const appendReasoningSegment = (reasoningMessage, segmentOptions = {}) => {
             hasToolResults = true;
 
-            const reasoningWidget = this._createAgentReasoningSegment(reasoningMessage);
+            const reasoningWidget = this._createAgentReasoningSegment(
+                reasoningMessage,
+                segmentOptions,
+            );
             ensureAgentActivityBox().append(reasoningWidget);
+            reasoningWidget.startReasoningLoading?.();
             return {
                 update_reasoning_message: (nextMessage) => {
                     reasoningWidget.updateReasoningMessage?.(nextMessage);
+                },
+                finish_reasoning_loading: () => {
+                    reasoningWidget.finishReasoningLoading?.();
                 },
             };
         };
@@ -494,11 +516,13 @@ export class MessagePresenter {
                 return Promise.all([
                     bodyContent.finishStreaming?.({ selectable: true, ...finishOptions }),
                     reasoningContent?.finishStreaming?.({ selectable: true, ...finishOptions }),
+                    reasoningExpander?.finishPreviewAnimation?.(),
                 ]);
             },
             set_stream_preferences: (streamOptions) => {
                 bodyContent.setStreamPreferences?.(streamOptions);
                 reasoningContent?.setStreamPreferences?.(streamOptions);
+                reasoningExpander?.setStreamPreferences?.(streamOptions);
             },
             set_reasoning: (text) => {
                 if (!reasoningExpander)
@@ -506,13 +530,15 @@ export class MessagePresenter {
 
                 const nextText = String(text ?? '').trim();
                 reasoningBodyText = nextText || ' ';
+                reasoningExpander.set_visible(Boolean(nextText));
 
                 if (nextText) {
-                    reasoningContent = reasoningExpander.ensureContent();
-                    reasoningContent?.updateContent(reasoningBodyText, { defer: isStreamingAssistant });
+                    reasoningExpander.updatePreview?.(nextText);
+                    if (!isStreamingAssistant) {
+                        reasoningContent = reasoningExpander.ensureContent();
+                        reasoningContent?.updateContent(reasoningBodyText, { defer: false });
+                    }
                 }
-
-                reasoningExpander.set_visible(Boolean(nextText));
             },
             append_tool_result: appendToolResult,
             append_reasoning_segment: appendReasoningSegment,
