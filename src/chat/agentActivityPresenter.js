@@ -41,6 +41,116 @@ function getMessageReasoningContent(message) {
 
 export { createReasoningPreviewLabel, reasoningPreviewText };
 
+export function createTextShimmerController(label, options = {}) {
+    const reducedMotionEnabled = typeof options.reducedMotionEnabled === 'function'
+        ? options.reducedMotionEnabled
+        : () => Boolean(options.reducedMotionEnabled);
+    let text = '';
+    let phase = 0;
+    let sourceId = 0;
+
+    const stopSource = () => {
+        if (!sourceId)
+            return;
+
+        GLib.Source.remove(sourceId);
+        sourceId = 0;
+    };
+    const render = () => {
+        label.set_markup(buildShimmerMarkup(text, phase));
+        phase += 1;
+    };
+
+    return {
+        set: (nextText, active = false) => {
+            stopSource();
+            text = String(nextText ?? '');
+            phase = 0;
+
+            if (!active || !text || reducedMotionEnabled()) {
+                label.set_label(text);
+                return;
+            }
+
+            render();
+            sourceId = GLib.timeout_add(
+                GLib.PRIORITY_DEFAULT,
+                SHIMMER_INTERVAL_MS,
+                () => {
+                    render();
+                    return GLib.SOURCE_CONTINUE;
+                },
+            );
+        },
+        stop: () => {
+            stopSource();
+            label.set_label(text);
+        },
+    };
+}
+
+export function createAgentWorkingRow(options = {}) {
+    const startedAt = options.startedAt ?? GLib.get_monotonic_time();
+    const normalizedStartedAt = Number.isFinite(startedAt)
+        ? startedAt
+        : GLib.get_monotonic_time();
+    const row = new Gtk.Box({
+        orientation: Gtk.Orientation.HORIZONTAL,
+        spacing: 6,
+        halign: Gtk.Align.START,
+        valign: Gtk.Align.CENTER,
+    });
+    const workingLabel = new Gtk.Label({
+        label: 'Working…',
+        xalign: 0,
+        valign: Gtk.Align.CENTER,
+    });
+    const elapsedLabel = new Gtk.Label({
+        xalign: 0,
+        valign: Gtk.Align.CENTER,
+        tooltip_text: 'Elapsed agent run time',
+    });
+    const shimmer = createTextShimmerController(workingLabel, {
+        reducedMotionEnabled: options.reducedMotionEnabled,
+    });
+    let elapsedSourceId = 0;
+
+    const updateElapsed = () => {
+        const elapsedSeconds = (GLib.get_monotonic_time() - normalizedStartedAt) / 1000000;
+        elapsedLabel.set_label(formatRunningTime(elapsedSeconds));
+    };
+
+    row.add_css_class('cusco-agent-working');
+    workingLabel.add_css_class('caption');
+    workingLabel.add_css_class('cusco-agent-working-label');
+    elapsedLabel.add_css_class('caption');
+    elapsedLabel.add_css_class('dim-label');
+    row.append(workingLabel);
+    row.append(elapsedLabel);
+
+    shimmer.set('Working…', true);
+    updateElapsed();
+    elapsedSourceId = GLib.timeout_add(
+        GLib.PRIORITY_DEFAULT,
+        1000,
+        () => {
+            updateElapsed();
+            return GLib.SOURCE_CONTINUE;
+        },
+    );
+
+    row.stop = () => {
+        if (elapsedSourceId) {
+            GLib.Source.remove(elapsedSourceId);
+            elapsedSourceId = 0;
+        }
+
+        shimmer.stop();
+    };
+
+    return row;
+}
+
 export class AgentActivityPresenter {
     constructor({
         appSettings,
@@ -110,107 +220,16 @@ export class AgentActivityPresenter {
     }
 
     _createTextShimmerController(label) {
-        let text = '';
-        let phase = 0;
-        let sourceId = 0;
-
-        const stopSource = () => {
-            if (!sourceId)
-                return;
-
-            GLib.Source.remove(sourceId);
-            sourceId = 0;
-        };
-        const render = () => {
-            label.set_markup(buildShimmerMarkup(text, phase));
-            phase += 1;
-        };
-
-        return {
-            set: (nextText, active = false) => {
-                stopSource();
-                text = String(nextText ?? '');
-                phase = 0;
-
-                if (!active || !text || this._appSettings.reducedMotionEnabled) {
-                    label.set_label(text);
-                    return;
-                }
-
-                render();
-                sourceId = GLib.timeout_add(
-                    GLib.PRIORITY_DEFAULT,
-                    SHIMMER_INTERVAL_MS,
-                    () => {
-                        render();
-                        return GLib.SOURCE_CONTINUE;
-                    },
-                );
-            },
-            stop: () => {
-                stopSource();
-                label.set_label(text);
-            },
-        };
+        return createTextShimmerController(label, {
+            reducedMotionEnabled: () => this._appSettings.reducedMotionEnabled,
+        });
     }
 
     _createAgentWorkingRow(startedAt = GLib.get_monotonic_time()) {
-        const normalizedStartedAt = Number.isFinite(startedAt)
-            ? startedAt
-            : GLib.get_monotonic_time();
-        const row = new Gtk.Box({
-            orientation: Gtk.Orientation.HORIZONTAL,
-            spacing: 6,
-            halign: Gtk.Align.START,
-            valign: Gtk.Align.CENTER,
+        return createAgentWorkingRow({
+            startedAt,
+            reducedMotionEnabled: () => this._appSettings.reducedMotionEnabled,
         });
-        const workingLabel = new Gtk.Label({
-            label: 'Working…',
-            xalign: 0,
-            valign: Gtk.Align.CENTER,
-        });
-        const elapsedLabel = new Gtk.Label({
-            xalign: 0,
-            valign: Gtk.Align.CENTER,
-            tooltip_text: 'Elapsed agent run time',
-        });
-        const shimmer = this._createTextShimmerController(workingLabel);
-        let elapsedSourceId = 0;
-
-        const updateElapsed = () => {
-            const elapsedSeconds = (GLib.get_monotonic_time() - normalizedStartedAt) / 1000000;
-            elapsedLabel.set_label(formatRunningTime(elapsedSeconds));
-        };
-
-        row.add_css_class('cusco-agent-working');
-        workingLabel.add_css_class('caption');
-        workingLabel.add_css_class('cusco-agent-working-label');
-        elapsedLabel.add_css_class('caption');
-        elapsedLabel.add_css_class('dim-label');
-        row.append(workingLabel);
-        row.append(elapsedLabel);
-
-        shimmer.set('Working…', true);
-        updateElapsed();
-        elapsedSourceId = GLib.timeout_add(
-            GLib.PRIORITY_DEFAULT,
-            1000,
-            () => {
-                updateElapsed();
-                return GLib.SOURCE_CONTINUE;
-            },
-        );
-
-        row.stop = () => {
-            if (elapsedSourceId) {
-                GLib.Source.remove(elapsedSourceId);
-                elapsedSourceId = 0;
-            }
-
-            shimmer.stop();
-        };
-
-        return row;
     }
 
     _createKnotStatusRow(text = '', options = {}) {

@@ -13,7 +13,7 @@
 
 .cusco-conversation-list {
     background-color: transparent;
-    padding: 6px 6px 12px;
+    padding: 6px 6px 66px;
 }
 
 .cusco-conversation-list-scroller,
@@ -44,14 +44,25 @@
 }
 
 .cusco-sidebar-destination {
-    min-height: 36px;
-    padding: 2px 8px;
-    border-radius: 8px;
+    min-height: 38px;
+    padding: 2px 10px;
+    border: 1px solid alpha(@window_fg_color, 0.12);
+    border-radius: 10px;
+    color: @window_fg_color;
+    background-color: @popover_bg_color;
+    background-image: none;
+    box-shadow: 0 2px 6px alpha(black, 0.10);
+}
+
+.cusco-sidebar-destination:hover {
+    background-color: shade(@popover_bg_color, 0.96);
 }
 
 .cusco-sidebar-destination:checked,
 .cusco-sidebar-destination:checked:hover {
-    background-color: alpha(@window_fg_color, 0.10);
+    color: @accent_fg_color;
+    background-color: @accent_bg_color;
+    border-color: @accent_bg_color;
 }
 
 .cusco-usage-total-card {
@@ -381,7 +392,7 @@
 }
 
 .cusco-message-assistant {
-    background-color: alpha(@window_fg_color, 0.07);
+    background-color: transparent;
     color: @window_fg_color;
 }
 
@@ -393,6 +404,25 @@
 .cusco-message-user {
     background-color: @accent_bg_color;
     color: @accent_fg_color;
+}
+
+.cusco-stream-replay-controls {
+    background-color: alpha(@window_fg_color, 0.025);
+    border-right: 1px solid alpha(@window_fg_color, 0.10);
+}
+
+.cusco-stream-replay-stage {
+    background-color: @window_bg_color;
+}
+
+.cusco-stream-replay-editor {
+    background-color: alpha(@window_fg_color, 0.035);
+    font-family: monospace;
+}
+
+.cusco-stream-replay-metrics {
+    font-family: monospace;
+    font-size: 0.92em;
 }
 
 .cusco-high-contrast .cusco-message-user {

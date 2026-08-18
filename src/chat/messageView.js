@@ -334,6 +334,8 @@ function createMarkdownLabel(content, options = {}) {
         label.configureStreamAnimation({
             style: nextOptions.streamAnimationStyle ?? 'none',
             motionEnabled: nextOptions.motionEnabled,
+            durationMs: nextOptions.streamAnimationDurationMs,
+            staggerMs: nextOptions.streamAnimationStaggerMs,
         });
         label.set_selectable(nextOptions.selectable !== false);
         label.setRenderModel(markdownToPangoRenderModel(nextContent), {
@@ -1029,7 +1031,7 @@ export function createMessageContent(body, options = {}) {
         renderingOptions.streamReplace = false;
 
         if (renderingOptions.streaming)
-            renderingOptions.onStreamFrame?.();
+            renderingOptions.onStreamFrame?.(displayBody);
     };
     const cancelQueuedRender = () => {
         if (!renderSourceId)
@@ -1066,6 +1068,8 @@ export function createMessageContent(body, options = {}) {
 
         smoother = new StreamingTextSmoother({
             initialText: displayBody,
+            intervalMs: renderingOptions.streamRevealIntervalMs,
+            idleFlushMs: renderingOptions.streamIdleFlushMs,
             onUpdate: (visibleText, state) => {
                 displayBody = visibleText;
                 renderingOptions.streamReplace = state.replace;

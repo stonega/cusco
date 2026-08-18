@@ -11,8 +11,8 @@ import {
 } from './streamingText.js';
 
 const UTF8_ENCODER = new TextEncoder();
-const DEFAULT_ANIMATION_DURATION_MS = 200;
-const DEFAULT_ANIMATION_STAGGER_MS = 28;
+export const DEFAULT_STREAM_ANIMATION_DURATION_MS = 200;
+export const DEFAULT_STREAM_ANIMATION_STAGGER_MS = 28;
 const MAX_ANIMATION_STAGGER_MS = 168;
 const MAX_ACTIVE_ANIMATION_RANGES = 32;
 const BLUR_RADIUS_PX = 4;
@@ -195,8 +195,8 @@ class AnimatedMarkdownLabel extends Gtk.Label {
     _init(properties = {}) {
         super._init(properties);
         this._animationStyle = 'none';
-        this._animationDurationMs = DEFAULT_ANIMATION_DURATION_MS;
-        this._animationStaggerMs = DEFAULT_ANIMATION_STAGGER_MS;
+        this._animationDurationMs = DEFAULT_STREAM_ANIMATION_DURATION_MS;
+        this._animationStaggerMs = DEFAULT_STREAM_ANIMATION_STAGGER_MS;
         this._motionEnabled = () => true;
         this._plainText = '';
         this._activeRanges = [];
@@ -211,13 +211,15 @@ class AnimatedMarkdownLabel extends Gtk.Label {
 
     configureStreamAnimation(options = {}) {
         this._animationStyle = normalizeStreamAnimationStyle(options.style ?? 'none');
+        const durationMs = Number(options.durationMs);
+        const staggerMs = Number(options.staggerMs);
         this._animationDurationMs = Math.max(
             1,
-            Number(options.durationMs) || DEFAULT_ANIMATION_DURATION_MS,
+            Number.isFinite(durationMs) ? durationMs : DEFAULT_STREAM_ANIMATION_DURATION_MS,
         );
         this._animationStaggerMs = Math.max(
             0,
-            Number(options.staggerMs) || DEFAULT_ANIMATION_STAGGER_MS,
+            Number.isFinite(staggerMs) ? staggerMs : DEFAULT_STREAM_ANIMATION_STAGGER_MS,
         );
         this._motionEnabled = options.motionEnabled ?? (() => true);
 

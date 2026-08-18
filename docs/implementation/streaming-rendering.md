@@ -20,9 +20,16 @@ Run these focused checks while changing the pipeline:
 ```sh
 gjs -m tests/streaming-text-smoke.js
 gjs -m tests/stream-animation-smoke.js
+gjs -m tests/stream-replay-window-smoke.js
 gjs -m tests/markdown-smoke.js
 gjs -m tests/message-view-smoke.js
 gjs -m tests/window-provider-fallback-smoke.js
 ```
+
+For interactive reproduction, open Settings → About → Debug → Stream replay. The
+window accepts arbitrary Markdown and drives the production assistant card with
+configurable provider cadence, reveal cadence, idle flush timing, text effect,
+effect duration, stagger, motion, and an optional final provider revision. It
+also uses the production working timer and reports provider and visible progress.
 
 `tests/stream-animation-smoke.js` exercises the pure animation model everywhere. When a GTK display is available, it additionally presents a real window and verifies mapped animation completion plus the hidden-`Gtk.Stack` flush path.

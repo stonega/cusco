@@ -102,6 +102,10 @@ image_editor_sources = files(
   'imageEditor/window.js',
 )
 
+debug_sources = files(
+  'debug/streamReplayWindow.js',
+)
+
 provider_sources = files(
   'providers/chatSelection.js',
   'providers/config.js',
@@ -227,6 +231,11 @@ install_data(
 install_data(
   image_editor_sources,
   install_dir: pkgdatadir / 'imageEditor',
+)
+
+install_data(
+  debug_sources,
+  install_dir: pkgdatadir / 'debug',
 )
 
 install_data(

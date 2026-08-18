@@ -2,6 +2,7 @@ import Adw from 'gi://Adw?version=1';
 import Gtk from 'gi://Gtk?version=4.0';
 import Pango from 'gi://Pango?version=1.0';
 
+import { presentStreamReplayWindow } from '../debug/streamReplayWindow.js';
 import { createProviderIcon, updateProviderIcon } from '../providers/icons.js';
 import { createAppInfoSettingsPage } from './appInfoSettings.js';
 import { createApplicationSettingsPage } from './appSettings.js';
@@ -1179,7 +1180,21 @@ export function presentProviderSettingsDialog(
 
     const page = createProviderSettingsPage(providerConfigs, onChanged);
     dialog.add(page);
-    dialog.add(createAppInfoSettingsPage());
+    let streamReplayWindow = null;
+    dialog.add(createAppInfoSettingsPage({
+        onOpenStreamReplay: () => {
+            if (streamReplayWindow) {
+                streamReplayWindow.present();
+                return;
+            }
+
+            streamReplayWindow = presentStreamReplayWindow(dialog, { appSettings });
+            streamReplayWindow.connect('notify::visible', () => {
+                if (!streamReplayWindow?.get_visible())
+                    streamReplayWindow = null;
+            });
+        },
+    }));
 
     if (options.initialPage === 'providers')
         dialog.set_visible_page(page);

@@ -44,6 +44,7 @@ gjs -m tests/markdown-smoke.js
 gjs -m tests/message-view-smoke.js
 gjs -m tests/streaming-text-smoke.js
 gjs -m tests/stream-animation-smoke.js
+gjs -m tests/stream-replay-window-smoke.js
 gjs -m tests/usage-smoke.js
 gjs -m tests/usage-page-smoke.js
 gjs -m tests/compaction-smoke.js

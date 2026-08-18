@@ -46,6 +46,7 @@ import {
     renderDocumentToSurface,
 } from '../src/imageEditor/renderer.js';
 import { presentImageViewer } from '../src/imageEditor/window.js';
+import { createStreamReplayWindow } from '../src/debug/streamReplayWindow.js';
 import { MemoryManager } from '../src/memory/memory.js';
 import { defaultMcpConfigFilePath, parseMcpConfigFile } from '../src/mcp/config.js';
 import { parseWwwAuthenticate, SecretServiceMcpTokenStore } from '../src/mcp/auth.js';
@@ -494,6 +495,9 @@ if (typeof createComputerUseSettingsGroup !== 'function'
 
 if (typeof createAppInfoSettingsPage !== 'function')
     throw new Error('createAppInfoSettingsPage did not import as a function');
+
+if (typeof createStreamReplayWindow !== 'function')
+    throw new Error('createStreamReplayWindow did not import as a function');
 
 if (typeof createMemorySettingsPage !== 'function')
     throw new Error('createMemorySettingsPage did not import as a function');

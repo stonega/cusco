@@ -8,8 +8,8 @@ export const STREAM_ANIMATION_STYLES = Object.freeze([
 ]);
 export const DEFAULT_STREAM_ANIMATION_STYLE = 'blurIn';
 
-const DEFAULT_INTERVAL_MS = 24;
-const DEFAULT_IDLE_FLUSH_MS = 72;
+export const DEFAULT_STREAM_INTERVAL_MS = 24;
+export const DEFAULT_STREAM_IDLE_FLUSH_MS = 72;
 const CJK_OR_THAI_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Thai}]/u;
 const WHITESPACE_RE = /^\s+$/u;
 const HAS_SEGMENTER = typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function';
@@ -137,8 +137,11 @@ function safeUnitCount(text, finishing, allowPartial) {
 export class StreamingTextSmoother {
     constructor(options = {}) {
         this._onUpdate = options.onUpdate ?? (() => {});
-        this._intervalMs = Math.max(1, options.intervalMs ?? DEFAULT_INTERVAL_MS);
-        this._idleFlushMs = Math.max(this._intervalMs, options.idleFlushMs ?? DEFAULT_IDLE_FLUSH_MS);
+        this._intervalMs = Math.max(1, options.intervalMs ?? DEFAULT_STREAM_INTERVAL_MS);
+        this._idleFlushMs = Math.max(
+            this._intervalMs,
+            options.idleFlushMs ?? DEFAULT_STREAM_IDLE_FLUSH_MS,
+        );
         this._schedule = options.schedule ?? defaultSchedule;
         this._cancel = options.cancel ?? defaultCancel;
         const initialText = String(options.initialText ?? '');

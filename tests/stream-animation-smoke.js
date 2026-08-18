@@ -112,6 +112,17 @@ if (Gtk.init_check()) {
         window.destroy();
     }
 
+    const zeroStaggerLabel = new AnimatedMarkdownLabel();
+    zeroStaggerLabel.configureStreamAnimation({
+        style: 'fadeIn',
+        staggerMs: 0,
+        motionEnabled: () => true,
+    });
+    assert(
+        zeroStaggerLabel._animationStaggerMs === 0,
+        'Stream animation did not accept a zero-millisecond debug stagger',
+    );
+
     const reducedMotionLabel = new AnimatedMarkdownLabel();
     reducedMotionLabel.configureStreamAnimation({
         style: 'blurIn',

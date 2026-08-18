@@ -11,10 +11,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Keep live reasoning expanded in a three-line ticker that slides completed lines upward and brings new lines in from below.
 - Show today's total token usage in the top-right of the Daily tokens panel.
+- Add a Settings → About debug window for replaying custom assistant streams with configurable delivery and animation timing.
 
 ### Changed
 
 - Reserve the available assistant-message width from the first streamed token while keeping user messages compact.
+- Float the Usage destination over the bottom of the chat list and give its pie-chart icon three distinct colors.
+- Remove the background fill from assistant messages while preserving distinct user-message bubbles.
 
 ### Fixed
 

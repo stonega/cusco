@@ -161,26 +161,37 @@ export class ConversationSidebar {
         const adjustment = this.scroller.get_vadjustment();
         adjustment.connect('value-changed', () => this.maybeLoadNextPage());
         adjustment.connect('changed', () => this.maybeLoadNextPage());
-        sidebarContent.append(this.scroller);
+
+        const conversationOverlay = new Gtk.Overlay({
+            hexpand: true,
+            vexpand: true,
+        });
+        conversationOverlay.set_child(this.scroller);
 
         const usageButtonContent = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 10,
         });
-        usageButtonContent.append(createBundledIcon(USAGE_ICON_FILE, 'view-list-symbolic'));
+        usageButtonContent.append(createBundledIcon(
+            USAGE_ICON_FILE,
+            'view-list-symbolic',
+            { pixelSize: 18 },
+        ));
         usageButtonContent.append(new Gtk.Label({ label: 'Usage', xalign: 0, hexpand: true }));
         this.usageButton = new Gtk.ToggleButton({
             child: usageButtonContent,
             hexpand: true,
-            margin_start: 6,
-            margin_end: 6,
-            margin_bottom: 6,
+            halign: Gtk.Align.FILL,
+            valign: Gtk.Align.END,
+            margin_start: 12,
+            margin_end: 12,
+            margin_bottom: 12,
             tooltip_text: 'Usage',
         });
-        this.usageButton.add_css_class('flat');
         this.usageButton.add_css_class('cusco-sidebar-destination');
         this.usageButton.connect('clicked', this._callbacks.onShowUsage);
-        sidebarContent.append(this.usageButton);
+        conversationOverlay.add_overlay(this.usageButton);
+        sidebarContent.append(conversationOverlay);
         sidebar.append(sidebarContent);
         return sidebar;
     }

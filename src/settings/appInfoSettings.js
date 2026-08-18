@@ -40,7 +40,25 @@ function createLinkRow(title, uri) {
     return row;
 }
 
-export function createAppInfoSettingsPage() {
+function createDebugRow(onOpenStreamReplay) {
+    const row = new Adw.ActionRow({
+        title: 'Stream replay',
+        subtitle: 'Replay custom provider output through the assistant message presentation.',
+    });
+    const button = new Gtk.Button({
+        icon_name: 'go-next-symbolic',
+        tooltip_text: 'Open Stream Replay',
+        valign: Gtk.Align.CENTER,
+    });
+
+    button.add_css_class('flat');
+    row.add_suffix(button);
+    row.set_activatable_widget(button);
+    button.connect('clicked', () => onOpenStreamReplay?.());
+    return row;
+}
+
+export function createAppInfoSettingsPage(options = {}) {
     const page = new Adw.PreferencesPage({
         title: 'About',
         icon_name: 'help-about-symbolic',
@@ -60,5 +78,16 @@ export function createAppInfoSettingsPage() {
     group.add(createInfoRow('License', APP_LICENSE));
 
     page.add(group);
+
+    if (typeof options.onOpenStreamReplay === 'function') {
+        const debugGroup = new Adw.PreferencesGroup({
+            title: 'Debug',
+            description: 'Inspect presentation behavior without sending a provider request.',
+        });
+
+        debugGroup.add(createDebugRow(options.onOpenStreamReplay));
+        page.add(debugGroup);
+    }
+
     return page;
 }
