@@ -722,12 +722,10 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows, 
             row._accountButton.set_sensitive(status.available !== false);
         }
         if (row._authRiskRow) {
-            const method = currentProvider.authMethods.find((item) => (
-                item.id === currentProvider.authMethodId
-            ));
-            row._authRiskRow.set_visible(Boolean(method?.riskNote));
-            row._authRiskRow.set_title(method?.riskTitle || 'Authentication risk');
-            row._authRiskRow.set_subtitle(method?.riskNote || '');
+            const riskMethod = currentProvider.authMethods.find((method) => method.riskNote);
+            row._authRiskRow.set_title(riskMethod?.riskTitle || 'Authentication risk');
+            row._authRiskRow.set_subtitle(riskMethod?.riskNote || '');
+            row._authRiskRow.set_visible(currentProvider.authMethodId === riskMethod?.id);
         }
         row._discoveryRow?.set_subtitle(row._discoveryStatus || 'Refresh the model list from this provider.');
         row._discoverButton?.set_sensitive(canDiscoverModels(currentProvider));

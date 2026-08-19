@@ -10,6 +10,9 @@ if (getBundledIconForeground() !== '#2e3436'
 }
 
 const resourceDirectory = Gio.File.new_for_path('data/resources');
+const multicolorIconPalettes = new Map([
+    ['usage-symbolic.svg', ['#3584e4', '#ff7800', '#9141ac']],
+]);
 const files = resourceDirectory.enumerate_children(
     'standard::name,standard::type',
     Gio.FileQueryInfoFlags.NONE,
@@ -34,14 +37,24 @@ for (let info = files.next_file(null); info; info = files.next_file(null)) {
         );
     }
 
-    if (!svg.includes('#2e3436'))
+    const multicolorPalette = multicolorIconPalettes.get(filename);
+    if (multicolorPalette) {
+        for (const color of multicolorPalette) {
+            if (!svg.includes(color))
+                throw new Error(`${filename} is missing its expected ${color} color`);
+        }
+        multicolorIconPalettes.delete(filename);
+    } else if (!svg.includes('#2e3436')) {
         throw new Error(`${filename} does not use GTK's symbolic foreground base color`);
+    }
 
     symbolicIconCount++;
 }
 
 if (symbolicIconCount === 0)
     throw new Error('No bundled symbolic SVG icons were checked');
+if (multicolorIconPalettes.size > 0)
+    throw new Error(`Missing bundled multicolor icons: ${[...multicolorIconPalettes.keys()].join(', ')}`);
 
 files.close(null);
 print(`bundled icon smoke checks passed (${symbolicIconCount} icons)`);

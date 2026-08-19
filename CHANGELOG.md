@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.39] - 2026-08-19
+
 ### Added
 
 - Add provider-selectable OAuth authentication for eligible ChatGPT, Claude,
@@ -349,7 +351,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.38...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.39...HEAD
+[0.5.39]: https://github.com/stonega/cusco/compare/v0.5.38...v0.5.39
 [0.5.38]: https://github.com/stonega/cusco/compare/v0.5.37...v0.5.38
 [0.5.37]: https://github.com/stonega/cusco/compare/v0.5.36...v0.5.37
 [0.5.36]: https://github.com/stonega/cusco/compare/v0.5.35...v0.5.36
