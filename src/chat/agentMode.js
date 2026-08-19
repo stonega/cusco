@@ -253,7 +253,7 @@ export function createNativeToolRuntimeBatch(
     responseText,
     nativeToolCalls,
     runtimeMessages,
-    { providerParts = [] } = {},
+    { providerParts = [], reasoning = '' } = {},
 ) {
     const toolCalls = Array.isArray(nativeToolCalls)
         ? nativeToolCalls.filter((call) => String(call?.name ?? '').trim())
@@ -267,6 +267,9 @@ export function createNativeToolRuntimeBatch(
             role: 'assistant',
             content: String(responseText ?? ''),
             toolCalls,
+            ...(String(reasoning ?? '').trim()
+                ? { reasoning: String(reasoning).trim() }
+                : {}),
             ...(Array.isArray(providerParts) && providerParts.length > 0
                 ? { providerParts: providerParts.map((part) => ({ ...part })) }
                 : {}),

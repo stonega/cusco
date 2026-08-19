@@ -20,6 +20,12 @@ provider_runtime_package_sources = files(
   'providerRuntime/README.md',
 )
 
+provider_auth_package_sources = files(
+  'providerAuth/index.js',
+  'providerAuth/auth.js',
+  'providerAuth/README.md',
+)
+
 mcp_package_sources = files(
   'mcp/index.js',
   'mcp/auth.js',
@@ -78,6 +84,11 @@ streaming_text_package_sources = files(
 install_data(
   provider_runtime_package_sources,
   install_dir: pkgdatadir / 'packages' / 'providerRuntime',
+)
+
+install_data(
+  provider_auth_package_sources,
+  install_dir: pkgdatadir / 'packages' / 'providerAuth',
 )
 
 install_data(

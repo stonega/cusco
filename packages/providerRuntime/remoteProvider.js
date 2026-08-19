@@ -179,6 +179,24 @@ function messageContent(message) {
     return String(message.content ?? '');
 }
 
+function messageReasoningContent(message, provider = null) {
+    const reasoning = message?.reasoning;
+
+    if (typeof reasoning === 'string')
+        return reasoning.trim();
+
+    if (!reasoning || typeof reasoning !== 'object' || Array.isArray(reasoning))
+        return '';
+
+    const reasoningProviderId = String(reasoning.providerId ?? '').trim();
+    const providerId = String(provider?.id ?? '').trim();
+
+    if (providerId && reasoningProviderId && reasoningProviderId !== providerId)
+        return '';
+
+    return String(reasoning.content ?? reasoning.text ?? '').trim();
+}
+
 function messagesWithLocalAttachmentPaths(messages, tools = []) {
     if (!Array.isArray(tools) || tools.length === 0)
         return messages;
@@ -273,6 +291,9 @@ function imageDataUrl(image) {
 
 function assistantHasProviderPayload(message, options = {}) {
     if (messageContent(message) || messageToolCalls(message).length > 0)
+        return true;
+
+    if (options.includeReasoning === true && messageReasoningContent(message))
         return true;
 
     if (options.includeImages !== false && imageAttachments(message).length > 0)
@@ -375,6 +396,22 @@ function toolResultImageMessage(message, label) {
 
 function normalizeUrl(baseUrl, path) {
     return `${baseUrl.replace(/\/$/, '')}${path}`;
+}
+
+async function authorizeProviderRequest(config, request, options = {}) {
+    if (typeof config.authorizeRequest !== 'function')
+        return request;
+
+    const authorized = await config.authorizeRequest(request, options);
+
+    if (!authorized?.url || !authorized?.headers)
+        throw createUserVisibleError(`${config.name} authentication returned an invalid request.`);
+
+    return {
+        ...request,
+        ...authorized,
+        headers: { ...authorized.headers },
+    };
 }
 
 function encodeJsonBody(body) {
@@ -1800,11 +1837,24 @@ function providerSupportsImageAttachments(provider) {
     return provider?.supportsImageAttachments !== false;
 }
 
-export function openAiMessages(messages) {
+export function openAiMessages(messages, options = {}) {
+    const provider = options.provider ?? options.config;
+    const includeImages = providerSupportsImageAttachments(provider);
+    const includeReasoning = provider?.supportsReasoningContentItems === true;
     const output = [];
 
-    for (const message of providerMessages(messages)) {
+    for (const message of providerMessages(messages, { includeImages, includeReasoning })) {
         const toolCalls = messageToolCalls(message);
+        const reasoning = message.role === 'assistant' && includeReasoning
+            ? messageReasoningContent(message, provider)
+            : '';
+
+        if (reasoning) {
+            output.push({
+                type: 'reasoning',
+                content: [{ type: 'reasoning_text', text: reasoning }],
+            });
+        }
 
         if (message.role === 'assistant' && toolCalls.length > 0) {
             const content = messageContent(message);
@@ -1834,21 +1884,27 @@ export function openAiMessages(messages) {
                 output: messageContent(message),
             });
 
-            if (imageAttachments(message).length > 0) {
+            if (includeImages && imageAttachments(message).length > 0) {
                 output.push({
                     role: 'user',
                     content: openAiContent(
                         toolResultImageMessage(message, message.toolName ?? 'computer tool'),
-                        { responses: true },
+                        { responses: true, includeImages },
                     ),
                 });
             }
             continue;
         }
 
+        if (message.role === 'assistant'
+            && !messageContent(message)
+            && (!includeImages || imageAttachments(message).length === 0)) {
+            continue;
+        }
+
         output.push({
             role: message.role === 'system' ? 'developer' : message.role,
-            content: openAiContent(message, { responses: true }),
+            content: openAiContent(message, { responses: true, includeImages }),
         });
     }
 
@@ -2256,7 +2312,7 @@ function buildOpenAiCompatibleThinkingConfig(config, model, level) {
             thinking: { type: 'enabled' },
         };
 
-        if (thinking.supportsReasoningEffort && (thinking.level === 'high' || thinking.level === 'max'))
+        if (thinking.supportsReasoningEffort && ['low', 'high', 'max'].includes(thinking.level))
             request.reasoning_effort = thinking.level;
 
         return request;
@@ -2276,16 +2332,19 @@ function buildOpenAiCompatibleThinkingConfig(config, model, level) {
 }
 
 export function buildOpenAiResponsesBody(messages, modelId, options = {}) {
+    const provider = options.provider ?? options.config;
     const body = {
         model: modelId,
-        input: openAiMessages(messagesWithLocalAttachmentPaths(messages, options.tools)),
+        input: openAiMessages(
+            messagesWithLocalAttachmentPaths(messages, options.tools),
+            { provider },
+        ),
         max_output_tokens: normalizeMaxOutputTokens(options.maxOutputTokens),
     };
 
     if (options.stream === true)
         body.stream = true;
 
-    const provider = options.provider ?? options.config;
     const reasoning = buildOpenAiReasoningConfig(provider, options.model, options.thinkingLevel)
         ?? buildOpenAiCompatibleThinkingConfig(provider, options.model, options.thinkingLevel)?.reasoning;
 
@@ -2431,8 +2490,18 @@ export function extractOpenAiText(response) {
 export function extractOpenAiReasoning(response) {
     return joinTextParts((response.output ?? [])
         .filter((item) => item.type === 'reasoning')
-        .flatMap((item) => item.summary ?? [])
-        .map((summary) => summary.text ?? summary.content ?? ''));
+        .flatMap((item) => {
+            const summaries = (item.summary ?? [])
+                .map((summary) => summary.text ?? summary.content ?? '')
+                .filter(Boolean);
+
+            if (summaries.length > 0)
+                return summaries;
+
+            return (item.content ?? [])
+                .filter((content) => content?.type === 'reasoning_text' || content?.text)
+                .map((content) => content.text ?? content.content ?? '');
+        }));
 }
 
 export function extractOpenAiUsage(response) {
@@ -3105,9 +3174,16 @@ export function extractDiscoveredModels(response) {
 }
 
 export async function discoverOpenAiCompatibleModels(config, options = {}) {
+    const request = await authorizeProviderRequest(config, {
+        operation: 'models',
+        url: normalizeUrl(config.baseUrl, '/models'),
+        headers: config.apiKey ? { Authorization: `Bearer ${getApiKey(config)}` } : {},
+        body: null,
+        stream: false,
+    }, options);
     const response = await getJson(
-        normalizeUrl(config.baseUrl, '/models'),
-        { Authorization: `Bearer ${getApiKey(config)}` },
+        request.url,
+        request.headers,
         {
             cancellable: options.cancellable ?? null,
             providerName: config.name,
@@ -3119,12 +3195,19 @@ export async function discoverOpenAiCompatibleModels(config, options = {}) {
 }
 
 export async function discoverAnthropicModels(config, options = {}) {
-    const response = await getJson(
-        normalizeUrl(config.baseUrl, '/models'),
-        {
-            'x-api-key': getApiKey(config),
+    const request = await authorizeProviderRequest(config, {
+        operation: 'models',
+        url: normalizeUrl(config.baseUrl, '/models'),
+        headers: {
+            ...(config.apiKey ? { 'x-api-key': getApiKey(config) } : {}),
             'anthropic-version': '2023-06-01',
         },
+        body: null,
+        stream: false,
+    }, options);
+    const response = await getJson(
+        request.url,
+        request.headers,
         {
             cancellable: options.cancellable ?? null,
             providerName: config.name,
@@ -3161,8 +3244,16 @@ function geminiDiscoveredThinkingCapability(modelId) {
 }
 
 export async function discoverGeminiModels(config, options = {}) {
-    const url = `${normalizeUrl(config.baseUrl, '/models')}?key=${encodeURIComponent(getApiKey(config))}`;
-    const response = await getJson(url, {}, {
+    const request = await authorizeProviderRequest(config, {
+        operation: 'models',
+        url: config.apiKey
+            ? `${normalizeUrl(config.baseUrl, '/models')}?key=${encodeURIComponent(getApiKey(config))}`
+            : normalizeUrl(config.baseUrl, '/models'),
+        headers: {},
+        body: null,
+        stream: false,
+    }, options);
+    const response = await getJson(request.url, request.headers, {
         cancellable: options.cancellable ?? null,
         providerName: config.name,
         timeoutSeconds: options.timeoutSeconds,
@@ -3403,11 +3494,13 @@ class RemoteProvider extends ChatProvider {
 export class OpenAiResponsesProvider extends RemoteProvider {
     async *_streamComplete(messages, modelId, options = {}) {
         const state = new OpenAiResponsesStreamState(this.name);
-
-        for await (const event of postJsonStream(
-            normalizeUrl(this._config.baseUrl, '/responses'),
-            { Authorization: `Bearer ${getApiKey(this._config)}` },
-            buildOpenAiResponsesBody(messages, modelId, {
+        const request = await authorizeProviderRequest(this._config, {
+            operation: 'chat',
+            url: normalizeUrl(this._config.baseUrl, '/responses'),
+            headers: this._config.apiKey
+                ? { Authorization: `Bearer ${getApiKey(this._config)}` }
+                : {},
+            body: buildOpenAiResponsesBody(messages, modelId, {
                 provider: this._config,
                 model: options.model,
                 tools: options.tools,
@@ -3416,6 +3509,13 @@ export class OpenAiResponsesProvider extends RemoteProvider {
                 maxOutputTokens: options.maxOutputTokens,
                 stream: true,
             }),
+            stream: true,
+        }, options);
+
+        for await (const event of postJsonStream(
+            request.url,
+            request.headers,
+            request.body,
             {
                 cancellable: options.cancellable ?? null,
                 providerName: this.name,
@@ -3430,10 +3530,13 @@ export class OpenAiResponsesProvider extends RemoteProvider {
     }
 
     async _complete(messages, modelId, options = {}) {
-        const response = await postJson(
-            normalizeUrl(this._config.baseUrl, '/responses'),
-            { Authorization: `Bearer ${getApiKey(this._config)}` },
-            buildOpenAiResponsesBody(messages, modelId, {
+        const request = await authorizeProviderRequest(this._config, {
+            operation: 'chat',
+            url: normalizeUrl(this._config.baseUrl, '/responses'),
+            headers: this._config.apiKey
+                ? { Authorization: `Bearer ${getApiKey(this._config)}` }
+                : {},
+            body: buildOpenAiResponsesBody(messages, modelId, {
                 provider: this._config,
                 model: options.model,
                 tools: options.tools,
@@ -3441,6 +3544,12 @@ export class OpenAiResponsesProvider extends RemoteProvider {
                 thinkingLevel: options.thinkingLevel,
                 maxOutputTokens: options.maxOutputTokens,
             }),
+            stream: false,
+        }, options);
+        const response = await postJson(
+            request.url,
+            request.headers,
+            request.body,
             {
                 cancellable: options.cancellable ?? null,
                 providerName: this.name,
@@ -3455,11 +3564,13 @@ export class OpenAiResponsesProvider extends RemoteProvider {
 export class OpenAiCompatibleChatProvider extends RemoteProvider {
     async *_streamComplete(messages, modelId, options = {}) {
         const state = new ChatCompletionStreamState(this.name);
-
-        for await (const event of postJsonStream(
-            normalizeUrl(this._config.baseUrl, this._config.chatPath ?? '/chat/completions'),
-            { Authorization: `Bearer ${getApiKey(this._config)}` },
-            buildOpenAiCompatibleChatBody(messages, modelId, {
+        const request = await authorizeProviderRequest(this._config, {
+            operation: 'chat',
+            url: normalizeUrl(this._config.baseUrl, this._config.chatPath ?? '/chat/completions'),
+            headers: this._config.apiKey
+                ? { Authorization: `Bearer ${getApiKey(this._config)}` }
+                : {},
+            body: buildOpenAiCompatibleChatBody(messages, modelId, {
                 provider: this._config,
                 model: options.model,
                 tools: options.tools,
@@ -3468,6 +3579,13 @@ export class OpenAiCompatibleChatProvider extends RemoteProvider {
                 maxOutputTokens: options.maxOutputTokens,
                 stream: true,
             }),
+            stream: true,
+        }, options);
+
+        for await (const event of postJsonStream(
+            request.url,
+            request.headers,
+            request.body,
             {
                 cancellable: options.cancellable ?? null,
                 providerName: this.name,
@@ -3482,10 +3600,13 @@ export class OpenAiCompatibleChatProvider extends RemoteProvider {
     }
 
     async _complete(messages, modelId, options = {}) {
-        const response = await postJson(
-            normalizeUrl(this._config.baseUrl, this._config.chatPath ?? '/chat/completions'),
-            { Authorization: `Bearer ${getApiKey(this._config)}` },
-            buildOpenAiCompatibleChatBody(messages, modelId, {
+        const request = await authorizeProviderRequest(this._config, {
+            operation: 'chat',
+            url: normalizeUrl(this._config.baseUrl, this._config.chatPath ?? '/chat/completions'),
+            headers: this._config.apiKey
+                ? { Authorization: `Bearer ${getApiKey(this._config)}` }
+                : {},
+            body: buildOpenAiCompatibleChatBody(messages, modelId, {
                 provider: this._config,
                 model: options.model,
                 tools: options.tools,
@@ -3493,6 +3614,12 @@ export class OpenAiCompatibleChatProvider extends RemoteProvider {
                 thinkingLevel: options.thinkingLevel,
                 maxOutputTokens: options.maxOutputTokens,
             }),
+            stream: false,
+        }, options);
+        const response = await postJson(
+            request.url,
+            request.headers,
+            request.body,
             {
                 cancellable: options.cancellable ?? null,
                 providerName: this.name,
@@ -3507,14 +3634,14 @@ export class OpenAiCompatibleChatProvider extends RemoteProvider {
 export class AnthropicMessagesProvider extends RemoteProvider {
     async *_streamComplete(messages, modelId, options = {}) {
         const state = new AnthropicStreamState(this.name);
-
-        for await (const event of postJsonStream(
-            normalizeUrl(this._config.baseUrl, '/messages'),
-            {
-                'x-api-key': getApiKey(this._config),
+        const request = await authorizeProviderRequest(this._config, {
+            operation: 'chat',
+            url: normalizeUrl(this._config.baseUrl, '/messages'),
+            headers: {
+                ...(this._config.apiKey ? { 'x-api-key': getApiKey(this._config) } : {}),
                 'anthropic-version': '2023-06-01',
             },
-            buildAnthropicMessagesBody(messages, modelId, {
+            body: buildAnthropicMessagesBody(messages, modelId, {
                 provider: this._config,
                 model: options.model,
                 tools: options.tools,
@@ -3523,6 +3650,13 @@ export class AnthropicMessagesProvider extends RemoteProvider {
                 maxOutputTokens: options.maxOutputTokens,
                 stream: true,
             }),
+            stream: true,
+        }, options);
+
+        for await (const event of postJsonStream(
+            request.url,
+            request.headers,
+            request.body,
             {
                 cancellable: options.cancellable ?? null,
                 providerName: this.name,
@@ -3537,13 +3671,14 @@ export class AnthropicMessagesProvider extends RemoteProvider {
     }
 
     async _complete(messages, modelId, options = {}) {
-        const response = await postJson(
-            normalizeUrl(this._config.baseUrl, '/messages'),
-            {
-                'x-api-key': getApiKey(this._config),
+        const request = await authorizeProviderRequest(this._config, {
+            operation: 'chat',
+            url: normalizeUrl(this._config.baseUrl, '/messages'),
+            headers: {
+                ...(this._config.apiKey ? { 'x-api-key': getApiKey(this._config) } : {}),
                 'anthropic-version': '2023-06-01',
             },
-            buildAnthropicMessagesBody(messages, modelId, {
+            body: buildAnthropicMessagesBody(messages, modelId, {
                 provider: this._config,
                 model: options.model,
                 tools: options.tools,
@@ -3551,6 +3686,12 @@ export class AnthropicMessagesProvider extends RemoteProvider {
                 thinkingLevel: options.thinkingLevel,
                 maxOutputTokens: options.maxOutputTokens,
             }),
+            stream: false,
+        }, options);
+        const response = await postJson(
+            request.url,
+            request.headers,
+            request.body,
             {
                 cancellable: options.cancellable ?? null,
                 providerName: this.name,
@@ -3564,17 +3705,26 @@ export class AnthropicMessagesProvider extends RemoteProvider {
 
 export class GeminiGenerateContentProvider extends RemoteProvider {
     async *_streamComplete(messages, modelId, options = {}) {
-        const url = `${normalizeUrl(this._config.baseUrl, `/models/${modelId}:streamGenerateContent`)}?alt=sse&key=${encodeURIComponent(getApiKey(this._config))}`;
+        const url = this._config.apiKey
+            ? `${normalizeUrl(this._config.baseUrl, `/models/${modelId}:streamGenerateContent`)}?alt=sse&key=${encodeURIComponent(getApiKey(this._config))}`
+            : `${normalizeUrl(this._config.baseUrl, `/models/${modelId}:streamGenerateContent`)}?alt=sse`;
         const state = new GeminiStreamState(this.name);
+        const request = await authorizeProviderRequest(this._config, {
+            operation: 'chat',
+            url,
+            headers: {},
+            body: buildGeminiGenerateContentBody(messages, {
+                provider: this._config,
+                model: options.model,
+                tools: options.tools,
+                disableNativeSearch: options.disableNativeSearch,
+                thinkingLevel: options.thinkingLevel,
+                maxOutputTokens: options.maxOutputTokens,
+            }),
+            stream: true,
+        }, options);
 
-        for await (const event of postJsonStream(url, {}, buildGeminiGenerateContentBody(messages, {
-            provider: this._config,
-            model: options.model,
-            tools: options.tools,
-            disableNativeSearch: options.disableNativeSearch,
-            thinkingLevel: options.thinkingLevel,
-            maxOutputTokens: options.maxOutputTokens,
-        }), {
+        for await (const event of postJsonStream(request.url, request.headers, request.body, {
             cancellable: options.cancellable ?? null,
             providerName: this.name,
             timeoutSeconds: options.timeoutSeconds,
@@ -3587,15 +3737,24 @@ export class GeminiGenerateContentProvider extends RemoteProvider {
     }
 
     async _complete(messages, modelId, options = {}) {
-        const url = `${normalizeUrl(this._config.baseUrl, `/models/${modelId}:generateContent`)}?key=${encodeURIComponent(getApiKey(this._config))}`;
-        const response = await postJson(url, {}, buildGeminiGenerateContentBody(messages, {
-            provider: this._config,
-            model: options.model,
-            tools: options.tools,
-            disableNativeSearch: options.disableNativeSearch,
-            thinkingLevel: options.thinkingLevel,
-            maxOutputTokens: options.maxOutputTokens,
-        }), {
+        const url = this._config.apiKey
+            ? `${normalizeUrl(this._config.baseUrl, `/models/${modelId}:generateContent`)}?key=${encodeURIComponent(getApiKey(this._config))}`
+            : normalizeUrl(this._config.baseUrl, `/models/${modelId}:generateContent`);
+        const request = await authorizeProviderRequest(this._config, {
+            operation: 'chat',
+            url,
+            headers: {},
+            body: buildGeminiGenerateContentBody(messages, {
+                provider: this._config,
+                model: options.model,
+                tools: options.tools,
+                disableNativeSearch: options.disableNativeSearch,
+                thinkingLevel: options.thinkingLevel,
+                maxOutputTokens: options.maxOutputTokens,
+            }),
+            stream: false,
+        }, options);
+        const response = await postJson(request.url, request.headers, request.body, {
             cancellable: options.cancellable ?? null,
             providerName: this.name,
             timeoutSeconds: options.timeoutSeconds,

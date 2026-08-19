@@ -53,6 +53,7 @@ import { parseWwwAuthenticate, SecretServiceMcpTokenStore } from '../src/mcp/aut
 import { McpClient } from '../src/mcp/client.js';
 import { McpManager } from '../src/mcp/manager.js';
 import { ProviderConfigStore } from '../src/providers/config.js';
+import { ProviderAuthManager } from '../src/providers/auth.js';
 import { createImageGenerationTool, generateImageForProvider } from '../src/providers/imageGeneration.js';
 import { createProviderIcon, getProviderGIcon } from '../src/providers/icons.js';
 import {
@@ -113,6 +114,9 @@ if (APPLICATION_APP_ID !== APP_ID)
 
 if (APP_NAME !== 'Cusco' || APP_VERSION.length === 0 || APP_AUTHOR.length === 0)
     throw new Error('App info metadata did not import correctly');
+
+if (typeof ProviderAuthManager !== 'function')
+    throw new Error('Provider authentication package did not import correctly');
 
 const welcomeMessage = createWelcomeMessage();
 

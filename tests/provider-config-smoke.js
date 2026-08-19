@@ -1,6 +1,7 @@
 import GLib from 'gi://GLib?version=2.0';
 
 import { ProviderConfigStore } from '../src/providers/config.js';
+import { MemoryProviderTokenStore, ProviderAuthManager } from '../src/providers/auth.js';
 import { MemoryApiKeyStore, SecretServiceApiKeyStore } from '../src/secrets/apiKeyStore.js';
 
 class MemorySettings {
@@ -136,6 +137,55 @@ const defaultStore = new ProviderConfigStore(undefined, {
     apiKeyStore: new MemoryApiKeyStore({ zai: 'zai-key' }),
     envLookup: () => '',
 });
+
+const subscriptionSettings = new MemorySettings({
+    strings: {
+        'provider-auth-methods': '{"openai":"chatgpt-subscription"}',
+    },
+    strv: {
+        'enabled-providers': ['openai'],
+    },
+});
+const subscriptionAuthManager = new ProviderAuthManager({
+    tokenStore: new MemoryProviderTokenStore({
+        'openai:chatgpt-subscription': {
+            accessToken: 'subscription-token',
+            refreshToken: 'subscription-refresh',
+            tokenType: 'Bearer',
+            accountId: 'account-fixture',
+            expiresAt: Date.now() + 3600_000,
+        },
+    }),
+    envLookup: () => '',
+});
+const subscriptionStore = new ProviderConfigStore(undefined, {
+    settings: subscriptionSettings,
+    apiKeyStore: new MemoryApiKeyStore(),
+    authManager: subscriptionAuthManager,
+    envLookup: () => '',
+});
+
+if (subscriptionStore.getProvider('openai').authMethodId !== 'chatgpt-subscription'
+    || !subscriptionStore.getAuthenticationStatus('openai').configured
+    || !subscriptionStore.canEnableProvider('openai')) {
+    throw new Error('Persisted ChatGPT subscription authentication was not restored');
+}
+
+const subscriptionRuntime = subscriptionStore.createProvider('openai');
+if (subscriptionRuntime._config.apiKey !== ''
+    || typeof subscriptionRuntime._config.authorizeRequest !== 'function') {
+    throw new Error('Subscription authentication was not isolated behind the remote request authorizer');
+}
+
+subscriptionStore.setAuthenticationMethod('openai', 'api-key');
+if (subscriptionStore.isProviderEnabled('openai')
+    || JSON.parse(subscriptionSettings.get_string('provider-auth-methods')).openai !== 'api-key') {
+    throw new Error('Changing to an unconfigured API key did not persist and disable the provider');
+}
+
+subscriptionStore.setAuthenticationMethod('openai', 'chatgpt-subscription');
+if (!subscriptionStore.canEnableProvider('openai'))
+    throw new Error('Returning to the connected subscription did not restore provider readiness');
 const builtInModelsMissingContext = defaultStore.listProviders()
     .filter((provider) => !provider.customizable)
     .flatMap((provider) => provider.models
@@ -238,11 +288,22 @@ if (staleAnthropicStore.getProvider('anthropic').models.map((model) => model.id)
 if (staleAnthropicStore.getDefaultModel('anthropic').id !== 'claude-sonnet-5')
     throw new Error('Stale Anthropic default should fall back to Claude Sonnet 5');
 
+const gemini37Model = defaultStore.resolve('gemini', 'gemini-3.7-flash').model;
+
+if (gemini37Model.contextWindowTokens !== 1048576 || gemini37Model.maxOutputTokens !== 65536)
+    throw new Error('Gemini 3.7 Flash token limits should match the documented API limits');
+
 if (defaultStore.resolve('gemini', 'gemini-3.6-flash').model.contextWindowTokens !== 1048576)
     throw new Error('Gemini 3.6 Flash context window should match the documented input token limit');
 
 if (defaultStore.resolve('gemini', 'gemini-3.5-flash-lite').model.contextWindowTokens !== 1048576)
     throw new Error('Gemini 3.5 Flash-Lite context window should match the documented input token limit');
+
+if (defaultStore.resolve('grok', 'grok4.6').model.id !== 'grok-4.6')
+    throw new Error('Grok 4.6 alias should resolve to the canonical model id');
+
+if (defaultStore.resolve('grok', 'grok-4.6').model.contextWindowTokens !== 500000)
+    throw new Error('Grok 4.6 context window should be 500K tokens');
 
 if (defaultStore.resolve('grok', 'grok-4.3').model.contextWindowTokens !== 1000000)
     throw new Error('Grok 4.3 context window should be 1M tokens');
@@ -251,6 +312,7 @@ const expectedNativeSearchTools = {
     openai: 'web_search',
     anthropic: 'web_search',
     gemini: 'google_search,url_context',
+    deepseek: 'web_search',
     grok: 'web_search,x_search',
     zai: 'web_search',
 };
@@ -262,7 +324,7 @@ for (const [providerId, expectedTools] of Object.entries(expectedNativeSearchToo
         throw new Error(`${providerId} native search tools were wrong: ${actualTools}`);
 }
 
-for (const providerId of ['kimi', 'deepseek']) {
+for (const providerId of ['kimi']) {
     if (defaultStore.getNativeSearchTools(providerId).length > 0)
         throw new Error(`${providerId} should use the configured web search fallback`);
 }
@@ -272,6 +334,15 @@ if (defaultStore.listProviders().some((provider) => provider.customizable))
 
 if (defaultStore.getProvider('grok').apiFormat !== 'openai-responses')
     throw new Error('Grok should use the Responses API for native Web and X search');
+
+const deepSeekProvider = defaultStore.getProvider('deepseek');
+
+if (deepSeekProvider.apiFormat !== 'openai-responses'
+    || deepSeekProvider.baseUrl !== 'https://api.deepseek.com'
+    || deepSeekProvider.supportsImageAttachments !== false
+    || deepSeekProvider.supportsReasoningContentItems !== true) {
+    throw new Error('DeepSeek should use the text-only Responses API with reasoning history');
+}
 
 if (defaultStore.getWebSearchProviderId() !== 'duckduckgo'
     || defaultStore.createWebSearchFallbackConfig().apiKeyRequired) {
@@ -340,6 +411,19 @@ if (defaultStore.getWebSearchApiKeyStatus().source !== 'secret'
 await defaultStore.clearWebSearchApiKey();
 defaultStore.setWebSearchProviderId('duckduckgo');
 
+const grokProvider = defaultStore.getProvider('grok');
+
+if (grokProvider.defaultModelId !== 'grok-4.6'
+    || grokProvider.models.map((model) => model.id).join(',') !== 'grok-4.6,grok-4.5,grok-4.3') {
+    throw new Error('Grok 4.6 should lead the supported Grok model catalog');
+}
+
+if (defaultStore.getThinkingLevels('grok', 'grok-4.6').join(',') !== 'low,medium,high,xhigh')
+    throw new Error('Grok 4.6 should expose low/medium/high/xhigh reasoning levels');
+
+if (defaultStore.getDefaultThinkingLevel('grok', 'grok-4.6') !== 'high')
+    throw new Error('Grok 4.6 should default to high reasoning');
+
 if (defaultStore.getThinkingLevels('grok', 'grok-4.5').join(',') !== 'low,medium,high')
     throw new Error('Grok 4.5 should expose low/medium/high reasoning levels');
 
@@ -379,13 +463,13 @@ const zaiProvider = defaultStore.getProvider('zai');
 if (zaiProvider.baseUrl !== 'https://api.z.ai/api/paas/v4' || zaiProvider.chatPath !== '/chat/completions')
     throw new Error('Z.ai API endpoint was not configured');
 
-if (defaultStore.getDefaultModel('zai').id !== 'glm-5.2')
-    throw new Error('Z.ai default GLM model was not configured');
+if (defaultStore.getDefaultModel('zai').id !== 'glm-5.3')
+    throw new Error('Z.ai default GLM-5.3 model was not configured');
 
 const zaiModelIds = zaiProvider.models.map((model) => model.id);
 const zaiImageModelIds = zaiProvider.imageModels.map((model) => model.id);
 
-if (zaiModelIds.join(',') !== 'glm-5.2,glm-5-turbo')
+if (zaiModelIds.join(',') !== 'glm-5.3,glm-5.2,glm-5-turbo')
     throw new Error(`Z.ai model list was not limited to supported GLM models: ${zaiModelIds.join(', ')}`);
 
 if (zaiImageModelIds.join(',') !== 'glm-image')
@@ -396,6 +480,20 @@ if (defaultStore.getDefaultImageModel('zai').id !== 'glm-image')
 
 if (defaultStore.getImageGenerationSelection().provider.id !== 'openai')
     throw new Error('Default image generation provider should fall back to OpenAI');
+
+if (defaultStore.resolve('zai', 'glm5.3').model.id !== 'glm-5.3')
+    throw new Error('Z.ai GLM-5.3 alias should resolve to the canonical model id');
+
+const zaiGlm53 = defaultStore.resolve('zai', 'glm-5.3').model;
+
+if (zaiGlm53.contextWindowTokens !== 1000000 || zaiGlm53.maxOutputTokens !== 128000)
+    throw new Error('Z.ai GLM-5.3 token limits were not configured');
+
+if (defaultStore.getThinkingLevels('zai', 'glm-5.3').join(',') !== 'low,high,max'
+    || defaultStore.getDefaultThinkingLevel('zai', 'glm-5.3') !== 'max'
+    || defaultStore.getDefaultThinkingLevel('zai', 'glm-5.3', 'off') !== 'max') {
+    throw new Error('Z.ai GLM-5.3 should expose always-on thinking and default to Max effort');
+}
 
 if (defaultStore.getThinkingLevels('zai', 'glm-5.2').join(',') !== 'off,auto,high,max')
     throw new Error('Z.ai GLM-5.2 should expose thinking effort controls');
@@ -427,7 +525,7 @@ if (staleZaiStore.getProvider('zai').defaultModelId !== 'glm-5-turbo')
 if (staleZaiStore.getActiveSelection().model.id !== 'glm-5.2')
     throw new Error('Stale Z.ai active model id was not migrated');
 
-if (staleZaiModelIds.join(',') !== 'glm-5.2,glm-5-turbo')
+if (staleZaiModelIds.join(',') !== 'glm-5.3,glm-5.2,glm-5-turbo')
     throw new Error(`Unsupported Z.ai models were loaded from persisted settings: ${staleZaiModelIds.join(', ')}`);
 
 const staleZaiImageSettings = new MemorySettings({
@@ -449,10 +547,14 @@ if (staleZaiImageModelIds.join(',') !== 'glm-image')
 
 const geminiProvider = defaultStore.getProvider('gemini');
 const expectedGeminiModelIds = [
+    'gemini-3.7-flash',
     'gemini-3.6-flash',
     'gemini-3.5-flash-lite',
     'gemini-3.1-pro-preview',
 ];
+
+if (geminiProvider.defaultModelId !== 'gemini-3.7-flash')
+    throw new Error('Gemini 3.7 Flash should be the built-in Gemini default');
 
 if (geminiProvider.models.some((model) => model.id === 'gemini-3.1-pro'))
     throw new Error('Gemini model list still contains stale gemini-3.1-pro id');
@@ -477,6 +579,12 @@ defaultStore.setDefaultImageSelection('gemini', 'gemini-3-pro-image');
 if (defaultStore.getImageGenerationSelection().provider.id !== 'gemini'
     || defaultStore.getImageGenerationSelection().model.id !== 'gemini-3-pro-image') {
     throw new Error('Standalone image generation selection was not updated');
+}
+
+if (defaultStore.getThinkingLevels('gemini', 'gemini-3.7-flash').join(',') !== 'low,medium,high'
+    || defaultStore.getDefaultThinkingLevel('gemini', 'gemini-3.7-flash') !== 'medium'
+    || defaultStore.getDefaultThinkingLevel('gemini', 'gemini-3.7-flash', 'minimal') !== 'medium') {
+    throw new Error('Gemini 3.7 Flash should expose low/medium/high thinking and default to Medium');
 }
 
 if (!defaultStore.getThinkingLevels('gemini', 'gemini-3.6-flash').includes('minimal'))
@@ -514,6 +622,27 @@ if (staleGeminiStore.getActiveSelection().model.id !== 'gemini-3.1-pro-preview')
 if (staleGeminiStore.getProvider('gemini').models.some((model) => model.id.startsWith('gemini-2.')))
     throw new Error('Unsupported Gemini 2.x model was loaded from persisted settings');
 
+const retainedGemini36Settings = new MemorySettings({
+    strings: {
+        'active-provider': 'gemini',
+        'active-model': 'gemini-3.6-flash',
+        'provider-default-models': '{"gemini":"gemini-3.6-flash"}',
+    },
+    strv: {
+        'enabled-providers': ['gemini'],
+    },
+});
+const retainedGemini36Store = new ProviderConfigStore(undefined, {
+    settings: retainedGemini36Settings,
+    apiKeyStore: new MemoryApiKeyStore({ gemini: 'gemini-key' }),
+    envLookup: () => '',
+});
+
+if (retainedGemini36Store.getDefaultModel('gemini').id !== 'gemini-3.6-flash'
+    || retainedGemini36Store.getActiveSelection().model.id !== 'gemini-3.6-flash') {
+    throw new Error('Valid persisted Gemini 3.6 Flash selections should remain unchanged');
+}
+
 const retiredGeminiFlashSettings = new MemorySettings({
     strings: {
         'active-provider': 'gemini',
@@ -530,11 +659,11 @@ const retiredGeminiFlashStore = new ProviderConfigStore(undefined, {
     envLookup: () => '',
 });
 
-if (retiredGeminiFlashStore.getDefaultModel('gemini').id !== 'gemini-3.6-flash')
-    throw new Error('Retired Gemini 3.5 Flash default was not migrated to Gemini 3.6 Flash');
+if (retiredGeminiFlashStore.getDefaultModel('gemini').id !== 'gemini-3.7-flash')
+    throw new Error('Retired Gemini 3.5 Flash default was not migrated to Gemini 3.7 Flash');
 
-if (retiredGeminiFlashStore.getActiveSelection().model.id !== 'gemini-3.6-flash')
-    throw new Error('Retired Gemini 3.5 Flash selection was not migrated to Gemini 3.6 Flash');
+if (retiredGeminiFlashStore.getActiveSelection().model.id !== 'gemini-3.7-flash')
+    throw new Error('Retired Gemini 3.5 Flash selection was not migrated to Gemini 3.7 Flash');
 
 const staleGeminiImageSettings = new MemorySettings({
     strings: {
@@ -717,11 +846,16 @@ if (kimiDiscoveryStore.getThinkingLevels('kimi', 'kimi-k2.7-code').join(',') !==
 if (kimiDiscoveryStore.resolve('kimi', 'kimi-k3').model.contextWindowTokens !== 1000000)
     throw new Error('Kimi discovery did not retain built-in Kimi K3 metadata');
 
-if (defaultStore.getThinkingLevels('deepseek', 'deepseek-v4-pro').join(',') !== 'off,auto,high,max')
-    throw new Error('DeepSeek V4 Pro should expose thinking on/off modes');
+if (defaultStore.getThinkingLevels('deepseek', 'deepseek-v4-pro').join(',') !== 'low,high,max'
+    || defaultStore.getDefaultThinkingLevel('deepseek', 'deepseek-v4-pro') !== 'high'
+    || defaultStore.getDefaultThinkingLevel('deepseek', 'deepseek-v4-pro', 'off') !== 'high') {
+    throw new Error('DeepSeek V4 Pro should expose always-on Responses reasoning efforts');
+}
 
-if (defaultStore.getThinkingLevels('deepseek', 'deepseek-v4-flash').join(',') !== 'off,auto,high,max')
-    throw new Error('DeepSeek V4 Flash should expose thinking on/off modes');
+if (defaultStore.getThinkingLevels('deepseek', 'deepseek-v4-flash').join(',') !== 'low,high,max'
+    || defaultStore.getDefaultThinkingLevel('deepseek', 'deepseek-v4-flash') !== 'high') {
+    throw new Error('DeepSeek V4 Flash should expose Responses reasoning efforts');
+}
 
 const staleDeepSeekSettings = new MemorySettings({
     strings: {
@@ -743,7 +877,7 @@ const staleDeepSeekStore = new ProviderConfigStore(undefined, {
 if (staleDeepSeekStore.getProvider('deepseek').models.some((model) => model.id === 'deepseek-v3'))
     throw new Error('Unsupported DeepSeek model was loaded from persisted settings');
 
-if (staleDeepSeekStore.getThinkingLevels('deepseek', 'deepseek-v4-pro').join(',') !== 'off,auto,high,max')
+if (staleDeepSeekStore.getThinkingLevels('deepseek', 'deepseek-v4-pro').join(',') !== 'low,high,max')
     throw new Error('Persisted DeepSeek models should be enriched with thinking support');
 
 try {

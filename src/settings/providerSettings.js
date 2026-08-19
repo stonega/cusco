@@ -122,6 +122,23 @@ function getApiKeySubtitle(providerConfigs, provider) {
     return `Store a key in Secret Service or set ${provider.apiKeyEnvVar}.`;
 }
 
+function getAuthenticationSubtitle(providerConfigs, provider) {
+    if (provider.authMethodId === 'api-key')
+        return getApiKeySubtitle(providerConfigs, provider);
+
+    const method = providerConfigs.listAuthenticationMethods(provider.id)
+        .find((item) => item.id === provider.authMethodId);
+    const status = providerConfigs.getAuthenticationStatus(provider.id);
+
+    if (!status.available)
+        return status.unavailableReason || `${method?.name ?? 'This method'} is unavailable.`;
+    if (status.configured)
+        return ['Connected', status.accountLabel].filter(Boolean).join(' · ');
+    if (status.error)
+        return 'Secret Service is unavailable. The account connection could not be read.';
+    return `Connect ${method?.name ?? 'this account'} to use it for chat requests.`;
+}
+
 function getWebSearchApiKeySubtitle(providerConfigs) {
     const status = providerConfigs.getWebSearchApiKeyStatus();
 
@@ -140,7 +157,7 @@ function getWebSearchApiKeySubtitle(providerConfigs) {
 function canDiscoverModels(provider) {
     return Boolean(provider?.apiFormat)
         && provider.supportsModelDiscovery !== false
-        && (!provider.apiKeyRequired || provider.apiKeyConfigured)
+        && (!provider.authMethodId || provider.authConfigured)
         && (!provider.customizable || Boolean(provider.baseUrl));
 }
 
@@ -160,6 +177,64 @@ function createProviderEnabledSwitch() {
         tooltip_text: 'Show this provider in chat provider pickers.',
         valign: Gtk.Align.CENTER,
     });
+}
+
+function chooseAlert(dialog, parent, cancellable = null) {
+    return new Promise((resolve, reject) => {
+        dialog.choose(parent, cancellable, (_dialog, result) => {
+            try {
+                resolve(dialog.choose_finish(result));
+            } catch (error) {
+                reject(error);
+            }
+        });
+    });
+}
+
+async function confirmProviderAccountConnection(parent, provider, method) {
+    const riskNote = method.riskNote
+        ? `\n\n${method.riskTitle || 'Authentication risk'}: ${method.riskNote}`
+        : '';
+    const dialog = new Adw.AlertDialog({
+        heading: `Connect ${method.name}?`,
+        body: `Cusco will open ${provider.name}'s sign-in page and store the returned OAuth tokens in Secret Service. Subscription compatibility endpoints can change without notice; confirm that your plan and provider terms allow this use. Cusco never imports credentials from another app.${riskNote}`,
+    });
+    dialog.add_response('cancel', 'Cancel');
+    dialog.add_response('connect', 'Continue');
+    dialog.set_close_response('cancel');
+    dialog.set_default_response('connect');
+    dialog.set_response_appearance('connect', Adw.ResponseAppearance.SUGGESTED);
+    return await chooseAlert(dialog, parent) === 'connect';
+}
+
+async function requestProviderAuthorizationCode(parent, details) {
+    const entry = new Gtk.Entry({
+        placeholder_text: 'Authorization code',
+        activates_default: true,
+        hexpand: true,
+    });
+    const dialog = new Adw.AlertDialog({
+        heading: 'Paste Authorization Code',
+        body: details.instructions,
+    });
+    dialog.set_extra_child(entry);
+    dialog.add_response('cancel', 'Cancel');
+    dialog.add_response('continue', 'Continue');
+    dialog.set_close_response('cancel');
+    dialog.set_default_response('continue');
+    dialog.set_response_appearance('continue', Adw.ResponseAppearance.SUGGESTED);
+    dialog.set_response_enabled('continue', false);
+    entry.connect('changed', () => {
+        dialog.set_response_enabled('continue', Boolean(entry.get_text().trim()));
+    });
+
+    if (await chooseAlert(dialog, parent) !== 'continue') {
+        const error = new Error('Authorization was cancelled.');
+        error.cancelled = true;
+        throw error;
+    }
+
+    return entry.get_text().trim();
 }
 
 function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows, options = {}) {
@@ -385,6 +460,103 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows, 
         row._discoverButton = discoverButton;
     }
 
+    if ((provider.authMethods?.length ?? 0) > 1) {
+        const authMethodNames = createStringList(provider.authMethods.map((method) => method.name));
+        const authMethodRow = new Adw.ComboRow({
+            title: 'Authentication',
+            subtitle: 'Choose how Cusco authenticates chat requests for this provider.',
+            model: authMethodNames,
+        });
+        authMethodRow.connect('notify::selected', () => {
+            if (authMethodRow._syncing)
+                return;
+
+            const currentProvider = providerConfigs.getProvider(providerId);
+            const selectedMethod = currentProvider.authMethods[authMethodRow.get_selected()];
+            if (!selectedMethod)
+                return;
+
+            try {
+                providerConfigs.setAuthenticationMethod(providerId, selectedMethod.id);
+                syncAllRows();
+                onChanged();
+            } catch (error) {
+                syncAllRows();
+                logError(error, 'Failed to change provider authentication method');
+            }
+        });
+        row.add_row(authMethodRow);
+        row._authMethodRow = authMethodRow;
+        row._authMethodNames = authMethodNames;
+
+        const accountRow = new Adw.ActionRow({
+            title: 'Account connection',
+            subtitle: getAuthenticationSubtitle(providerConfigs, provider),
+        });
+        const accountButton = new Gtk.Button({
+            label: 'Connect',
+            valign: Gtk.Align.CENTER,
+        });
+        accountButton.add_css_class('flat');
+        accountButton.connect('clicked', async () => {
+            const currentProvider = providerConfigs.getProvider(providerId);
+            const method = providerConfigs.listAuthenticationMethods(providerId)
+                .find((item) => item.id === currentProvider.authMethodId);
+            const status = providerConfigs.getAuthenticationStatus(providerId);
+            if (!method || method.id === 'api-key')
+                return;
+
+            accountButton.set_sensitive(false);
+            try {
+                if (status.configured) {
+                    await providerConfigs.clearProviderAuthorization(providerId);
+                } else if (await confirmProviderAccountConnection(row.get_root() ?? row, currentProvider, method)) {
+                    await providerConfigs.authenticateProvider(providerId, {
+                        requestAuthorizationCode: (details) => requestProviderAuthorizationCode(
+                            row.get_root() ?? row,
+                            details,
+                        ),
+                    });
+                }
+                syncAllRows();
+                onChanged();
+            } catch (error) {
+                if (!error.cancelled) {
+                    showProviderMessage(
+                        row.get_root() ?? row,
+                        'Could Not Update Account Connection',
+                        error.userMessage ?? error.message,
+                    );
+                    logError(error, `Failed to update ${currentProvider.name} authorization`);
+                }
+            } finally {
+                accountButton.set_sensitive(true);
+                syncAllRows();
+            }
+        });
+        accountRow.add_suffix(accountButton);
+        row.add_row(accountRow);
+        row._accountRow = accountRow;
+        row._accountButton = accountButton;
+
+        const riskMethod = provider.authMethods.find((method) => method.riskNote);
+        if (riskMethod) {
+            const riskRow = new Adw.ActionRow({
+                title: riskMethod.riskTitle || 'Authentication risk',
+                subtitle: riskMethod.riskNote,
+                visible: provider.authMethodId === riskMethod.id,
+            });
+            const riskIcon = new Gtk.Image({
+                icon_name: 'dialog-warning-symbolic',
+                valign: Gtk.Align.CENTER,
+            });
+            riskIcon.add_css_class('warning');
+            riskRow.add_prefix(riskIcon);
+            row.add_row(riskRow);
+            row._authRiskRow = riskRow;
+        }
+    }
+
     if (provider.apiKeyRequired) {
         const apiKeyRow = new Adw.PasswordEntryRow({
             title: `API key (${provider.apiKeyEnvVar})`,
@@ -522,8 +694,41 @@ function createProviderRow(providerConfigs, providerId, onChanged, syncAllRows, 
             row._modelRow._syncing = false;
         }
 
+        if (row._authMethodRow) {
+            const authMethods = providerConfigs.listAuthenticationMethods(providerId);
+            row._authMethodRow._syncing = true;
+            syncComboRowStringList(
+                row._authMethodRow,
+                row._authMethodNames,
+                authMethods.map((method) => method.name),
+            );
+            row._authMethodRow.set_selected(selectedIndexOrNone(
+                authMethods.findIndex((method) => method.id === currentProvider.authMethodId),
+                authMethods.length,
+            ));
+            row._authMethodRow._syncing = false;
+        }
+
+        const usesApiKey = currentProvider.authMethodId === 'api-key';
+        row._apiKeyRow?.set_visible(usesApiKey);
+        row._apiKeyStatusRow?.set_visible(usesApiKey);
         row._apiKeyStatusRow?.set_subtitle(getApiKeySubtitle(providerConfigs, currentProvider));
         row._clearKeyButton?.set_sensitive(providerConfigs.getApiKeyStatus(providerId).source === 'secret');
+        if (row._accountRow) {
+            const status = providerConfigs.getAuthenticationStatus(providerId);
+            row._accountRow.set_visible(!usesApiKey);
+            row._accountRow.set_subtitle(getAuthenticationSubtitle(providerConfigs, currentProvider));
+            row._accountButton.set_label(status.configured ? 'Disconnect' : 'Connect');
+            row._accountButton.set_sensitive(status.available !== false);
+        }
+        if (row._authRiskRow) {
+            const method = currentProvider.authMethods.find((item) => (
+                item.id === currentProvider.authMethodId
+            ));
+            row._authRiskRow.set_visible(Boolean(method?.riskNote));
+            row._authRiskRow.set_title(method?.riskTitle || 'Authentication risk');
+            row._authRiskRow.set_subtitle(method?.riskNote || '');
+        }
         row._discoveryRow?.set_subtitle(row._discoveryStatus || 'Refresh the model list from this provider.');
         row._discoverButton?.set_sensitive(canDiscoverModels(currentProvider));
     };

@@ -150,11 +150,12 @@ assertEqual(
     'Oversized SSE event error',
 );
 
-async function collectStreamChunks(provider) {
+async function collectStreamChunks(provider, options = {}) {
     const chunks = [];
 
     for await (const chunk of provider.streamChat([createMessage('user', 'Stream this')], {
         timeoutSeconds: 5,
+        ...options,
     }))
         chunks.push(chunk);
 
@@ -190,6 +191,8 @@ const server = new Soup.Server();
 let sawNativeTools = false;
 let sawStreamingRequest = false;
 let sawStreamingUsageRequest = false;
+let sawDeepSeekResponsesRequest = false;
+let sawAuthorizedRequest = false;
 let interruptedStreamRequestCount = 0;
 let interruptedBeforeOutputRequestCount = 0;
 let strictStreamingRequestAccepted = false;
@@ -224,6 +227,15 @@ server.add_handler('/v1/chat/completions', (_server, message) => {
                 },
             },
         ],
+    });
+});
+
+server.add_handler('/v1/chat/authorized', (_server, message) => {
+    const request = requestJson(message);
+    sawAuthorizedRequest = message.get_request_headers().get_one('X-Cusco-Auth') === 'oauth-fixture'
+        && request.auth_profile === true;
+    setJsonResponse(message, {
+        choices: [{ message: { content: 'Authorized provider response' } }],
     });
 });
 
@@ -389,6 +401,27 @@ server.add_handler('/v1/responses', (_server, message) => {
     ]);
 });
 
+server.add_handler('/deepseek/responses', (_server, message) => {
+    const request = requestJson(message);
+    const hasWebSearch = request.tools?.some((tool) => tool?.type === 'web_search');
+    const hasCalc = request.tools?.some((tool) => tool?.type === 'function' && tool?.name === 'calc');
+
+    sawDeepSeekResponsesRequest = request.stream === true
+        && request.model === 'deepseek-v4-pro'
+        && request.reasoning?.effort === 'high'
+        && !Object.hasOwn(request.reasoning ?? {}, 'summary')
+        && hasWebSearch
+        && hasCalc;
+
+    setEventStreamResponse(message, [
+        'event: response.created\ndata: {"type":"response.created","sequence_number":0,"response":{"id":"deepseek-resp-test","output":[]}}\n\n',
+        'event: response.reasoning_text.delta\ndata: {"type":"response.reasoning_text.delta","sequence_number":1,"delta":"DeepSeek thought"}\n\n',
+        'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","sequence_number":2,"delta":"DeepSeek "}\n\n',
+        'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","sequence_number":3,"delta":"stream"}\n\n',
+        'event: response.completed\ndata: {"type":"response.completed","sequence_number":4,"response":{"id":"deepseek-resp-test","status":"completed","output":[{"type":"reasoning","content":[{"type":"reasoning_text","text":"DeepSeek thought"}],"summary":[]},{"type":"message","content":[{"type":"output_text","text":"DeepSeek stream"}]}],"usage":{"input_tokens":7,"input_tokens_details":{"cached_tokens":2},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":3},"total_tokens":12}}}\n\n',
+    ]);
+});
+
 server.add_handler('/v1/messages', (_server, message) => {
     const request = requestJson(message);
 
@@ -467,7 +500,8 @@ try {
 
 if (listening) {
     try {
-        const baseUrl = `${server.get_uris()[0].to_string().replace(/\/$/, '')}/v1`;
+        const serverBaseUrl = server.get_uris()[0].to_string().replace(/\/$/, '');
+        const baseUrl = `${serverBaseUrl}/v1`;
         const config = {
             id: 'local-openai-compatible',
             name: 'Local OpenAI Compatible',
@@ -497,6 +531,20 @@ if (listening) {
 
         assertEqual(text, 'Local provider response', 'Streamed provider text');
         assertEqual(sawNativeTools, true, 'Native tool definitions were sent');
+
+        const authorizedProvider = new OpenAiCompatibleChatProvider({
+            ...config,
+            apiKey: '',
+            authorizeRequest: async (request) => ({
+                ...request,
+                url: `${baseUrl}/chat/authorized`,
+                headers: { ...request.headers, 'X-Cusco-Auth': 'oauth-fixture' },
+                body: { ...request.body, auth_profile: true },
+            }),
+        });
+        const authorizedText = await collectTextChunks(authorizedProvider);
+        assertEqual(authorizedText.join(''), 'Authorized provider response', 'Authorized provider text');
+        assertEqual(sawAuthorizedRequest, true, 'Provider request authorizer was applied before transport');
 
         const streamingProvider = new OpenAiCompatibleChatProvider({
             ...config,
@@ -655,6 +703,60 @@ if (listening) {
             openAiEvents.find((chunk) => chunk?.type === 'usage')?.usage?.totalTokens,
             5,
             'OpenAI Responses stream usage',
+        );
+
+        const deepSeekResponsesProvider = new OpenAiResponsesProvider({
+            ...config,
+            id: 'deepseek',
+            name: 'DeepSeek Responses Provider',
+            baseUrl: `${serverBaseUrl}/deepseek`,
+            defaultModelId: 'deepseek-v4-pro',
+            supportsImageAttachments: false,
+            supportsReasoningContentItems: true,
+            nativeSearch: {
+                api: 'openai-responses',
+                tools: ['web_search'],
+            },
+        });
+        const deepSeekEvents = await collectStreamChunks(deepSeekResponsesProvider, {
+            model: {
+                id: 'deepseek-v4-pro',
+                thinking: {
+                    api: 'openai-responses',
+                    levels: ['low', 'high', 'max'],
+                    defaultLevel: 'high',
+                    alwaysOn: true,
+                },
+            },
+            thinkingLevel: 'high',
+            tools: [
+                {
+                    name: 'search',
+                    label: 'Web Search',
+                    description: 'Search the web.',
+                    inputDescription: 'Search query.',
+                },
+                {
+                    name: 'calc',
+                    label: 'Calculator',
+                    description: 'Evaluate a math expression.',
+                    inputDescription: 'Expression.',
+                },
+            ],
+        });
+        const deepSeekChunks = textChunks(deepSeekEvents);
+
+        assertEqual(sawDeepSeekResponsesRequest, true, 'DeepSeek Responses request shape');
+        assertEqual(deepSeekChunks.join(''), 'DeepSeek stream', 'DeepSeek Responses streamed text');
+        assertEqual(
+            deepSeekEvents.find((chunk) => chunk?.type === 'reasoning')?.text,
+            'DeepSeek thought',
+            'DeepSeek Responses streamed reasoning',
+        );
+        assertEqual(
+            deepSeekEvents.find((chunk) => chunk?.type === 'usage')?.usage?.reasoningTokens,
+            3,
+            'DeepSeek Responses reasoning usage',
         );
 
         const anthropicProvider = new AnthropicMessagesProvider({

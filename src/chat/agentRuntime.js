@@ -293,7 +293,10 @@ export class AgentRuntime {
                         responseText,
                         runtimeNativeToolCalls,
                         failureResults,
-                        { providerParts: responseState.providerParts },
+                        {
+                            providerParts: responseState.providerParts,
+                            reasoning: responseState.reasoning,
+                        },
                     ));
                     integrityRecoveryUsed = true;
                     pendingIntegrityRecovery = true;
@@ -332,7 +335,10 @@ export class AgentRuntime {
                     responseText,
                     runtimeNativeToolCalls,
                     nativeRuntimeMessages,
-                    { providerParts: responseState.providerParts },
+                    {
+                        providerParts: responseState.providerParts,
+                        reasoning: responseState.reasoning,
+                    },
                 ));
 
                 if (ranAnyTool)

@@ -3,6 +3,7 @@ import Gio from 'gi://Gio?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
 
 import { CuscoWindow } from '../src/window.js';
+import { AssistantStreamRunner } from '../src/chat/assistantStreamRunner.js';
 
 const windowPrototype = CuscoWindow.prototype;
 
@@ -52,9 +53,14 @@ function createSyncHarness({ status, ensured, logsAppended = false, activeConver
     return { harness, calls };
 }
 
-function createSendHarness({ sessionHookGate = null, promptAllowed = true } = {}) {
+function createSendHarness({
+    sessionHookGate = null,
+    promptAllowed = true,
+    presentationFinished = null,
+} = {}) {
     const calls = [];
     const appendedMessages = [];
+    const finishOptions = [];
     const conversation = {
         id: 'send-chat',
         providerId: 'test-provider',
@@ -124,18 +130,20 @@ function createSendHarness({ sessionHookGate = null, promptAllowed = true } = {}
             return null;
         },
         _drainPendingUserMessages() {},
-        async _streamAssistantResponse() {
+        async _streamAssistantResponse(_conversationId, options = {}) {
             calls.push('provider-request');
-            return {};
+            options.onPresentationSettling?.(presentationFinished);
+            return { presentationFinished };
         },
-        _finishActiveTurn() {
+        _finishActiveTurn(_cancellable, options = {}) {
             calls.push('finish-turn');
+            finishOptions.push(options);
         },
         _sendQueuedUserMessages: () => Promise.resolve(false),
         _handleQueuedUserMessageError() {},
     };
 
-    return { harness, calls, appendedMessages };
+    return { harness, calls, appendedMessages, finishOptions };
 }
 
 function waitForLowPriorityMainLoopTurn() {
@@ -296,6 +304,69 @@ if (deferredFinishHarness._activeTurnsByConversation.size !== 0
     throw new Error('Visual tail pacing blocked turn cleanup or triggered an early transcript rebuild');
 }
 
+let borrowedTurnBusy = true;
+let settledPresentation = null;
+let settledPresentationRenders = 0;
+const settledConversation = { id: 'settled-presentation', agentModeEnabled: false };
+const settledAssistantView = {
+    set_loading() {},
+    set_stream_text() {},
+    set_artifacts() {},
+    persist() {},
+    finish_stream: () => Promise.resolve(),
+    finish_working() {},
+};
+const settledRunner = new AssistantStreamRunner({
+    appSettings: {},
+    conversations: { getConversation: () => settledConversation },
+    hooks: { dispatch: async () => ({ shouldContinue: false }) },
+    mcp: {},
+    tools: {},
+    appendHookNotice() {},
+    applyHookResult() {},
+    beginActiveTurn() {},
+    buildProviderMessages: () => [],
+    collectProviderResponseWithFallback: async () => 'Settled response',
+    createStreamingAssistantView: () => settledAssistantView,
+    ensureTurnSessionHooks: async () => true,
+    finishActiveTurn() {},
+    handleQueuedUserMessageError() {},
+    injectMemoryContext() {},
+    injectSkillContext: () => [],
+    isActiveConversationId: () => true,
+    isConversationBusy: () => borrowedTurnBusy,
+    materializeAssistantArtifacts: () => [],
+    maybeAutoCompactConversation: async () => null,
+    refreshConversationList() {},
+    renderActiveConversation() {
+        settledPresentationRenders += 1;
+    },
+    runAgentModeResponse() {},
+    scheduleUsageDisplayUpdate() {},
+    scrollToBottom() {},
+    sendQueuedUserMessages: async () => false,
+    setFollowLatestMessage() {},
+    startLongResponseNotification() {},
+    stopLongResponseNotification() {},
+    turnHookContext: () => ({}),
+    updateUsageDisplay() {},
+});
+const settledResult = await settledRunner._streamAssistantResponse(settledConversation.id, {
+    cancellable: new Gio.Cancellable(),
+    onPresentationSettling: (promise) => {
+        settledPresentation = promise;
+    },
+});
+
+borrowedTurnBusy = false;
+await waitForLowPriorityMainLoopTurn();
+
+if (!settledPresentation
+    || settledResult.presentationFinished !== settledPresentation
+    || settledPresentationRenders !== 1) {
+    throw new Error('A settled presentation raced borrowed-turn cleanup or skipped its final rebuild');
+}
+
 let resolveSessionHook;
 const sessionHookGate = new Promise((resolve) => {
     resolveSessionHook = resolve;
@@ -329,6 +400,14 @@ if (provisionalIndex < 0
     || replacementIndex <= persistIndex
     || immediateSend.appendedMessages.length !== 1) {
     throw new Error('An approved prompt was not promoted from provisional to durable UI state');
+}
+
+const presentationTail = new Promise(() => {});
+const pacedSend = createSendHarness({ presentationFinished: presentationTail });
+await windowPrototype._sendMessage.call(pacedSend.harness, 'Keep revealing this response');
+
+if (pacedSend.finishOptions.at(-1)?.deferActiveConversationRender !== true) {
+    throw new Error('A live presentation tail did not defer the transcript rebuild');
 }
 
 const blockedSend = createSendHarness({ promptAllowed: false });

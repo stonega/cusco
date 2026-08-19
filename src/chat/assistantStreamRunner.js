@@ -118,6 +118,7 @@ export class AssistantStreamRunner {
         let assistantViewState = null;
         let shouldSendQueued = false;
         let stoppedBeforeAssistantText = false;
+        let presentationFinished = null;
         const responseStartedAt = GLib.get_monotonic_time();
         this._startLongResponseNotification(cancellable);
 
@@ -331,11 +332,12 @@ export class AssistantStreamRunner {
             const presentationPromise = finalAssistantView?.finish_stream?.({
                 flush: isCancellableCancelled(cancellable),
             });
-            const presentationFinished = presentationPromise
+            presentationFinished = presentationPromise
                 ? Promise.resolve(presentationPromise).catch((error) => {
                     logError(error, 'Failed to finish streaming message presentation');
                 })
                 : null;
+            options.onPresentationSettling?.(presentationFinished);
             finalAssistantView?.finish_working?.();
             this._stopLongResponseNotification(cancellable);
             if (this._isActiveConversationId(conversation.id))
@@ -348,11 +350,20 @@ export class AssistantStreamRunner {
             }
 
             presentationFinished?.then(() => {
-                if (this._isActiveConversationId(conversation.id)
-                    && !this._isConversationBusy(conversation.id)) {
-                    this._renderActiveConversation({ forceRebuild: true });
-                    this._setFollowLatestMessage(false);
-                }
+                // A borrowed turn is released by TurnSubmission after this
+                // async method returns. Rebuild on the next main-loop turn so
+                // even an already-settled presentation cannot race that
+                // cleanup and replace a still-revealing message with its
+                // canonical transcript row.
+                GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                    if (this._isActiveConversationId(conversation.id)
+                        && !this._isConversationBusy(conversation.id)) {
+                        this._renderActiveConversation({ forceRebuild: true });
+                        this._setFollowLatestMessage(false);
+                    }
+
+                    return GLib.SOURCE_REMOVE;
+                });
             });
         }
 
@@ -362,7 +373,7 @@ export class AssistantStreamRunner {
             });
         }
 
-        return { stoppedBeforeAssistantText };
+        return { stoppedBeforeAssistantText, presentationFinished };
     }
 
 }

@@ -3,6 +3,10 @@
 This page mirrors Cusco's built-in provider registry in `src/providers/config.js`
 and the thinking-level registry in `src/providers/thinking.js`.
 
+Provider credentials can use an API key or a supported account connection.
+See [Provider authentication](provider-authentication.md) for setup, token
+storage, subscription compatibility, and image-generation behavior.
+
 Thinking levels are shown only when the selected provider and model support
 them. If a chat's saved level is not supported by a newly selected model, Cusco
 falls back to the model's configured default when available, then to `Auto`,
@@ -32,16 +36,19 @@ support keep the chat picker disabled.
 | Anthropic | `claude-sonnet-5` | `claude-fable-5` | `Low`, `Medium`, `High`, `X-High`, `Max` |
 | Anthropic | `claude-sonnet-5` | `claude-opus-5`, `claude-sonnet-5` | `Off`, `Low`, `Medium`, `High`, `X-High`, `Max` |
 | Anthropic | `claude-sonnet-5` | `claude-haiku-4-5` | `Off`, `Auto`, `Low`, `Medium`, `High` |
-| Google Gemini | `gemini-3.6-flash` | `gemini-3.6-flash`, `gemini-3.5-flash-lite` | `Minimal`, `Auto`, `Low`, `Medium`, `High` |
-| Google Gemini | `gemini-3.6-flash` | `gemini-3.1-pro-preview` | `Auto`, `Low`, `Medium`, `High` |
+| Google Gemini | `gemini-3.7-flash` | `gemini-3.7-flash` | `Low`, `Medium`, `High` |
+| Google Gemini | `gemini-3.7-flash` | `gemini-3.6-flash`, `gemini-3.5-flash-lite` | `Minimal`, `Auto`, `Low`, `Medium`, `High` |
+| Google Gemini | `gemini-3.7-flash` | `gemini-3.1-pro-preview` | `Auto`, `Low`, `Medium`, `High` |
 | Kimi | `kimi-k3` | `kimi-k3` | `Max` |
 | Kimi | `kimi-k3` | `kimi-k2.7-code` | `Auto` |
 | Kimi | `kimi-k3` | `kimi-k2.6` | `Off`, `Auto` |
-| DeepSeek | `deepseek-v4-pro` | `deepseek-v4-pro`, `deepseek-v4-flash` | `Off`, `Auto`, `High`, `Max` |
-| Grok | `grok-4.5` | `grok-4.5` | `Low`, `Medium`, `High` |
-| Grok | `grok-4.5` | `grok-4.3` | `Off`, `Low`, `Medium`, `High` |
-| Z.ai | `glm-5.2` | `glm-5.2` | `Off`, `Auto`, `High`, `Max` |
-| Z.ai | `glm-5.2` | `glm-5-turbo` | `Off`, `Auto` |
+| DeepSeek | `deepseek-v4-pro` | `deepseek-v4-pro`, `deepseek-v4-flash` | `Low`, `High`, `Max` |
+| Grok | `grok-4.6` | `grok-4.6` | `Low`, `Medium`, `High`, `XHigh` |
+| Grok | `grok-4.6` | `grok-4.5` | `Low`, `Medium`, `High` |
+| Grok | `grok-4.6` | `grok-4.3` | `Off`, `Low`, `Medium`, `High` |
+| Z.ai | `glm-5.3` | `glm-5.3` | `Low`, `High`, `Max` |
+| Z.ai | `glm-5.3` | `glm-5.2` | `Off`, `Auto`, `High`, `Max` |
+| Z.ai | `glm-5.3` | `glm-5-turbo` | `Off`, `Auto` |
 | Custom APIs | First discovered model | Discovered or user configured | None |
 
 Built-in chat model lists are maintained by Cusco and are not discovered from
@@ -70,6 +77,7 @@ from the built-in model metadata.
 | Anthropic | `claude-opus-5` | 1M tokens |
 | Anthropic | `claude-sonnet-5` | 1M tokens |
 | Anthropic | `claude-haiku-4-5` | 200K tokens |
+| Google Gemini | `gemini-3.7-flash` | 1,048,576 tokens |
 | Google Gemini | `gemini-3.6-flash` | 1,048,576 tokens |
 | Google Gemini | `gemini-3.5-flash-lite` | 1,048,576 tokens |
 | Google Gemini | `gemini-3.1-pro-preview` | 1,048,576 tokens |
@@ -78,8 +86,10 @@ from the built-in model metadata.
 | Kimi | `kimi-k2.6` | 256K tokens |
 | DeepSeek | `deepseek-v4-pro` | 1M tokens |
 | DeepSeek | `deepseek-v4-flash` | 1M tokens |
+| Grok | `grok-4.6` | 500K tokens |
 | Grok | `grok-4.5` | 1M tokens |
 | Grok | `grok-4.3` | 1M tokens |
+| Z.ai | `glm-5.3` | 1M tokens |
 | Z.ai | `glm-5.2` | 1M tokens |
 | Z.ai | `glm-5-turbo` | 200K tokens |
 | Custom APIs | Discovered or user configured | Unknown |
@@ -107,12 +117,15 @@ models that use its OpenAI-compatible image generation endpoint.
   `gpt-5.6` alias is normalized to `gpt-5.6-sol`; Terra balances intelligence
   and cost, and Luna is optimized for cost-sensitive workloads. Only the GPT-5.6
   family exposes `X-High` and `Max` reasoning in Cusco.
-- Gemini is intentionally limited to `gemini-3.6-flash`,
+- Gemini is intentionally limited to `gemini-3.7-flash`, `gemini-3.6-flash`,
   `gemini-3.5-flash-lite`, and `gemini-3.1-pro-preview`. Persisted Gemini 2.x
   models are
   ignored. The retired `gemini-3.5-flash` ID is migrated to
-  `gemini-3.6-flash`, and the stale `gemini-3.1-pro` ID is migrated to
-  `gemini-3.1-pro-preview`. Gemini image generation excludes
+  `gemini-3.7-flash`, and the stale `gemini-3.1-pro` ID is migrated to
+  `gemini-3.1-pro-preview`. Gemini 3.7 Flash is GA, supports Low, Medium, and
+  High thinking, defaults to Medium, and does not support Minimal. It accepts
+  text, image, video, audio, and PDF input, produces text, and has a 65,536-token
+  output limit. Gemini image generation excludes
   `gemini-2.5-flash-image`; only the Gemini 3 image models listed above are
   supported. In Agent mode, all built-in Gemini chat models can use Google
   Search and URL Context. Cusco shows provider tool activity and cited sources
@@ -135,16 +148,21 @@ models that use its OpenAI-compatible image generation endpoint.
   only Kimi K2.6 exposes `Off`.
 - DeepSeek is intentionally limited to `deepseek-v4-pro` and
   `deepseek-v4-flash`. Older persisted models such as `deepseek-v3` are
-  ignored. `Auto` enables DeepSeek thinking without an explicit effort;
-  `High` and `Max` send the matching `reasoning_effort`.
-- Grok uses xAI's OpenAI-compatible API and is intentionally limited to
-  `grok-4.5` and `grok-4.3`. Grok image generation uses xAI's
+  ignored. Both models use DeepSeek's Responses API with always-on reasoning,
+  support `Low`, `High`, and `Max`, and default to `High`. DeepSeek chat input
+  remains text-only. In Agent mode, the provider can use native Web Search;
+  Cusco preserves reasoning and function-call history between its stateless
+  Responses requests.
+- Grok uses xAI's OpenAI-compatible Responses API and is intentionally limited
+  to `grok-4.6`, `grok-4.5`, and `grok-4.3`. Grok image generation uses xAI's
   OpenAI-compatible image endpoint with `grok-imagine-image-quality` and
-  `grok-imagine-image`. `grok-4.5` exposes `Low`, `Medium`, and `High`
-  reasoning and defaults to `High`; `grok-4.3` also supports `Off`.
-- Z.ai is intentionally limited to `glm-5.2` and `glm-5-turbo`. `glm-5.2`
-  supports explicit `High` and `Max`
-  reasoning effort; `glm-5-turbo` supports only thinking on/off. Z.ai image
+  `grok-imagine-image`. `grok-4.6` exposes `Low`, `Medium`, `High`, and `XHigh`
+  reasoning and defaults to `High`; `grok-4.5` supports up to `High`, and
+  `grok-4.3` also supports `Off`.
+- Z.ai is intentionally limited to `glm-5.3`, `glm-5.2`, and `glm-5-turbo`.
+  `glm-5.3` uses always-on thinking, supports `Low`, `High`, and `Max`, and
+  defaults to `Max`; `glm-5.2` supports explicit `High` and `Max` reasoning
+  effort; `glm-5-turbo` supports only thinking on/off. Z.ai image
   generation supports only `glm-image`; `cogview-4-250304` is intentionally
   excluded.
 - Each entry in the Custom APIs list uses the generic OpenAI-compatible chat
@@ -163,16 +181,19 @@ models that use its OpenAI-compatible image generation endpoint.
 | Anthropic | `claude-opus-5` | For complex agentic coding and enterprise work. Context 1M. | `Off`, `Low`, `Medium`, `High`, `X-High`, `Max` |
 | Anthropic | `claude-sonnet-5` | The best combination of speed and intelligence. Context 1M. | `Off`, `Low`, `Medium`, `High`, `X-High`, `Max` |
 | Anthropic | `claude-haiku-4-5` | Fastest Claude model with near-frontier intelligence. Context 200K. | `Off`, `Auto`, `Low`, `Medium`, `High` |
+| Google Gemini | `gemini-3.7-flash` | Google's most capable Flash model for complex coding and agentic workflows. | `Low`, `Medium`, `High` |
 | Google Gemini | `gemini-3.6-flash` | Stable Gemini model balancing speed and intelligence for agentic and multimodal tasks. | `Minimal`, `Auto`, `Low`, `Medium`, `High` |
 | Google Gemini | `gemini-3.5-flash-lite` | Low-latency, cost-effective multimodal model for high-throughput agentic workflows and document parsing. | `Minimal`, `Auto`, `Low`, `Medium`, `High` |
 | Google Gemini | `gemini-3.1-pro-preview` | Advanced intelligence and agentic coding model. | `Auto`, `Low`, `Medium`, `High` |
 | Kimi | `kimi-k3` | Kimi flagship model for long-horizon coding, knowledge work, reasoning, and visual understanding. Context 1M. | `Max` |
 | Kimi | `kimi-k2.7-code` | Kimi coding model with stronger long-context instruction following and higher coding task success. Context 256k. | `Auto` |
 | Kimi | `kimi-k2.6` | Kimi intelligent multimodal model for agent, code, visual understanding, and general tasks with thinking and non-thinking modes. Context 256k. | `Off`, `Auto` |
-| DeepSeek | `deepseek-v4-pro` | DeepSeek reasoning-capable model. | `Off`, `Auto`, `High`, `Max` |
-| DeepSeek | `deepseek-v4-flash` | DeepSeek lower-latency model. | `Off`, `Auto`, `High`, `Max` |
+| DeepSeek | `deepseek-v4-pro` | DeepSeek reasoning-capable model. | `Low`, `High`, `Max` |
+| DeepSeek | `deepseek-v4-flash` | DeepSeek lower-latency model. | `Low`, `High`, `Max` |
+| Grok | `grok-4.6` | xAI frontier model for coding, agentic tasks, and knowledge work. | `Low`, `Medium`, `High`, `XHigh` |
 | Grok | `grok-4.5` | xAI Grok model for frontier chat, coding, and agentic work. | `Low`, `Medium`, `High` |
 | Grok | `grok-4.3` | xAI Grok text and vision model with a 1M token context window. | `Off`, `Low`, `Medium`, `High` |
+| Z.ai | `glm-5.3` | Z.ai flagship model for complex coding and long-horizon agent tasks. | `Low`, `High`, `Max` |
 | Z.ai | `glm-5.2` | Z.ai flagship model for coding and agent applications. | `Off`, `Auto`, `High`, `Max` |
 | Z.ai | `glm-5-turbo` | Z.ai faster GLM-5 series model optimized for agent workflows. | `Off`, `Auto` |
 
@@ -183,6 +204,8 @@ models that use its OpenAI-compatible image generation endpoint.
 - Claude effort levels: https://platform.claude.com/docs/en/build-with-claude/effort
 - Claude extended thinking: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
 - Kimi K3 quickstart: https://platform.kimi.ai/docs/guide/kimi-k3-quickstart
+- Gemini 3.7 Flash model: https://ai.google.dev/gemini-api/docs/models/gemini-3.7-flash
+- Gemini 3.7 Flash announcement: https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-3-7-flash/
 - Gemini 3.6 Flash model: https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash
 - Gemini 3.5 Flash-Lite model: https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite
 - Gemini latest model guide: https://ai.google.dev/gemini-api/docs/latest-model
@@ -193,10 +216,15 @@ models that use its OpenAI-compatible image generation endpoint.
 - OpenAI model catalog: https://developers.openai.com/api/docs/models
 - OpenAI GPT-5.6 model guidance: https://developers.openai.com/api/docs/guides/latest-model
 - OpenAI image generation guide: https://developers.openai.com/api/docs/guides/images-vision
+- DeepSeek Responses API guide: https://api-docs.deepseek.com/guides/responses_api
+- DeepSeek Responses API reference: https://api-docs.deepseek.com/api/create-response
 - xAI chat completions API: https://docs.x.ai/developers/rest-api-reference/inference/chat
+- xAI Grok 4.6 developer guide: https://docs.x.ai/developers/grok-4-6
+- xAI Grok 4.6 announcement: https://x.ai/news/grok-4-6
 - xAI image generation API: https://docs.x.ai/developers/rest-api-reference/inference/images
 - xAI model listing API: https://docs.x.ai/developers/rest-api-reference/inference/models
 - Z.ai GLM-Image guide: https://docs.z.ai/guides/image/glm-image
 - Z.ai image generation API: https://docs.z.ai/api-reference/image/generate-image
 - Z.ai GLM-5-Turbo guide: https://docs.z.ai/guides/llm/glm-5-turbo
+- Z.ai GLM-5.3 announcement and API changes: https://z.ai/blog/glm-5.3
 - Z.ai thinking parameter overview: https://docs.z.ai/guides/overview/concept-param

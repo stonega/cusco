@@ -181,6 +181,26 @@ if (Gtk.init_check()) {
     if (!builtInGroup || !customGroup)
         throw new Error('Built-in and custom providers were not shown as separate lists');
 
+    const openAiAuthRow = findExpanderRowByTitle(builtInGroup, 'OpenAI');
+    if (!openAiAuthRow?._authMethodRow
+        || openAiAuthRow._authMethodNames.get_n_items() !== 2
+        || openAiAuthRow._authMethodNames.get_string(0) !== 'API key'
+        || openAiAuthRow._authMethodNames.get_string(1) !== 'ChatGPT subscription') {
+        throw new Error('OpenAI authentication methods were not rendered in Settings');
+    }
+
+    const anthropicAuthRow = findExpanderRowByTitle(builtInGroup, 'Anthropic');
+    if (!anthropicAuthRow?._authRiskRow
+        || anthropicAuthRow._authRiskRow.get_title() !== 'Claude Code OAuth risk'
+        || !anthropicAuthRow._authRiskRow.get_subtitle().includes('extra usage')
+        || anthropicAuthRow._authRiskRow.get_visible()) {
+        throw new Error('Claude Code OAuth risk disclosure was not rendered in Settings');
+    }
+
+    anthropicAuthRow._authMethodRow.set_selected(1);
+    if (!anthropicAuthRow._authRiskRow.get_visible())
+        throw new Error('Claude Code OAuth risk disclosure was not shown when selected');
+
     if (!findActionRowByTitle(customGroup, 'Add Custom API'))
         throw new Error('Custom provider list did not include an add action');
 

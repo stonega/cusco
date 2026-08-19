@@ -440,6 +440,7 @@ const parallelRuntimeBatch = createNativeToolRuntimeBatch(
         }),
     ],
     {
+        reasoning: 'Inspect both targets before acting.',
         providerParts: [{
             toolCall: { id: 'server-search-1', toolType: 'GOOGLE_SEARCH_WEB' },
             thoughtSignature: 'server-search-signature',
@@ -452,6 +453,7 @@ if (parallelRuntimeBatch.length !== 3
     || parallelRuntimeBatch[0].toolCalls.length !== 2
     || parallelRuntimeBatch[0].providerParts[0].toolCall.id !== 'server-search-1'
     || parallelRuntimeBatch[0].providerParts[0].thoughtSignature !== 'server-search-signature'
+    || parallelRuntimeBatch[0].reasoning !== 'Inspect both targets before acting.'
     || parallelRuntimeBatch[0].toolCalls[0].thoughtSignature !== 'gemini-parallel-signature'
     || parallelRuntimeBatch[0].toolCalls[1].thoughtSignature !== undefined
     || parallelRuntimeBatch[1].role !== 'tool'

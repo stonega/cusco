@@ -22,6 +22,10 @@ import {
 } from './thinking.js';
 import { normalizeMaxOutputTokens } from './outputLimits.js';
 import { createDefaultApiKeyStore } from '../secrets/apiKeyStore.js';
+import {
+    createDefaultProviderAuthManager,
+    listProviderAuthMethods,
+} from './auth.js';
 
 const SETTINGS_SCHEMA_ID = 'io.github.stonega.Cusco';
 const LEGACY_CUSTOM_PROVIDER_ID = 'openai-compatible';
@@ -40,6 +44,7 @@ const REQUIRED_SETTINGS_KEYS = [
     'provider-default-image-models',
     'provider-custom-image-models',
     'provider-discovered-image-models',
+    'provider-auth-methods',
     'custom-openai-compatible-providers',
     'custom-openai-compatible-base-url',
     'custom-openai-compatible-models',
@@ -58,6 +63,7 @@ const FALLBACK_STRING_DEFAULTS = {
     'provider-default-image-models': '{}',
     'provider-custom-image-models': '{}',
     'provider-discovered-image-models': '{}',
+    'provider-auth-methods': '{}',
     'custom-openai-compatible-providers': '[]',
     'custom-openai-compatible-base-url': '',
 };
@@ -337,6 +343,16 @@ function createCustomProviderConfig({
         apiKeyRequired: true,
         apiKeyConfigured: false,
         apiKeyEnvVar: 'CUSCO_CUSTOM_API_KEY',
+        authMethods: [{
+            id: 'api-key',
+            name: 'API key',
+            description: 'Use CUSCO_CUSTOM_API_KEY or a key stored in Secret Service.',
+            kind: 'api-key',
+            available: true,
+            reason: '',
+        }],
+        authMethodId: 'api-key',
+        authConfigured: false,
         baseUrl: String(baseUrl ?? '').trim(),
         chatPath: '/chat/completions',
         defaultModelId: normalizedModels[0]?.id ?? '',
@@ -395,10 +411,14 @@ const PROVIDER_MODEL_ID_ALIASES = {
         'claude-haiku-4-5-20251001': 'claude-haiku-4-5',
     },
     gemini: {
-        'gemini-3.5-flash': 'gemini-3.6-flash',
+        'gemini-3.5-flash': 'gemini-3.7-flash',
         'gemini-3.1-pro': 'gemini-3.1-pro-preview',
     },
+    grok: {
+        'grok4.6': 'grok-4.6',
+    },
     zai: {
+        'glm5.3': 'glm-5.3',
         'glm5.2': 'glm-5.2',
         'glm5-turbo': 'glm-5-turbo',
     },
@@ -411,6 +431,7 @@ const PROVIDER_SUPPORTED_MODEL_IDS = {
         'claude-haiku-4-5',
     ]),
     gemini: new Set([
+        'gemini-3.7-flash',
         'gemini-3.6-flash',
         'gemini-3.5-flash-lite',
         'gemini-3.1-pro-preview',
@@ -425,10 +446,12 @@ const PROVIDER_SUPPORTED_MODEL_IDS = {
         'deepseek-v4-flash',
     ]),
     grok: new Set([
+        'grok-4.6',
         'grok-4.5',
         'grok-4.3',
     ]),
     zai: new Set([
+        'glm-5.3',
         'glm-5.2',
         'glm-5-turbo',
     ]),
@@ -651,6 +674,12 @@ const KIMI_MODEL_METADATA = {
         },
     },
 };
+const DEEPSEEK_RESPONSES_THINKING = {
+    api: 'openai-responses',
+    levels: ['low', 'high', 'max'],
+    defaultLevel: 'high',
+    alwaysOn: true,
+};
 const DEEPSEEK_MODEL_METADATA = {
     'deepseek-v4-pro': {
         id: 'deepseek-v4-pro',
@@ -658,10 +687,7 @@ const DEEPSEEK_MODEL_METADATA = {
         description: 'DeepSeek reasoning-capable model.',
         contextWindowTokens: 1000000,
         maxOutputTokens: 384000,
-        thinking: {
-            api: 'deepseek-thinking',
-            levels: ['off', 'auto', 'high', 'max'],
-        },
+        thinking: DEEPSEEK_RESPONSES_THINKING,
     },
     'deepseek-v4-flash': {
         id: 'deepseek-v4-flash',
@@ -669,13 +695,24 @@ const DEEPSEEK_MODEL_METADATA = {
         description: 'DeepSeek lower-latency model.',
         contextWindowTokens: 1000000,
         maxOutputTokens: 384000,
-        thinking: {
-            api: 'deepseek-thinking',
-            levels: ['off', 'auto', 'high', 'max'],
-        },
+        thinking: DEEPSEEK_RESPONSES_THINKING,
     },
 };
 const ZAI_MODEL_METADATA = {
+    'glm-5.3': {
+        id: 'glm-5.3',
+        name: 'GLM-5.3',
+        description: 'Z.ai flagship model for complex coding and long-horizon agent tasks.',
+        contextWindowTokens: 1000000,
+        maxOutputTokens: 128000,
+        thinking: {
+            api: 'zai-thinking',
+            levels: ['low', 'high', 'max'],
+            defaultLevel: 'max',
+            alwaysOn: true,
+            supportsReasoningEffort: true,
+        },
+    },
     'glm-5.2': {
         id: 'glm-5.2',
         name: 'GLM-5.2',
@@ -699,6 +736,17 @@ const ZAI_MODEL_METADATA = {
     },
 };
 const GROK_MODEL_METADATA = {
+    'grok-4.6': {
+        id: 'grok-4.6',
+        name: 'Grok 4.6',
+        description: 'xAI frontier model for coding, agentic tasks, and knowledge work.',
+        contextWindowTokens: 500000,
+        thinking: {
+            api: 'xai-reasoning',
+            levels: ['low', 'medium', 'high', 'xhigh'],
+            defaultLevel: 'high',
+        },
+    },
     'grok-4.5': {
         id: 'grok-4.5',
         name: 'Grok 4.5',
@@ -747,11 +795,13 @@ const PROVIDER_MODEL_CONTEXT_WINDOW_TOKENS = {
         'claude-haiku-4-5': 200000,
     },
     gemini: {
+        'gemini-3.7-flash': 1048576,
         'gemini-3.6-flash': 1048576,
         'gemini-3.5-flash-lite': 1048576,
         'gemini-3.1-pro-preview': 1048576,
     },
     grok: {
+        'grok-4.6': 500000,
         'grok-4.5': 1000000,
         'grok-4.3': 1000000,
     },
@@ -903,6 +953,13 @@ const GEMINI_3_LEVEL_THINKING = {
     levels: ['minimal', 'auto', 'low', 'medium', 'high'],
     includeThoughts: true,
 };
+const GEMINI_37_THINKING = {
+    api: 'gemini-thinking-level',
+    levels: ['low', 'medium', 'high'],
+    defaultLevel: 'medium',
+    alwaysOn: true,
+    includeThoughts: true,
+};
 const GEMINI_3_PRO_LEVEL_THINKING = {
     api: 'gemini-thinking-level',
     levels: ['auto', 'low', 'medium', 'high'],
@@ -1034,9 +1091,17 @@ export const DEFAULT_PROVIDER_CONFIGS = [
             api: 'gemini-generate-content',
             tools: ['google_search', 'url_context'],
         },
-        defaultModelId: 'gemini-3.6-flash',
+        defaultModelId: 'gemini-3.7-flash',
         defaultImageModelId: 'gemini-3.1-flash-image',
         models: [
+            {
+                id: 'gemini-3.7-flash',
+                name: 'Gemini 3.7 Flash',
+                description: 'Google\'s most capable Flash model for complex coding and agentic workflows.',
+                contextWindowTokens: 1048576,
+                maxOutputTokens: 65536,
+                thinking: GEMINI_37_THINKING,
+            },
             {
                 id: 'gemini-3.6-flash',
                 name: 'Gemini 3.6 Flash',
@@ -1103,18 +1168,21 @@ export const DEFAULT_PROVIDER_CONFIGS = [
     {
         id: 'deepseek',
         name: 'DeepSeek',
-        description: 'DeepSeek OpenAI-compatible API.',
+        description: 'DeepSeek Responses API.',
         themeColor: '#4D6BFE',
         implemented: true,
         enabled: false,
-        apiFormat: 'openai-chat-completions',
-        supportsStreamUsageOptions: true,
+        apiFormat: 'openai-responses',
         supportsImageAttachments: false,
+        supportsReasoningContentItems: true,
         apiKeyRequired: true,
         apiKeyConfigured: false,
         apiKeyEnvVar: 'DEEPSEEK_API_KEY',
         baseUrl: 'https://api.deepseek.com',
-        chatPath: '/chat/completions',
+        nativeSearch: {
+            api: 'openai-responses',
+            tools: ['web_search'],
+        },
         defaultModelId: 'deepseek-v4-pro',
         models: [
             { ...DEEPSEEK_MODEL_METADATA['deepseek-v4-pro'] },
@@ -1138,9 +1206,10 @@ export const DEFAULT_PROVIDER_CONFIGS = [
             api: 'openai-responses',
             tools: ['web_search', 'x_search'],
         },
-        defaultModelId: 'grok-4.5',
+        defaultModelId: 'grok-4.6',
         defaultImageModelId: 'grok-imagine-image-quality',
         models: [
+            { ...GROK_MODEL_METADATA['grok-4.6'] },
             { ...GROK_MODEL_METADATA['grok-4.5'] },
             { ...GROK_MODEL_METADATA['grok-4.3'] },
         ],
@@ -1172,9 +1241,10 @@ export const DEFAULT_PROVIDER_CONFIGS = [
             searchEngine: 'search-prime',
             count: 5,
         },
-        defaultModelId: 'glm-5.2',
+        defaultModelId: 'glm-5.3',
         defaultImageModelId: 'glm-image',
         models: [
+            { ...ZAI_MODEL_METADATA['glm-5.3'] },
             { ...ZAI_MODEL_METADATA['glm-5.2'] },
             { ...ZAI_MODEL_METADATA['glm-5-turbo'] },
         ],
@@ -1189,6 +1259,9 @@ export class ProviderConfigStore {
         this._settings = options.settings === undefined ? createDefaultSettings(options.settingsPath) : options.settings;
         this._apiKeyStore = options.apiKeyStore ?? createDefaultApiKeyStore();
         this._envLookup = options.envLookup ?? GLib.getenv;
+        this._authManager = options.authManager ?? createDefaultProviderAuthManager({
+            envLookup: this._envLookup,
+        });
         this._apiKeyStatuses = new Map();
         this._activeProviderId = '';
         this._activeModelId = '';
@@ -1203,6 +1276,21 @@ export class ProviderConfigStore {
         };
         this._configs = configs.map((config) => ({
             ...config,
+            authMethods: [
+                ...(config.apiKeyRequired
+                    ? [{
+                        id: 'api-key',
+                        name: 'API key',
+                        description: `Use ${config.apiKeyEnvVar} or a key stored in Secret Service.`,
+                        kind: 'api-key',
+                        available: true,
+                        reason: '',
+                    }]
+                    : []),
+                ...listProviderAuthMethods(config.id, this._envLookup),
+            ],
+            authMethodId: config.apiKeyRequired ? 'api-key' : '',
+            authConfigured: false,
             defaultBaseUrl: String(config.defaultBaseUrl ?? config.baseUrl ?? '').trim(),
             usesCustomEndpoint: false,
             endpointPresets: (config.endpointPresets ?? []).map((preset) => ({ ...preset })),
@@ -1213,6 +1301,7 @@ export class ProviderConfigStore {
         }));
         this._loadPersistentState();
         this.refreshApiKeyStatus({ autoEnableEnvironmentProviders: true });
+        this.refreshAuthenticationStatus();
     }
 
     refreshApiKeyStatus({ autoEnableEnvironmentProviders = false } = {}) {
@@ -1240,6 +1329,17 @@ export class ProviderConfigStore {
         if (enabledProvidersChanged)
             this._persistEnabledProviders();
 
+        for (const config of this._configs) {
+            if (config.authMethodId === 'api-key') {
+                config.authStatus = {
+                    ...this.getApiKeyStatus(config.id),
+                    methodId: 'api-key',
+                    available: true,
+                };
+                config.authConfigured = Boolean(config.authStatus.configured);
+            }
+        }
+
         return this.listProviders();
     }
 
@@ -1251,6 +1351,8 @@ export class ProviderConfigStore {
 
         return providers.map((provider) => ({
             ...provider,
+            authMethods: (provider.authMethods ?? []).map((method) => ({ ...method })),
+            authStatus: provider.authStatus ? { ...provider.authStatus } : null,
             endpointPresets: (provider.endpointPresets ?? []).map((preset) => ({ ...preset })),
             models: provider.models.map((model) => ({ ...model })),
             imageModels: (provider.imageModels ?? []).map((model) => ({ ...model })),
@@ -1267,6 +1369,8 @@ export class ProviderConfigStore {
             ))
             .map((provider) => ({
                 ...provider,
+                authMethods: (provider.authMethods ?? []).map((method) => ({ ...method })),
+                authStatus: provider.authStatus ? { ...provider.authStatus } : null,
                 endpointPresets: (provider.endpointPresets ?? []).map((preset) => ({ ...preset })),
                 models: provider.models.map((model) => ({ ...model })),
                 imageModels: (provider.imageModels ?? []).map((model) => ({ ...model })),
@@ -1363,6 +1467,112 @@ export class ProviderConfigStore {
         return this._configs.find((provider) => provider.id === providerId) ?? null;
     }
 
+    listAuthenticationMethods(providerId) {
+        const provider = this.getProvider(providerId);
+
+        if (!provider)
+            throw new Error(`Provider does not exist: ${providerId}`);
+
+        const oauthMethods = new Map(
+            this._authManager.listMethods(providerId).map((method) => [method.id, method]),
+        );
+        return (provider.authMethods ?? []).map((method) => ({
+            ...method,
+            ...(oauthMethods.get(method.id) ?? {}),
+            selected: method.id === provider.authMethodId,
+        }));
+    }
+
+    getAuthenticationStatus(providerId) {
+        const provider = this.getProvider(providerId);
+
+        if (!provider)
+            throw new Error(`Provider does not exist: ${providerId}`);
+
+        if (provider.authMethodId === 'api-key')
+            return { ...this.getApiKeyStatus(providerId), methodId: 'api-key', available: true };
+
+        return {
+            ...this._authManager.getStatus(providerId, provider.authMethodId),
+            methodId: provider.authMethodId,
+        };
+    }
+
+    refreshAuthenticationStatus(providerId = '') {
+        const providers = providerId ? [this.getProvider(providerId)].filter(Boolean) : this._configs;
+
+        for (const provider of providers) {
+            const status = provider.authMethodId
+                ? this.getAuthenticationStatus(provider.id)
+                : { configured: true, available: true, methodId: '' };
+            provider.authStatus = { ...status };
+            provider.authConfigured = Boolean(status.configured);
+        }
+
+        return providerId
+            ? { ...(this.getProvider(providerId)?.authStatus ?? {}) }
+            : this.listProviders();
+    }
+
+    setAuthenticationMethod(providerId, methodId) {
+        const provider = this.getProvider(providerId);
+
+        if (!provider)
+            throw new Error(`Provider does not exist: ${providerId}`);
+
+        const method = this.listAuthenticationMethods(providerId)
+            .find((item) => item.id === String(methodId));
+        if (!method)
+            throw new Error(`Authentication method does not exist for ${provider.name}: ${methodId}`);
+
+        provider.authMethodId = method.id;
+        this.refreshAuthenticationStatus(providerId);
+        if (provider.enabled && !this._isSelectedAuthenticationConfigured(provider))
+            provider.enabled = false;
+        this._persistAuthenticationMethods();
+        this._persistEnabledProviders();
+        return this.getProvider(providerId);
+    }
+
+    async authenticateProvider(providerId, options = {}) {
+        const provider = this.getProvider(providerId);
+
+        if (!provider)
+            throw new Error(`Provider does not exist: ${providerId}`);
+        if (!provider.authMethodId || provider.authMethodId === 'api-key')
+            throw new Error(`${provider.name} is configured to use an API key`);
+
+        const status = await this._authManager.authenticate(provider.id, provider.authMethodId, {
+            ...options,
+            providerName: provider.name,
+        });
+        provider.authStatus = { ...status, methodId: provider.authMethodId };
+        provider.authConfigured = Boolean(status.configured);
+        if (!provider.enabled && this.canEnableProvider(provider.id)) {
+            provider.enabled = true;
+            this._persistEnabledProviders();
+        }
+        return { ...provider.authStatus };
+    }
+
+    async clearProviderAuthorization(providerId) {
+        const provider = this.getProvider(providerId);
+
+        if (!provider)
+            throw new Error(`Provider does not exist: ${providerId}`);
+        if (!provider.authMethodId || provider.authMethodId === 'api-key')
+            return this.clearApiKey(providerId);
+
+        const status = await this._authManager.clear(provider.id, provider.authMethodId);
+        provider.authStatus = { ...status, methodId: provider.authMethodId };
+        provider.authConfigured = false;
+        if (provider.enabled) {
+            provider.enabled = false;
+            this._persistEnabledProviders();
+        }
+        return { ...provider.authStatus };
+    }
+
     setProviderEndpointPreset(providerId, presetId) {
         const provider = this.getProvider(providerId);
 
@@ -1436,7 +1646,8 @@ export class ProviderConfigStore {
         if (!provider?.implemented)
             return false;
 
-        return this._isProviderConfigured(provider) && (!provider.apiKeyRequired || provider.apiKeyConfigured);
+        return this._isProviderConfigured(provider)
+            && this._isSelectedAuthenticationConfigured(provider);
     }
 
     getApiKeyStatus(providerId) {
@@ -1474,6 +1685,9 @@ export class ProviderConfigStore {
             error: null,
         });
 
+        if (provider.authMethodId === 'api-key')
+            this.refreshAuthenticationStatus(provider.id);
+
         if (!provider.enabled && this.canEnableProvider(provider.id))
             this.setProviderEnabled(provider.id, true);
 
@@ -1489,7 +1703,10 @@ export class ProviderConfigStore {
         await this._apiKeyStore.clear(provider.id);
         const status = this._setApiKeyStatus(provider, this._environmentApiKeyStatus(provider));
 
-        if (provider.enabled && !status.configured)
+        if (provider.authMethodId === 'api-key')
+            this.refreshAuthenticationStatus(provider.id);
+
+        if (provider.enabled && provider.authMethodId === 'api-key' && !status.configured)
             this.setProviderEnabled(provider.id, false);
 
         return status;
@@ -1649,7 +1866,8 @@ export class ProviderConfigStore {
 
         const providerConfig = {
             ...provider,
-            apiKey: provider.apiKeyRequired ? this._getApiKey(provider) : '',
+            apiKey: this._providerUsesApiKey(provider) ? this._getApiKey(provider) : '',
+            authorizeRequest: this._providerRequestAuthorizer(provider),
         };
         const discoverer = options.discoverer ?? ((config, discoverOptions) => (
             this._discoverModelsForProvider(config, discoverOptions)
@@ -1858,8 +2076,8 @@ export class ProviderConfigStore {
         if (!provider.implemented)
             throw new Error(`Provider is not implemented yet: ${providerId}`);
 
-        if (enabled && provider.apiKeyRequired && !provider.apiKeyConfigured)
-            throw new Error(`${provider.name} requires ${provider.apiKeyEnvVar}`);
+        if (enabled && !this._isSelectedAuthenticationConfigured(provider))
+            throw new Error(`${provider.name} requires configured credentials`);
 
         provider.enabled = enabled;
         this._persistEnabledProviders();
@@ -1972,10 +2190,11 @@ export class ProviderConfigStore {
         if (!provider.implemented || !this._isProviderConfigured(provider))
             throw new Error(`Provider is not available: ${provider.name}`);
 
-        const apiKey = provider.apiKeyRequired ? this._getApiKey(provider) : '';
+        const apiKey = this._providerUsesApiKey(provider) ? this._getApiKey(provider) : '';
         const providerConfig = {
             ...provider,
             apiKey,
+            authorizeRequest: this._providerRequestAuthorizer(provider),
         };
 
         switch (provider.apiFormat) {
@@ -2022,7 +2241,35 @@ export class ProviderConfigStore {
     _isProviderUsable(provider) {
         return provider.implemented
             && this._isProviderConfigured(provider)
-            && (!provider.apiKeyRequired || provider.apiKeyConfigured);
+            && this._isSelectedAuthenticationConfigured(provider);
+    }
+
+    _providerUsesApiKey(provider) {
+        return provider.authMethodId === 'api-key'
+            || (!provider.authMethodId && provider.apiKeyRequired);
+    }
+
+    _isSelectedAuthenticationConfigured(provider) {
+        if (!provider.authMethodId)
+            return !provider.apiKeyRequired;
+        if (this._providerUsesApiKey(provider))
+            return Boolean(provider.apiKeyConfigured);
+
+        const status = this._authManager.getStatus(provider.id, provider.authMethodId);
+        return Boolean(status.available && status.configured);
+    }
+
+    _providerRequestAuthorizer(provider) {
+        if (this._providerUsesApiKey(provider))
+            return null;
+
+        const methodId = provider.authMethodId;
+        return (request, options = {}) => this._authManager.authorizeRequest(
+            provider.id,
+            methodId,
+            request,
+            { ...options, providerName: provider.name },
+        );
     }
 
     _isProviderConfigured(provider) {
@@ -2040,6 +2287,9 @@ export class ProviderConfigStore {
     }
 
     _isProviderConfiguredForImageGeneration(provider) {
+        if (provider.apiKeyRequired && !provider.apiKeyConfigured)
+            return false;
+
         if (!provider.customizable)
             return Boolean(provider.imageApiFormat);
 
@@ -2189,6 +2439,7 @@ export class ProviderConfigStore {
             this._webSearchProviderId = webSearchProviderId;
 
         this._loadCustomProviderSettings();
+        this._loadAuthenticationMethodSettings();
         this._loadEndpointPresetSettings();
         this._loadCustomEndpointSettings();
         this._loadDiscoveredModelSettings();
@@ -2264,6 +2515,18 @@ export class ProviderConfigStore {
 
             if (normalizedModels.length > 0)
                 provider.models = normalizedModels;
+        }
+    }
+
+    _loadAuthenticationMethodSettings() {
+        const selectedMethods = parseDefaultModelSettings(
+            this._settings.get_string('provider-auth-methods'),
+        );
+
+        for (const provider of this._configs) {
+            const selectedMethodId = String(selectedMethods[provider.id] ?? '').trim();
+            if (provider.authMethods.some((method) => method.id === selectedMethodId))
+                provider.authMethodId = selectedMethodId;
         }
     }
 
@@ -2415,6 +2678,18 @@ export class ProviderConfigStore {
             .map((provider) => provider.id);
 
         this._settings?.set_strv('enabled-providers', enabledProviderIds);
+        flushSettings();
+    }
+
+    _persistAuthenticationMethods() {
+        const selectedMethods = {};
+
+        for (const provider of this._configs) {
+            if (provider.authMethodId)
+                selectedMethods[provider.id] = provider.authMethodId;
+        }
+
+        this._settings?.set_string('provider-auth-methods', JSON.stringify(selectedMethods));
         flushSettings();
     }
 

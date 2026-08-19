@@ -9,18 +9,32 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Add provider-selectable OAuth authentication for eligible ChatGPT, Claude,
+  Google Gemini, and Grok accounts, with PKCE, automatic token refresh, and
+  Secret Service storage, including an explicit Claude Code OAuth usage-risk
+  disclosure.
+- Add Gemini 3.7 Flash as Google's default chat model with Medium-default thinking and a 64K output limit.
+- Add Grok 4.6 as xAI's default chat model with 500K context and XHigh reasoning.
+- Add GLM-5.3 to Z.ai with its always-on Low, High, and Max thinking efforts.
 - Keep live reasoning expanded in a three-line ticker that slides completed lines upward and brings new lines in from below.
 - Show today's total token usage in the top-right of the Daily tokens panel.
 - Add a Settings → About debug window for replaying custom assistant streams with configurable delivery and animation timing.
 
 ### Changed
 
+- Keep subscription authentication as a request profile beneath the existing
+  remote providers instead of exposing local CLI agents as separate providers.
+- Move DeepSeek chat to its Responses API with native Web Search, typed reasoning streams, and stateless reasoning history.
 - Reserve the available assistant-message width from the first streamed token while keeping user messages compact.
 - Float the Usage destination over the bottom of the chat list and give its pie-chart icon three distinct colors.
 - Remove the background fill from assistant messages while preserving distinct user-message bubbles.
 
 ### Fixed
 
+- Keep OAuth loopback callbacks reachable through both localhost address
+  families and open until the browser receives Cusco's completion page.
+- Let real provider responses finish their paced text reveal before rebuilding
+  the final transcript row, preventing long answers from jumping to the end.
 - Keep animating streamed messages when a provider revises its partial response, instead of showing the remaining response immediately.
 - Prevent sending from silently stalling by running GTK through GJS's async-aware application loop.
 - Hide the empty-chat illustration as soon as the first message appears.

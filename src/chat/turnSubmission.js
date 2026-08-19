@@ -246,6 +246,7 @@ export class TurnSubmission {
 
         let sentMessages = false;
         let shouldSendMore = false;
+        let presentationFinished = null;
 
         try {
             await this._preparePendingUserMessageHooks(conversation, cancellable);
@@ -259,13 +260,21 @@ export class TurnSubmission {
             if (isCancellableCancelled(cancellable))
                 return true;
 
-            const responseResult = await this._streamAssistantResponse(conversation.id, { cancellable });
+            const responseResult = await this._streamAssistantResponse(conversation.id, {
+                cancellable,
+                onPresentationSettling: (promise) => {
+                    presentationFinished = promise;
+                },
+            });
+            presentationFinished ??= responseResult?.presentationFinished ?? null;
             shouldSendMore = shouldAutoSendQueuedMessages({
                 cancelled: isCancellableCancelled(cancellable),
                 stoppedBeforeAssistantText: responseResult?.stoppedBeforeAssistantText,
             });
         } finally {
-            this._finishActiveTurn(cancellable);
+            this._finishActiveTurn(cancellable, {
+                deferActiveConversationRender: Boolean(presentationFinished),
+            });
         }
 
         if (shouldSendMore) {
@@ -351,6 +360,7 @@ export class TurnSubmission {
 
         let shouldSendQueued = false;
         let userMessageCommitted = false;
+        let presentationFinished = null;
         const provisionalAttachments = pendingAttachments.map((attachment) => ({ ...attachment }));
         const provisionalContent = this._formatUserMessageContent(text, provisionalAttachments);
         const provisionalView = this._addMessage(
@@ -433,7 +443,13 @@ export class TurnSubmission {
             }
 
             this._drainPendingUserMessages(conversation.id);
-            const responseResult = await this._streamAssistantResponse(conversation.id, { cancellable });
+            const responseResult = await this._streamAssistantResponse(conversation.id, {
+                cancellable,
+                onPresentationSettling: (promise) => {
+                    presentationFinished = promise;
+                },
+            });
+            presentationFinished ??= responseResult?.presentationFinished ?? null;
             shouldSendQueued = shouldAutoSendQueuedMessages({
                 cancelled: isCancellableCancelled(cancellable),
                 stoppedBeforeAssistantText: responseResult?.stoppedBeforeAssistantText,
@@ -446,7 +462,9 @@ export class TurnSubmission {
 
             throw error;
         } finally {
-            this._finishActiveTurn(cancellable);
+            this._finishActiveTurn(cancellable, {
+                deferActiveConversationRender: Boolean(presentationFinished),
+            });
         }
 
         if (shouldSendQueued) {

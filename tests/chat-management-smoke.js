@@ -216,18 +216,25 @@ for (const providerId of expectedProviderIds) {
         throw new Error(`Missing provider config: ${providerId}`);
 }
 
+const geminiProvider = providers.getProvider('gemini');
+
+if (geminiProvider.defaultModelId !== 'gemini-3.7-flash'
+    || geminiProvider.models.map((model) => model.id).join(',') !== 'gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.1-pro-preview') {
+    throw new Error('Gemini chat models were not configured');
+}
+
 const zaiProvider = providers.getProvider('zai');
 
-if (zaiProvider.defaultModelId !== 'glm-5.2'
-    || zaiProvider.models.map((model) => model.id).join(',') !== 'glm-5.2,glm-5-turbo')
+if (zaiProvider.defaultModelId !== 'glm-5.3'
+    || zaiProvider.models.map((model) => model.id).join(',') !== 'glm-5.3,glm-5.2,glm-5-turbo')
     throw new Error('Z.ai GLM models were not configured');
 
 const grokProvider = providers.getProvider('grok');
 
 if (grokProvider.baseUrl !== 'https://api.x.ai/v1'
-    || grokProvider.defaultModelId !== 'grok-4.5'
+    || grokProvider.defaultModelId !== 'grok-4.6'
     || grokProvider.defaultImageModelId !== 'grok-imagine-image-quality'
-    || grokProvider.models.map((model) => model.id).join(',') !== 'grok-4.5,grok-4.3'
+    || grokProvider.models.map((model) => model.id).join(',') !== 'grok-4.6,grok-4.5,grok-4.3'
     || grokProvider.imageModels.map((model) => model.id).join(',') !== 'grok-imagine-image-quality,grok-imagine-image')
     throw new Error('Grok models were not configured');
 

@@ -109,6 +109,7 @@ debug_sources = files(
 provider_sources = files(
   'providers/chatSelection.js',
   'providers/config.js',
+  'providers/auth.js',
   'providers/imageGeneration.js',
   'providers/icons.js',
   'providers/modelPicker.js',

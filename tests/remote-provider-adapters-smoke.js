@@ -71,6 +71,30 @@ const messages = [
     }),
     createMessage('user', 'Summarize Cusco'),
 ];
+const deepSeekHistoryMessages = [
+    createMessage('user', 'What is the next step?'),
+    createMessage('assistant', 'Inspect the current state first.', {
+        reasoning: {
+            content: 'I should inspect before changing anything.',
+            providerId: 'deepseek',
+            modelId: 'deepseek-v4-pro',
+            thinkingLevel: 'high',
+        },
+    }),
+    createMessage('user', 'Continue.'),
+];
+const crossProviderReasoningMessages = [
+    createMessage('user', 'Inspect the current state.'),
+    createMessage('assistant', 'The state was inspected.', {
+        reasoning: {
+            content: 'OpenAI-only reasoning context.',
+            providerId: 'openai',
+            modelId: 'gpt-5.6',
+            thinkingLevel: 'high',
+        },
+    }),
+    createMessage('user', 'Continue with DeepSeek.'),
+];
 const imagePath = GLib.build_filenamev([
     GLib.get_tmp_dir(),
     `cusco-provider-image-${GLib.uuid_string_random()}.png`,
@@ -293,7 +317,72 @@ assertEqual(openAiNativeSearchBody.tools[0].type, 'web_search', 'OpenAI native w
 assertEqual(openAiNativeSearchBody.tools[1].name, 'mcp__context7__resolve_library_id', 'OpenAI retained client tool');
 assertEqual(openAiNativeSearchBody.tools.some((tool) => tool.name === 'search'), false, 'OpenAI removed fallback search function');
 assertEqual(openAiNativeSearchBody.include[0], 'web_search_call.action.sources', 'OpenAI requested complete search sources');
-const grokNativeSearchBody = buildOpenAiResponsesBody(messages, 'grok-4.5', {
+const deepSeekResponsesProviderConfig = {
+    id: 'deepseek',
+    apiFormat: 'openai-responses',
+    supportsImageAttachments: false,
+    supportsReasoningContentItems: true,
+    nativeSearch: {
+        api: 'openai-responses',
+        tools: ['web_search'],
+    },
+};
+const deepSeekResponsesModel = {
+    id: 'deepseek-v4-pro',
+    thinking: {
+        api: 'openai-responses',
+        levels: ['low', 'high', 'max'],
+        defaultLevel: 'high',
+        alwaysOn: true,
+    },
+};
+const deepSeekResponsesBody = buildOpenAiResponsesBody(
+    deepSeekHistoryMessages,
+    'deepseek-v4-pro',
+    {
+        provider: deepSeekResponsesProviderConfig,
+        model: deepSeekResponsesModel,
+        thinkingLevel: 'high',
+        tools: [searchTool, mcpTool],
+    },
+);
+assertEqual(deepSeekResponsesBody.input.length, 4, 'DeepSeek Responses history item count');
+assertEqual(deepSeekResponsesBody.input[1].type, 'reasoning', 'DeepSeek reasoning history item');
+assertEqual(
+    deepSeekResponsesBody.input[1].content[0].text,
+    'I should inspect before changing anything.',
+    'DeepSeek reasoning history content',
+);
+assertEqual(hasOwn(deepSeekResponsesBody.input[1], 'summary'), false, 'DeepSeek omitted unsupported reasoning summary');
+assertEqual(deepSeekResponsesBody.input[2].role, 'assistant', 'DeepSeek assistant history item');
+assertEqual(deepSeekResponsesBody.reasoning.effort, 'high', 'DeepSeek Responses reasoning effort');
+assertEqual(hasOwn(deepSeekResponsesBody.reasoning, 'summary'), false, 'DeepSeek omitted unsupported reasoning summary');
+assertEqual(deepSeekResponsesBody.tools[0].type, 'web_search', 'DeepSeek native web search');
+assertEqual(deepSeekResponsesBody.tools[1].name, 'mcp__context7__resolve_library_id', 'DeepSeek retained client tool');
+assertEqual(hasOwn(deepSeekResponsesBody, 'include'), false, 'DeepSeek omitted unsupported include field');
+const deepSeekImageBody = buildOpenAiResponsesBody(imageMessages, 'deepseek-v4-pro', {
+    provider: deepSeekResponsesProviderConfig,
+});
+assertEqual(deepSeekImageBody.input[0].content, 'Describe this image', 'DeepSeek omitted image input');
+const deepSeekToolImageBody = buildOpenAiResponsesBody(nativeToolMessages, 'deepseek-v4-pro', {
+    provider: deepSeekResponsesProviderConfig,
+});
+assertEqual(
+    JSON.stringify(deepSeekToolImageBody.input).includes('input_image'),
+    false,
+    'DeepSeek omitted tool-result screenshots',
+);
+const deepSeekCrossProviderBody = buildOpenAiResponsesBody(
+    crossProviderReasoningMessages,
+    'deepseek-v4-pro',
+    { provider: deepSeekResponsesProviderConfig },
+);
+assertEqual(
+    deepSeekCrossProviderBody.input.some((item) => item.type === 'reasoning'),
+    false,
+    'DeepSeek omitted reasoning history from another provider',
+);
+const grokNativeSearchBody = buildOpenAiResponsesBody(messages, 'grok-4.6', {
     provider: {
         nativeSearch: {
             api: 'openai-responses',
@@ -303,14 +392,14 @@ const grokNativeSearchBody = buildOpenAiResponsesBody(messages, 'grok-4.5', {
     model: {
         thinking: {
             api: 'xai-reasoning',
-            levels: ['low', 'medium', 'high'],
+            levels: ['low', 'medium', 'high', 'xhigh'],
         },
     },
-    thinkingLevel: 'high',
+    thinkingLevel: 'xhigh',
     tools: [searchTool],
 });
 assertEqual(grokNativeSearchBody.tools.map((tool) => tool.type).join(','), 'web_search,x_search', 'Grok native search tools');
-assertEqual(grokNativeSearchBody.reasoning.effort, 'high', 'Grok Responses reasoning effort');
+assertEqual(grokNativeSearchBody.reasoning.effort, 'xhigh', 'Grok 4.6 Responses reasoning effort');
 
 const openAiThinkingBody = buildOpenAiResponsesBody(messages, 'gpt-test', {
     provider: {
@@ -482,6 +571,22 @@ const zaiThinkingBody = buildOpenAiCompatibleChatBody(messages, 'glm-5.2', {
 });
 assertEqual(zaiThinkingBody.thinking.type, 'enabled', 'Z.ai thinking enabled');
 assertEqual(zaiThinkingBody.reasoning_effort, 'max', 'Z.ai reasoning effort');
+const zaiGlm53ThinkingBody = buildOpenAiCompatibleChatBody(messages, 'glm-5.3', {
+    model: {
+        thinking: {
+            api: 'zai-thinking',
+            levels: ['low', 'high', 'max'],
+            defaultLevel: 'max',
+            alwaysOn: true,
+            supportsReasoningEffort: true,
+        },
+    },
+    thinkingLevel: 'low',
+    maxOutputTokens: 128000,
+});
+assertEqual(zaiGlm53ThinkingBody.thinking.type, 'enabled', 'Z.ai GLM-5.3 always enables thinking');
+assertEqual(zaiGlm53ThinkingBody.reasoning_effort, 'low', 'Z.ai GLM-5.3 low reasoning effort');
+assertEqual(zaiGlm53ThinkingBody.max_tokens, 128000, 'Z.ai GLM-5.3 maximum output tokens');
 const zaiThinkingOffBody = buildOpenAiCompatibleChatBody(messages, 'glm-5.2', {
     model: {
         thinking: {
@@ -661,6 +766,22 @@ const geminiThinkingLevelBody = buildGeminiGenerateContentBody(messages, {
 });
 assertEqual(geminiThinkingLevelBody.generationConfig.thinkingConfig.thinkingLevel, 'minimal', 'Gemini thinking level');
 assertEqual(geminiThinkingLevelBody.generationConfig.thinkingConfig.includeThoughts, true, 'Gemini thought summaries');
+const gemini37Body = buildGeminiGenerateContentBody(messages, {
+    model: {
+        thinking: {
+            api: 'gemini-thinking-level',
+            levels: ['low', 'medium', 'high'],
+            defaultLevel: 'medium',
+            alwaysOn: true,
+            includeThoughts: true,
+        },
+    },
+    thinkingLevel: 'medium',
+    maxOutputTokens: 65536,
+});
+assertEqual(gemini37Body.generationConfig.thinkingConfig.thinkingLevel, 'medium', 'Gemini 3.7 thinking level');
+assertEqual(gemini37Body.generationConfig.thinkingConfig.includeThoughts, true, 'Gemini 3.7 thought summaries');
+assertEqual(gemini37Body.generationConfig.maxOutputTokens, 65536, 'Gemini 3.7 maximum output tokens');
 const geminiToolBody = buildGeminiGenerateContentBody(messages, {
     tools: [mcpTool],
 });
@@ -712,6 +833,13 @@ assertEqual(extractOpenAiReasoning({
         summary: [{ type: 'summary_text', text: 'OpenAI reasoning' }],
     }],
 }), 'OpenAI reasoning', 'OpenAI reasoning extraction');
+assertEqual(extractOpenAiReasoning({
+    output: [{
+        type: 'reasoning',
+        summary: [],
+        content: [{ type: 'reasoning_text', text: 'DeepSeek reasoning' }],
+    }],
+}), 'DeepSeek reasoning', 'DeepSeek reasoning content extraction');
 const openAiUsage = extractOpenAiUsage({
     usage: {
         input_tokens: 10,

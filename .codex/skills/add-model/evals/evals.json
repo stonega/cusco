@@ -1,0 +1,23 @@
+{
+  "skill_name": "add-model",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Add the newly announced Grok model from the official xAI guide I provided. Make it the built-in Grok default, retain still-supported older models, and represent this release's documented context window and reasoning levels exactly.",
+      "expected_output": "A catalog-first Grok implementation based on the supplied model-specific docs, with canonical metadata, safe alias/default behavior, focused smoke coverage, provider-model documentation, official sources, and an Unreleased changelog entry.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Google announced a new Gemini Flash model and supplied an announcement plus its Gemini API model page. Add it to Cusco without assuming it has the previous Flash model's thinking levels or token limits, and keep valid saved selections on older supported models.",
+      "expected_output": "The agent checks the model-specific Google docs and generateContent compatibility, adds exact lifecycle/token/modality/thinking metadata without duplicating the adapter, preserves valid older selections, tests request and catalog behavior, and updates user docs and the changelog.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Replace a deprecated built-in model ID in Cusco without breaking users who have the old ID stored in settings.",
+      "expected_output": "The agent adds an explicit alias or migration, constrains the supported catalog, preserves valid user selections, adds stale-state tests, and documents the user-visible replacement.",
+      "files": []
+    }
+  ]
+}
