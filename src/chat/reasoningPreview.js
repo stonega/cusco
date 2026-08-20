@@ -7,12 +7,55 @@ import {
     markdownToPangoRenderModel,
     stabilizeStreamingMarkdown,
 } from './markdown.js';
+import { StreamingTextSmoother } from './streamingText.js';
 
 const REASONING_PREVIEW_LINES = 3;
 const REASONING_PREVIEW_MAX_WIDTH_CHARS = 72;
 const REASONING_LINE_TRANSITION_MS = 180;
+const REASONING_PRESSURED_LINE_TRANSITION_MS = 100;
+const MAX_QUEUED_REASONING_LINE_TRANSITIONS = 2;
 const UTF8_ENCODER = new TextEncoder();
 const UTF8_DECODER = new TextDecoder();
+
+function clamp(value, minimum, maximum) {
+    return Math.max(minimum, Math.min(maximum, value));
+}
+
+function interpolate(first, second, progress) {
+    return first + (second - first) * progress;
+}
+
+export function reasoningTransitionPlan(pendingLineCount, options = {}) {
+    const pendingLines = Math.max(0, Math.floor(Number(pendingLineCount) || 0));
+    const pressureValue = Number(options.pressure);
+    const streamPressure = Number.isFinite(pressureValue)
+        ? clamp(pressureValue, 0, 1)
+        : 0;
+    const finishing = options.finishing === true;
+    const shouldCompact = pendingLines > MAX_QUEUED_REASONING_LINE_TRANSITIONS
+        || (finishing && pendingLines > 1);
+    const skippedLineCount = shouldCompact ? pendingLines - 1 : 0;
+    const queuePressure = pendingLines <= 1
+        ? 0
+        : clamp(
+            (pendingLines - 1) / (MAX_QUEUED_REASONING_LINE_TRANSITIONS - 1),
+            0,
+            1,
+        );
+    const pressure = finishing || shouldCompact
+        ? 1
+        : Math.max(streamPressure, queuePressure);
+
+    return {
+        pressure,
+        skippedLineCount,
+        transitionDurationMs: Math.round(interpolate(
+            REASONING_LINE_TRANSITION_MS,
+            REASONING_PRESSURED_LINE_TRANSITION_MS,
+            pressure,
+        )),
+    };
+}
 
 export function reasoningPreviewText(value) {
     return String(value ?? '')
@@ -97,10 +140,15 @@ export function createReasoningPreviewLabel(options = {}) {
         hexpand: true,
     });
     const rows = [];
+    let targetPreview = '';
     let currentPreview = '';
     let latestLines = [];
     let displayedLineCount = 0;
     let initialized = false;
+    let smoother = null;
+    let latestStreamPressure = 0;
+    let finishRequested = false;
+    let wasMapped = false;
     let transitionSourceId = 0;
     let transitionRunning = false;
     let transitionCount = 0;
@@ -124,13 +172,16 @@ export function createReasoningPreviewLabel(options = {}) {
             return false;
         }
     };
-    const animationsEnabled = () => {
+    const streamPresentationAllowed = () => {
         const animationStyle = resolvedAnimationStyle();
 
-        if (!container.get_mapped()
-            || !animationStyle
-            || animationStyle === 'none'
-            || !motionAllowed()) {
+        return Boolean(animationStyle)
+            && animationStyle !== 'none'
+            && motionAllowed()
+            && (!wasMapped || container.get_mapped());
+    };
+    const animationsEnabled = () => {
+        if (!container.get_mapped() || !streamPresentationAllowed()) {
             return false;
         }
 
@@ -144,6 +195,7 @@ export function createReasoningPreviewLabel(options = {}) {
         if (transitionRunning || displayedLineCount < latestLines.length)
             return;
 
+        finishRequested = false;
         for (const resolve of finishResolvers.splice(0))
             resolve();
     };
@@ -163,12 +215,16 @@ export function createReasoningPreviewLabel(options = {}) {
                 container.remove(row.revealer);
         }
     };
-    const createRow = (lineIndex, revealed = true) => {
+    const createRow = (
+        lineIndex,
+        revealed = true,
+        transitionDurationMs = REASONING_LINE_TRANSITION_MS,
+    ) => {
         const label = createReasoningLine(latestLines[lineIndex]);
         const revealer = new Gtk.Revealer({
             child: label,
             reveal_child: revealed,
-            transition_duration: REASONING_LINE_TRANSITION_MS,
+            transition_duration: transitionDurationMs,
             transition_type: animationsEnabled()
                 ? Gtk.RevealerTransitionType.SLIDE_UP
                 : Gtk.RevealerTransitionType.NONE,
@@ -207,7 +263,9 @@ export function createReasoningPreviewLabel(options = {}) {
 
         transitionRunning = false;
         syncRows();
-        if (displayedLineCount < latestLines.length)
+        if (finishRequested && displayedLineCount < latestLines.length)
+            rebuildRows();
+        else if (displayedLineCount < latestLines.length)
             advanceOneLine();
         else
             resolveFinished();
@@ -224,19 +282,38 @@ export function createReasoningPreviewLabel(options = {}) {
             return;
         }
 
+        const pendingLineCount = latestLines.length - displayedLineCount;
+        const transitionPlan = reasoningTransitionPlan(pendingLineCount, {
+            finishing: finishRequested,
+            pressure: latestStreamPressure,
+        });
+
+        if (transitionPlan.skippedLineCount > 0) {
+            rebuildRows(displayedLineCount + transitionPlan.skippedLineCount);
+
+            if (displayedLineCount >= latestLines.length)
+                return;
+        }
+
         syncRows();
         const outgoingRow = rows.length >= REASONING_PREVIEW_LINES ? rows[0] : null;
-        const incomingRow = createRow(displayedLineCount, false);
+        const incomingRow = createRow(
+            displayedLineCount,
+            false,
+            transitionPlan.transitionDurationMs,
+        );
 
         transitionRunning = true;
         transitionCount++;
         displayedLineCount++;
-        if (outgoingRow)
+        if (outgoingRow) {
+            outgoingRow.revealer.set_transition_duration(transitionPlan.transitionDurationMs);
             outgoingRow.revealer.set_reveal_child(false);
+        }
         incomingRow.revealer.set_reveal_child(true);
         transitionSourceId = GLib.timeout_add(
             GLib.PRIORITY_DEFAULT,
-            REASONING_LINE_TRANSITION_MS + 20,
+            transitionPlan.transitionDurationMs + 20,
             () => {
                 transitionSourceId = 0;
                 finishLineAdvance(outgoingRow);
@@ -245,28 +322,20 @@ export function createReasoningPreviewLabel(options = {}) {
         );
     };
 
-    container.add_css_class('cusco-reasoning-preview');
-    container.set_overflow(Gtk.Overflow.HIDDEN);
-    container.set_visible(false);
-    container.connect('notify::mapped', () => {
-        if (container.get_mapped())
-            return;
-
-        if (transitionRunning)
-            rebuildRows();
-        resolveFinished();
-    });
-    container.updateReasoningPreview = (text) => {
-        const preview = reasoningPreviewText(text);
+    const applyPreview = (preview, state = {}) => {
         const model = markdownToPangoRenderModel(stabilizeStreamingMarkdown(preview));
         const nextLines = preview ? measuredReasoningLines(container, model.plainText) : [];
         const extendsCurrentPreview = preview.startsWith(currentPreview);
 
         currentPreview = preview;
+        latestStreamPressure = state.animationPressure ?? 0;
         latestLines = nextLines;
         container.set_visible(Boolean(preview));
 
-        if (!initialized || !extendsCurrentPreview || nextLines.length < displayedLineCount) {
+        if (state.animate === false
+            || !initialized
+            || !extendsCurrentPreview
+            || nextLines.length < displayedLineCount) {
             initialized = true;
             rebuildRows();
             return preview;
@@ -280,6 +349,76 @@ export function createReasoningPreviewLabel(options = {}) {
 
         return preview;
     };
+    const ensureSmoother = () => {
+        if (smoother || !streamPresentationAllowed())
+            return smoother;
+
+        smoother = new StreamingTextSmoother({
+            initialText: currentPreview,
+            intervalMs: options.streamRevealIntervalMs,
+            idleFlushMs: options.streamIdleFlushMs,
+            onUpdate: (visibleText, state) => applyPreview(visibleText, state),
+        });
+        return smoother;
+    };
+    const disposeSmoother = () => {
+        smoother?.dispose();
+        smoother = null;
+    };
+    const revealCanonicalPreview = () => {
+        disposeSmoother();
+        applyPreview(targetPreview, {
+            animate: false,
+            animationPressure: 1,
+        });
+    };
+    const finishLineTransitions = (finishOptions = {}) => {
+        if (finishOptions.flush) {
+            finishRequested = true;
+            rebuildRows();
+            return Promise.resolve();
+        }
+
+        if (!transitionRunning && displayedLineCount >= latestLines.length)
+            return Promise.resolve();
+
+        finishRequested = true;
+        const promise = new Promise((resolve) => {
+            finishResolvers.push(resolve);
+        });
+
+        if (!transitionRunning)
+            advanceOneLine();
+
+        return promise;
+    };
+
+    container.add_css_class('cusco-reasoning-preview');
+    container.set_overflow(Gtk.Overflow.HIDDEN);
+    container.set_visible(false);
+    container.connect('notify::mapped', () => {
+        if (container.get_mapped()) {
+            wasMapped = true;
+            return;
+        }
+
+        if (wasMapped)
+            revealCanonicalPreview();
+        resolveFinished();
+    });
+    container.updateReasoningPreview = (text) => {
+        targetPreview = reasoningPreviewText(text);
+        finishRequested = false;
+        container.set_visible(Boolean(targetPreview));
+
+        if (!targetPreview || !streamPresentationAllowed()) {
+            revealCanonicalPreview();
+            return targetPreview;
+        }
+
+        ensureSmoother()?.push(targetPreview);
+        return targetPreview;
+    };
     container.setStreamPreferences = (streamOptions = {}) => {
         if (Object.hasOwn(streamOptions, 'streamAnimationStyle'))
             streamAnimationPreference = streamOptions.streamAnimationStyle;
@@ -287,21 +426,33 @@ export function createReasoningPreviewLabel(options = {}) {
         if (Object.hasOwn(streamOptions, 'motionEnabled'))
             motionEnabled = streamOptions.motionEnabled;
 
-        if (!animationsEnabled() && transitionRunning)
-            rebuildRows();
+        if (!streamPresentationAllowed()) {
+            revealCanonicalPreview();
+        } else if (targetPreview !== currentPreview) {
+            ensureSmoother()?.push(targetPreview);
+        }
     };
-    container.finishReasoningPreview = () => {
-        if (!transitionRunning && displayedLineCount >= latestLines.length)
-            return Promise.resolve();
+    container.finishReasoningPreview = async (finishOptions = {}) => {
+        if (finishOptions.flush) {
+            smoother?.flush();
+            disposeSmoother();
 
-        return new Promise((resolve) => {
-            finishResolvers.push(resolve);
-        });
+            if (currentPreview !== targetPreview)
+                applyPreview(targetPreview, { animate: false, animationPressure: 1 });
+
+            await finishLineTransitions({ flush: true });
+            return;
+        }
+
+        await smoother?.finish();
+        disposeSmoother();
+        await finishLineTransitions();
     };
     container.getReasoningPreviewLines = () => rows.map((row) => (
         latestLines[row.lineIndex] ?? ''
     ));
     container.getReasoningLineTransitionCount = () => transitionCount;
+    container.getReasoningPreviewText = () => currentPreview;
     container.getReasoningLineTransitionType = () => (
         animationsEnabled()
             ? Gtk.RevealerTransitionType.SLIDE_UP

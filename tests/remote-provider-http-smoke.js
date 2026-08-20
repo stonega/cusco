@@ -744,10 +744,12 @@ if (listening) {
                 },
             ],
         });
-        const deepSeekChunks = textChunks(deepSeekEvents);
-
         assertEqual(sawDeepSeekResponsesRequest, true, 'DeepSeek Responses request shape');
-        assertEqual(deepSeekChunks.join(''), 'DeepSeek stream', 'DeepSeek Responses streamed text');
+        assertEqual(
+            resolvedText(deepSeekEvents),
+            'DeepSeek stream',
+            'DeepSeek Responses resolved text excludes reasoning',
+        );
         assertEqual(
             deepSeekEvents.find((chunk) => chunk?.type === 'reasoning')?.text,
             'DeepSeek thought',

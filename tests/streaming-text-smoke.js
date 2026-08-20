@@ -11,7 +11,14 @@ function assert(condition, message) {
 
 function createScheduler() {
     let nextId = 1;
+    let currentTime = 0;
     const pending = new Map();
+
+    const nextPending = () => Array.from(pending.entries()).sort(
+        ([firstId, first], [secondId, second]) => (
+            first.dueAt - second.dueAt || firstId - secondId
+        ),
+    )[0] ?? null;
 
     return {
         cancel(id) {
@@ -21,21 +28,31 @@ function createScheduler() {
             let count = 0;
 
             while (pending.size > 0 && count < limit) {
-                const [id, callback] = pending.entries().next().value;
+                const [id, scheduled] = nextPending();
                 pending.delete(id);
-                callback();
+                currentTime = scheduled.dueAt;
+                scheduled.callback();
                 count++;
             }
 
             if (pending.size > 0)
                 throw new Error('Streaming scheduler did not settle');
+
+            return count;
         },
+        now: () => currentTime,
         get size() {
             return pending.size;
         },
-        schedule(_milliseconds, callback) {
+        get time() {
+            return currentTime;
+        },
+        schedule(milliseconds, callback) {
             const id = nextId++;
-            pending.set(id, callback);
+            pending.set(id, {
+                callback,
+                dueAt: currentTime + Math.max(0, Number(milliseconds) || 0),
+            });
             return id;
         },
     };
@@ -86,6 +103,7 @@ const updates = [];
 const smoother = new StreamingTextSmoother({
     schedule: scheduler.schedule,
     cancel: scheduler.cancel,
+    now: scheduler.now,
     onUpdate: (text, state) => updates.push({ text, state }),
 });
 
@@ -97,8 +115,34 @@ scheduler.drain();
 assert(smoother.visibleText === smoothTarget, 'Idle reveal did not reach the target');
 assert(updates.every((entry) => entry.text.endsWith(entry.state.addedText)), 'Reveal update metadata is inconsistent');
 assert(
-    updates.every((entry) => streamRevealUnits(entry.state.addedText).length <= 1),
-    'Normal streaming batched multiple reveal pieces into one update',
+    updates.some((entry) => entry.state.revealUnitCount > 1),
+    'A buffered response did not accelerate into phrase-sized reveal batches',
+);
+assert(
+    updates.every((entry) => entry.state.revealUnitCount <= 24),
+    'Normal catch-up exceeded the configured reveal batch limit',
+);
+
+const pacedScheduler = createScheduler();
+const pacedUpdates = [];
+const paced = new StreamingTextSmoother({
+    schedule: pacedScheduler.schedule,
+    cancel: pacedScheduler.cancel,
+    now: pacedScheduler.now,
+    onUpdate: (_text, state) => pacedUpdates.push(state),
+});
+let pacedTarget = '';
+
+for (const word of ['A', 'small', 'queue', 'keeps', 'natural', 'pacing']) {
+    pacedTarget += `${word} `;
+    paced.push(pacedTarget);
+    pacedScheduler.drain();
+}
+
+assert(paced.visibleText === pacedTarget, 'Naturally paced stream did not reach its target');
+assert(
+    pacedUpdates.every((state) => state.revealUnitCount === 1),
+    'A small provider queue stopped revealing one unit at a time',
 );
 
 const placeholderScheduler = createScheduler();
@@ -106,6 +150,7 @@ const placeholder = new StreamingTextSmoother({
     initialText: ' ',
     schedule: placeholderScheduler.schedule,
     cancel: placeholderScheduler.cancel,
+    now: placeholderScheduler.now,
 });
 placeholder.push('First streamed words');
 assert(placeholder.visibleText !== 'First streamed words', 'Initial placeholder caused an immediate replacement');
@@ -117,6 +162,7 @@ let replacementState = null;
 const replacement = new StreamingTextSmoother({
     schedule: replacementScheduler.schedule,
     cancel: replacementScheduler.cancel,
+    now: replacementScheduler.now,
     onUpdate: (_text, state) => {
         replacementState = state;
     },
@@ -143,6 +189,7 @@ const queuedCorrectionUpdates = [];
 const queuedCorrection = new StreamingTextSmoother({
     schedule: queuedCorrectionScheduler.schedule,
     cancel: queuedCorrectionScheduler.cancel,
+    now: queuedCorrectionScheduler.now,
     onUpdate: (text, state) => queuedCorrectionUpdates.push({ text, state }),
 });
 queuedCorrection.push('Shared introduction followed by a draft response tail');
@@ -163,15 +210,16 @@ assert(
 );
 assert(
     queuedCorrectionUpdates.every((entry) => (
-        streamRevealUnits(entry.state.addedText).length <= 1
+        entry.state.revealUnitCount <= 24
     )),
-    'Corrected queued content batched multiple reveal pieces into one update',
+    'Corrected queued content exceeded the reveal batch limit',
 );
 
 const quotedCjkScheduler = createScheduler();
 const quotedCjk = new StreamingTextSmoother({
     schedule: quotedCjkScheduler.schedule,
     cancel: quotedCjkScheduler.cancel,
+    now: quotedCjkScheduler.now,
 });
 const quotedCjkPrefix = '2020《信条》（Tenet）：围绕';
 
@@ -197,22 +245,86 @@ const finishUpdates = [];
 const finishing = new StreamingTextSmoother({
     schedule: finishScheduler.schedule,
     cancel: finishScheduler.cancel,
+    now: finishScheduler.now,
     onUpdate: (_text, state) => finishUpdates.push(state),
 });
 finishing.push('One two three four five six seven eight nine ten');
 const finishPromise = finishing.finish();
+const finishStartedAt = finishScheduler.time;
 finishScheduler.drain();
 await finishPromise;
 assert(finishing.visibleText === finishing.targetText, 'Finishing did not drain the complete response');
 assert(
-    finishUpdates.every((state) => streamRevealUnits(state.addedText).length <= 1),
-    'Finishing batched multiple reveal pieces into one update',
+    finishUpdates.some((state) => state.revealUnitCount > 1),
+    'Finishing did not accelerate the remaining reveal queue',
+);
+assert(
+    finishScheduler.time - finishStartedAt <= 180,
+    'Finishing exceeded the adaptive drain deadline',
+);
+assert(
+    finishUpdates.at(-1)?.animationPressure === 1,
+    'Finishing did not shorten the decorative tail animation',
+);
+
+const burstScheduler = createScheduler();
+const burstUpdates = [];
+const burst = new StreamingTextSmoother({
+    schedule: burstScheduler.schedule,
+    cancel: burstScheduler.cancel,
+    now: burstScheduler.now,
+    finishDrainMs: 160,
+    maxBatchUnits: 16,
+    onUpdate: (_text, state) => burstUpdates.push(state),
+});
+const burstTarget = Array.from({ length: 500 }, (_value, index) => `word${index}`).join(' ');
+
+burst.push(burstTarget);
+const burstFinishStartedAt = burstScheduler.time;
+const burstFinishPromise = burst.finish();
+
+burstScheduler.drain();
+await burstFinishPromise;
+assert(burst.visibleText === burstTarget, 'Large completion burst did not reveal canonical text');
+assert(
+    burstScheduler.time - burstFinishStartedAt <= 160,
+    'Large completion burst exceeded its hard drain budget',
+);
+assert(
+    burstUpdates.some((state) => state.revealUnitCount > 16),
+    'Large completion burst did not fast-forward its unanimated prefix',
+);
+assert(
+    burstUpdates.filter((state) => state.revealUnitCount > 16).every((state) => (
+        state.animationPressure === 1 && state.maximumAnimatedUnits <= 4
+    )),
+    'Fast-forwarded updates did not restrict animation to the final tail',
+);
+
+const flushScheduler = createScheduler();
+let flushState = null;
+const flushable = new StreamingTextSmoother({
+    schedule: flushScheduler.schedule,
+    cancel: flushScheduler.cancel,
+    now: flushScheduler.now,
+    onUpdate: (_text, state) => {
+        flushState = state;
+    },
+});
+
+flushable.push('Flush this buffered response without decorative delay');
+flushable.flush();
+assert(flushable.visibleText === flushable.targetText, 'Flush did not reveal canonical text');
+assert(
+    flushState?.animate === false && flushState.maximumAnimatedUnits === 0,
+    'Flush did not suppress decorative streaming animation',
 );
 
 const disposeScheduler = createScheduler();
 const disposable = new StreamingTextSmoother({
     schedule: disposeScheduler.schedule,
     cancel: disposeScheduler.cancel,
+    now: disposeScheduler.now,
 });
 disposable.push('Pending content remains queued');
 disposable.dispose();
@@ -222,6 +334,7 @@ const disposingFinishScheduler = createScheduler();
 const disposingFinish = new StreamingTextSmoother({
     schedule: disposingFinishScheduler.schedule,
     cancel: disposingFinishScheduler.cancel,
+    now: disposingFinishScheduler.now,
 });
 disposingFinish.push('This response is still draining');
 const disposedFinishPromise = disposingFinish.finish();

@@ -3,9 +3,133 @@ import Gio from 'gi://Gio?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
 
 import { CuscoWindow } from '../src/window.js';
+import { createAgentWorkingRow } from '../src/chat/agentActivityPresenter.js';
 import { AssistantStreamRunner } from '../src/chat/assistantStreamRunner.js';
+import { MessagePresenter } from '../src/chat/messagePresenter.js';
+import { AnimatedMessageActions } from '../src/chat/streamAnimation.js';
+import { createStreamingAssistantView } from '../src/chat/streamingAssistantView.js';
 
 const windowPrototype = CuscoWindow.prototype;
+
+const runFooterConversation = {
+    id: 'run-footer-handoff',
+    agentModeEnabled: true,
+    providerId: 'test-provider',
+    modelId: 'test-model',
+    thinkingLevel: 'medium',
+};
+const runFooterMessages = [];
+const runFooterViewCalls = [];
+const runFooterView = createStreamingAssistantView({
+    conversation: runFooterConversation,
+    options: { workingStartedAt: 123 },
+    conversations: {
+        appendMessage(_conversationId, message) {
+            runFooterMessages.push(message);
+            return message;
+        },
+        updateMessageContent(_conversationId, messageId, content) {
+            const message = runFooterMessages.find((candidate) => candidate.id === messageId);
+            message.content = content;
+            return message;
+        },
+        updateMessageMetadata(_conversationId, messageId, metadata) {
+            const message = runFooterMessages.find((candidate) => candidate.id === messageId);
+            message.metadata = metadata;
+            return message;
+        },
+    },
+    isActiveConversationId: () => true,
+    addMessage: () => ({
+        start_working(startedAt) {
+            runFooterViewCalls.push(['start', startedAt]);
+        },
+        set_loading() {
+            runFooterViewCalls.push(['loading']);
+        },
+        set_label(text) {
+            runFooterViewCalls.push(['label', text]);
+        },
+        set_run_duration(durationMilliseconds) {
+            runFooterViewCalls.push(['duration', durationMilliseconds]);
+        },
+        finish_working() {
+            runFooterViewCalls.push(['finish']);
+        },
+    }),
+});
+
+runFooterView.set_loading();
+runFooterView.set_stream_text('Final answer', 'Final answer');
+runFooterView.set_run_duration(1540.4);
+runFooterView.finish_working();
+
+if (runFooterViewCalls.map(([kind]) => kind).join(',') !== 'start,loading,label,duration,finish'
+    || runFooterViewCalls[0][1] !== 123
+    || runFooterViewCalls[3][1] !== 1540
+    || runFooterMessages[0]?.metadata?.agentRunDurationMs !== 1540) {
+    throw new Error('Completed Agent run duration did not settle the live footer before cleanup');
+}
+
+const actionMessages = [];
+let revealedActionMessage = null;
+let actionRevealCallbackCount = 0;
+let resolveActionPresentation;
+let actionPresentationSettled = false;
+const actionPresentationTail = new Promise((resolve) => {
+    resolveActionPresentation = resolve;
+});
+const actionStreamingView = createStreamingAssistantView({
+    conversation: {
+        id: 'stream-actions',
+        agentModeEnabled: false,
+        providerId: 'test-provider',
+        modelId: 'test-model',
+        thinkingLevel: 'off',
+    },
+    conversations: {
+        appendMessage(_conversationId, message) {
+            actionMessages.push(message);
+            return message;
+        },
+        updateMessageContent(_conversationId, messageId, content) {
+            const message = actionMessages.find((candidate) => candidate.id === messageId);
+            message.content = content;
+            return message;
+        },
+    },
+    isActiveConversationId: () => true,
+    addMessage: () => ({
+        set_label() {},
+        finish_stream(options = {}) {
+            options.onContentRevealed?.();
+            return actionPresentationTail;
+        },
+        show_actions(message) {
+            revealedActionMessage = message;
+        },
+    }),
+});
+
+actionStreamingView.set_stream_text('Complete answer', 'Complete answer');
+const actionPresentation = actionStreamingView.finish_stream({
+    onContentRevealed() {
+        actionRevealCallbackCount += 1;
+    },
+});
+actionPresentation.then(() => {
+    actionPresentationSettled = true;
+});
+await Promise.resolve();
+
+if (revealedActionMessage?.content !== 'Complete answer'
+    || actionRevealCallbackCount !== 1
+    || actionPresentationSettled) {
+    throw new Error('Streamed message actions waited for the visual animation tail to settle');
+}
+
+resolveActionPresentation();
+await actionPresentation;
 
 function createSyncHarness({ status, ensured, logsAppended = false, activeConversation = null }) {
     const calls = {
@@ -652,6 +776,150 @@ if (!computerOwnerCancellable.is_cancelled() || selectedChatCancellable.is_cance
     throw new Error('Emergency computer stop cancelled the selected unrelated chat');
 
 if (Gtk.init_check()) {
+    const liveWorkingRow = createAgentWorkingRow({
+        startedAt: GLib.get_monotonic_time(),
+        reducedMotionEnabled: true,
+    });
+    const liveWorkingLabel = liveWorkingRow.get_first_child();
+    const liveElapsedLabel = liveWorkingLabel?.get_next_sibling();
+
+    if (liveWorkingLabel?.get_text() !== 'Working…'
+        || !liveWorkingRow.complete?.('Worked for 1m 05s')
+        || liveWorkingLabel.get_text() !== 'Worked for 1m 05s'
+        || liveElapsedLabel?.get_visible()) {
+        throw new Error('The live Working footer did not complete in place');
+    }
+
+    liveWorkingRow.stop();
+
+    if (liveWorkingLabel.get_text() !== 'Worked for 1m 05s')
+        throw new Error('Stopping the completed Agent footer restored its live label');
+
+    const completedWorkingRow = createAgentWorkingRow({
+        completedLabel: 'Worked for 1m 05s',
+        reducedMotionEnabled: true,
+    });
+
+    if (completedWorkingRow.get_first_child()?.get_text() !== liveWorkingLabel.get_text()
+        || completedWorkingRow.get_first_child()?.get_next_sibling()?.get_visible()) {
+        throw new Error('Canonical Agent duration did not use the same stable footer presentation');
+    }
+
+    completedWorkingRow.stop();
+
+    const renderedMessages = new Gtk.Box();
+    const presenterState = {
+        _animatedWelcomeMessageIds: new Set(),
+        _conversationLoadingView: null,
+        _conversationStack: null,
+        _emptyConversationFadeTimeoutId: 0,
+        _emptyConversationPicture: null,
+        _emptyConversationState: null,
+        _emptyConversationThemeHandlerId: 0,
+        _lastAssistantMessageView: null,
+        _pendingAssistantActivityEntries: [],
+        _userMessageReferenceContents: new Set(),
+        _welcomeStreamSourceIds: new Set(),
+    };
+    let presenterStreamStyle = 'none';
+    let presenterMotionEnabled = false;
+    const messagePresenter = new MessagePresenter({
+        appSettings: {
+            codeTheme: 'Adwaita',
+            reducedMotionEnabled: true,
+        },
+        artifacts: null,
+        artifactRenderers: null,
+        conversations: {},
+        getParentWindow: () => null,
+        getState: (name) => presenterState[name],
+        setState: (name, value) => {
+            presenterState[name] = value;
+        },
+        appendMessageWidget: (widget) => renderedMessages.append(widget),
+        clearBox: (box) => {
+            while (box.get_first_child())
+                box.remove(box.get_first_child());
+        },
+        composerReferenceStyles: () => ({}),
+        confirmOpenArtifactLink() {},
+        createAttachmentPreviewCard: () => null,
+        editMessage() {},
+        exportArtifact() {},
+        openArtifactWorkspace() {},
+        openImageViewer() {},
+        regenerateFromMessage() {},
+        retryFromMessage() {},
+        branchFromMessage() {},
+        scrollToBottom() {},
+        showToast() {},
+        streamPresentationPreferences: () => ({
+            motionEnabled: () => presenterMotionEnabled,
+            streamAnimationStyle: () => presenterStreamStyle,
+        }),
+    });
+    const completedMessageView = messagePresenter._addMessage(
+        'Final answer',
+        'assistant',
+        {
+            id: 'completed-run-footer',
+            role: 'assistant',
+            content: 'Final answer',
+            metadata: { agentRunDurationMs: 65000 },
+        },
+    );
+    const completedMessageWrapper = renderedMessages.get_first_child();
+    const completedMessageBubble = completedMessageWrapper?.get_first_child();
+    const completedMessageFooter = completedMessageBubble?.get_last_child();
+    const completedMessageActions = completedMessageWrapper?.get_last_child();
+    let actionDurationLabelFound = false;
+
+    for (let child = completedMessageActions?.get_first_child(); child; child = child.get_next_sibling()) {
+        if (child.has_css_class('cusco-message-run-duration'))
+            actionDurationLabelFound = true;
+    }
+
+    if (completedMessageFooter?.get_parent() !== completedMessageBubble
+        || !completedMessageFooter.has_css_class('cusco-agent-working')
+        || completedMessageFooter.get_first_child()?.get_text() !== 'Worked for 1m 05s'
+        || completedMessageFooter.get_first_child()?.get_next_sibling()?.get_visible()
+        || actionDurationLabelFound) {
+        throw new Error('Canonical Agent duration was not kept in the streaming footer position');
+    }
+
+    completedMessageView.remove();
+
+    presenterStreamStyle = 'slideUp';
+    presenterMotionEnabled = true;
+    const streamingActionView = messagePresenter._addMessage('', 'assistant');
+
+    streamingActionView.set_label('Completed streamed answer');
+    streamingActionView.show_actions({
+        id: 'streamed-action-motion',
+        role: 'assistant',
+        content: 'Completed streamed answer',
+    });
+    const streamingActionWrapper = renderedMessages.get_first_child();
+    const streamingActions = streamingActionWrapper?.get_last_child();
+
+    if (!(streamingActions instanceof AnimatedMessageActions)
+        || streamingActions._animationStyle !== 'slideUp'
+        || !streamingActions._entranceActive) {
+        throw new Error('Live assistant actions did not inherit the selected stream motion');
+    }
+
+    streamingActionView.set_stream_preferences({
+        streamAnimationStyle: () => 'blurIn',
+        motionEnabled: () => false,
+    });
+
+    if (streamingActions._animationStyle !== 'blurIn'
+        || streamingActions._entranceActive) {
+        throw new Error('Reduced motion did not settle the live assistant actions immediately');
+    }
+
+    streamingActionView.remove();
+
     let busyConversationId = '';
     const widgetHarness = {
         _isCronConversation() {

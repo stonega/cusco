@@ -107,18 +107,23 @@ export function createStreamingAssistantView({
         assistantMessage = storedMessage;
     };
     const updatePersistentRunDuration = (durationMilliseconds) => {
+        const normalizedDuration = Math.max(
+            0,
+            Math.round(Number(durationMilliseconds) || 0),
+        );
         const message = ensureMessage(currentText);
         const storedMessage = conversations.updateMessageMetadata(
             conversation.id,
             message.id,
             {
                 ...message.metadata,
-                agentRunDurationMs: Math.max(0, Math.round(Number(durationMilliseconds) || 0)),
+                agentRunDurationMs: normalizedDuration,
             },
             { persist: false },
         );
 
         assistantMessage = storedMessage;
+        ensureView()?.set_run_duration?.(normalizedDuration);
     };
     const updatePersistentProviderContext = (providerParts) => {
         if (!Array.isArray(providerParts) || providerParts.length === 0)
@@ -150,7 +155,13 @@ export function createStreamingAssistantView({
         set_status: (text) => ensureView()?.set_status(text),
         clear_status: () => view?.clear_loading?.(),
         finish_working: () => view?.finish_working?.(),
-        finish_stream: (finishOptions) => view?.finish_stream?.(finishOptions),
+        finish_stream: (finishOptions = {}) => view?.finish_stream?.({
+            ...finishOptions,
+            onContentRevealed: () => {
+                view?.show_actions?.(assistantMessage);
+                finishOptions.onContentRevealed?.();
+            },
+        }),
         set_stream_preferences: (streamOptions) => view?.set_stream_preferences?.(streamOptions),
         persist: () => conversations.persist(),
         remove: () => view?.remove?.(),

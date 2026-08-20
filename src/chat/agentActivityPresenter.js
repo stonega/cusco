@@ -94,6 +94,7 @@ export function createAgentWorkingRow(options = {}) {
     const normalizedStartedAt = Number.isFinite(startedAt)
         ? startedAt
         : GLib.get_monotonic_time();
+    const completedLabel = String(options.completedLabel ?? '').trim();
     const row = new Gtk.Box({
         orientation: Gtk.Orientation.HORIZONTAL,
         spacing: 6,
@@ -114,10 +115,37 @@ export function createAgentWorkingRow(options = {}) {
         reducedMotionEnabled: options.reducedMotionEnabled,
     });
     let elapsedSourceId = 0;
+    let completed = false;
 
     const updateElapsed = () => {
         const elapsedSeconds = (GLib.get_monotonic_time() - normalizedStartedAt) / 1000000;
         elapsedLabel.set_label(formatRunningTime(elapsedSeconds));
+    };
+    const stopElapsed = () => {
+        if (!elapsedSourceId)
+            return;
+
+        GLib.Source.remove(elapsedSourceId);
+        elapsedSourceId = 0;
+    };
+    const complete = (nextLabel) => {
+        const normalizedLabel = String(nextLabel ?? '').trim();
+
+        if (!normalizedLabel)
+            return false;
+
+        stopElapsed();
+
+        if (!completed)
+            shimmer.stop();
+
+        completed = true;
+        workingLabel.set_label(normalizedLabel);
+        workingLabel.remove_css_class('cusco-agent-working-label');
+        workingLabel.add_css_class('dim-label');
+        workingLabel.set_tooltip_text('Agent run duration');
+        elapsedLabel.set_visible(false);
+        return true;
     };
 
     row.add_css_class('cusco-agent-working');
@@ -128,25 +156,28 @@ export function createAgentWorkingRow(options = {}) {
     row.append(workingLabel);
     row.append(elapsedLabel);
 
-    shimmer.set('Working…', true);
-    updateElapsed();
-    elapsedSourceId = GLib.timeout_add(
-        GLib.PRIORITY_DEFAULT,
-        1000,
-        () => {
-            updateElapsed();
-            return GLib.SOURCE_CONTINUE;
-        },
-    );
+    if (completedLabel) {
+        complete(completedLabel);
+    } else {
+        shimmer.set('Working…', true);
+        updateElapsed();
+        elapsedSourceId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT,
+            1000,
+            () => {
+                updateElapsed();
+                return GLib.SOURCE_CONTINUE;
+            },
+        );
+    }
 
     row.stop = () => {
-        if (elapsedSourceId) {
-            GLib.Source.remove(elapsedSourceId);
-            elapsedSourceId = 0;
-        }
+        stopElapsed();
 
-        shimmer.stop();
+        if (!completed)
+            shimmer.stop();
     };
+    row.complete = complete;
 
     return row;
 }
@@ -228,6 +259,13 @@ export class AgentActivityPresenter {
     _createAgentWorkingRow(startedAt = GLib.get_monotonic_time()) {
         return createAgentWorkingRow({
             startedAt,
+            reducedMotionEnabled: () => this._appSettings.reducedMotionEnabled,
+        });
+    }
+
+    _createAgentCompletedRow(label) {
+        return createAgentWorkingRow({
+            completedLabel: label,
             reducedMotionEnabled: () => this._appSettings.reducedMotionEnabled,
         });
     }
@@ -392,6 +430,9 @@ export class AgentActivityPresenter {
         container.clearPreview = () => {
             loadingPreviewActive = false;
             previewCollapsedByUser = false;
+            previewLabel?.finishReasoningPreview({ flush: true })?.catch((error) => {
+                logError(error, 'Failed to flush reasoning preview');
+            });
             previewLabel?.set_visible(false);
             revealer.set_reveal_child(false);
             updateExpandedState(false);
@@ -399,8 +440,8 @@ export class AgentActivityPresenter {
         container.setStreamPreferences = (streamOptions) => {
             previewLabel?.setStreamPreferences(streamOptions);
         };
-        container.finishPreviewAnimation = () => (
-            previewLabel?.finishReasoningPreview() ?? Promise.resolve()
+        container.finishPreviewAnimation = (finishOptions) => (
+            previewLabel?.finishReasoningPreview(finishOptions) ?? Promise.resolve()
         );
         return container;
     }

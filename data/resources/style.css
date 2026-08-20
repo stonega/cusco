@@ -387,7 +387,6 @@
 }
 
 .cusco-message-bubble {
-    padding: 10px 14px;
     border-radius: 10px;
 }
 
@@ -402,6 +401,7 @@
 }
 
 .cusco-message-user {
+    padding: 10px 14px;
     background-color: @accent_bg_color;
     color: @accent_fg_color;
 }
@@ -447,8 +447,10 @@
     opacity: 0.74;
 }
 
-.cusco-message-run-duration {
-    margin-left: 4px;
+.cusco-message-actions button {
+    min-width: 26px;
+    min-height: 26px;
+    padding: 0;
 }
 
 .cusco-agent-question-panel {

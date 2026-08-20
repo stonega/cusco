@@ -2477,7 +2477,9 @@ export function extractOpenAiText(response) {
 
     const outputItems = response.output ?? [];
     const text = outputItems
+        .filter((item) => item?.type !== 'reasoning')
         .flatMap((item) => item.content ?? [])
+        .filter((content) => content?.type !== 'reasoning_text')
         .map((content) => content.text ?? content.output_text ?? '')
         .join('');
 

@@ -13,6 +13,8 @@ import {
 const UTF8_ENCODER = new TextEncoder();
 export const DEFAULT_STREAM_ANIMATION_DURATION_MS = 200;
 export const DEFAULT_STREAM_ANIMATION_STAGGER_MS = 28;
+const PRESSURED_STREAM_ANIMATION_DURATION_MS = 120;
+const PRESSURED_STREAM_ANIMATION_STAGGER_MS = 5;
 const MAX_ANIMATION_STAGGER_MS = 168;
 const MAX_ACTIVE_ANIMATION_RANGES = 32;
 const BLUR_RADIUS_PX = 4;
@@ -20,6 +22,14 @@ const SLIDE_OFFSET_PX = 4;
 
 function utf8Length(value) {
     return UTF8_ENCODER.encode(String(value ?? '')).length;
+}
+
+function clamp(value, minimum, maximum) {
+    return Math.max(minimum, Math.min(maximum, value));
+}
+
+function interpolate(first, second, progress) {
+    return first + (second - first) * progress;
 }
 
 function rangesOverlap(first, second) {
@@ -33,6 +43,30 @@ function isExcluded(range, excludedRanges) {
 function easeOutCubic(value) {
     const progress = Math.max(0, Math.min(1, value));
     return 1 - Math.pow(1 - progress, 3);
+}
+
+export function streamEntranceFrame(style, value) {
+    const normalizedStyle = normalizeStreamAnimationStyle(style);
+
+    if (normalizedStyle === 'none') {
+        return {
+            opacity: 1,
+            translationY: 0,
+            blurRadius: 0,
+        };
+    }
+
+    const progress = easeOutCubic(value);
+
+    return {
+        opacity: progress,
+        translationY: normalizedStyle === 'slideUp'
+            ? SLIDE_OFFSET_PX * (1 - progress)
+            : 0,
+        blurRadius: normalizedStyle === 'blurIn'
+            ? BLUR_RADIUS_PX * (1 - progress)
+            : 0,
+    };
 }
 
 function mergeByteRanges(ranges, textLength) {
@@ -200,6 +234,7 @@ class AnimatedMarkdownLabel extends Gtk.Label {
         this._motionEnabled = () => true;
         this._plainText = '';
         this._activeRanges = [];
+        this._maximumNewAnimationRanges = MAX_ACTIVE_ANIMATION_RANGES;
         this._tickCallbackId = 0;
         this._animationResolvers = [];
     }
@@ -213,14 +248,33 @@ class AnimatedMarkdownLabel extends Gtk.Label {
         this._animationStyle = normalizeStreamAnimationStyle(options.style ?? 'none');
         const durationMs = Number(options.durationMs);
         const staggerMs = Number(options.staggerMs);
-        this._animationDurationMs = Math.max(
+        const baseDurationMs = Math.max(
             1,
             Number.isFinite(durationMs) ? durationMs : DEFAULT_STREAM_ANIMATION_DURATION_MS,
         );
-        this._animationStaggerMs = Math.max(
+        const baseStaggerMs = Math.max(
             0,
             Number.isFinite(staggerMs) ? staggerMs : DEFAULT_STREAM_ANIMATION_STAGGER_MS,
         );
+        const pressureValue = Number(options.pressure);
+        const pressure = Number.isFinite(pressureValue)
+            ? clamp(pressureValue, 0, 1)
+            : 0;
+        const maximumAnimatedUnits = Number(options.maximumAnimatedUnits);
+
+        this._animationDurationMs = interpolate(
+            baseDurationMs,
+            Math.min(baseDurationMs, PRESSURED_STREAM_ANIMATION_DURATION_MS),
+            pressure,
+        );
+        this._animationStaggerMs = interpolate(
+            baseStaggerMs,
+            Math.min(baseStaggerMs, PRESSURED_STREAM_ANIMATION_STAGGER_MS),
+            pressure,
+        );
+        this._maximumNewAnimationRanges = Number.isFinite(maximumAnimatedUnits)
+            ? Math.max(0, Math.floor(maximumAnimatedUnits))
+            : MAX_ACTIVE_ANIMATION_RANGES;
         this._motionEnabled = options.motionEnabled ?? (() => true);
 
         if (!this._animationsEnabled())
@@ -254,6 +308,15 @@ class AnimatedMarkdownLabel extends Gtk.Label {
         if (ranges.length === 0)
             return;
 
+        if (this._maximumNewAnimationRanges === 0)
+            return;
+
+        if (ranges.length > this._maximumNewAnimationRanges)
+            ranges = ranges.slice(-this._maximumNewAnimationRanges);
+
+        if (ranges.length === 0)
+            return;
+
         const now = GLib.get_monotonic_time();
         const nextTextBytes = utf8Length(nextPlainText);
         this._activeRanges = this._activeRanges.filter((range) => range.end <= nextTextBytes);
@@ -277,6 +340,7 @@ class AnimatedMarkdownLabel extends Gtk.Label {
                     index * this._animationStaggerMs,
                     MAX_ANIMATION_STAGGER_MS,
                 ) * 1000,
+                durationUs: this._animationDurationMs * 1000,
             });
         });
         this._ensureAnimationTick();
@@ -329,9 +393,8 @@ class AnimatedMarkdownLabel extends Gtk.Label {
 
         this._tickCallbackId = this.add_tick_callback((_widget, frameClock) => {
             const now = frameClock.get_frame_time();
-            const durationUs = this._animationDurationMs * 1000;
             this._activeRanges = this._activeRanges.filter((range) => (
-                now < range.startTime + durationUs
+                now < range.startTime + range.durationUs
             ));
             this.queue_draw();
 
@@ -364,7 +427,6 @@ class AnimatedMarkdownLabel extends Gtk.Label {
         const [layoutX, layoutY] = this.get_layout_offsets();
         const color = this.get_color();
         const now = GLib.get_monotonic_time();
-        const durationUs = this._animationDurationMs * 1000;
         const textLength = utf8Length(layout.get_text());
         const lines = layoutLineMetrics(layout);
         const layoutPoint = new Graphene.Point();
@@ -382,32 +444,172 @@ class AnimatedMarkdownLabel extends Gtk.Label {
         snapshot.restore();
 
         for (const range of this._activeRanges) {
-            const progress = easeOutCubic((now - range.startTime) / durationUs);
+            const frame = streamEntranceFrame(
+                this._animationStyle,
+                (now - range.startTime) / range.durationUs,
+            );
             const translation = new Graphene.Point();
             translation.init(
                 layoutX,
-                layoutY + (this._animationStyle === 'slideUp'
-                    ? SLIDE_OFFSET_PX * (1 - progress)
-                    : 0),
+                layoutY + frame.translationY,
             );
             snapshot.save();
             snapshot.translate(translation);
-            snapshot.push_opacity(progress);
+            snapshot.push_opacity(frame.opacity);
 
-            const blurRadius = this._animationStyle === 'blurIn'
-                ? BLUR_RADIUS_PX * (1 - progress)
-                : 0;
-
-            if (blurRadius > 0.01)
-                snapshot.push_blur(blurRadius);
+            if (frame.blurRadius > 0.01)
+                snapshot.push_blur(frame.blurRadius);
 
             appendClippedLayout(snapshot, layout, color, [range], lines);
 
-            if (blurRadius > 0.01)
+            if (frame.blurRadius > 0.01)
                 snapshot.pop();
 
             snapshot.pop();
             snapshot.restore();
         }
+    }
+});
+
+export const AnimatedMessageActions = GObject.registerClass(
+class AnimatedMessageActions extends Gtk.Box {
+    _init(properties = {}) {
+        super._init(properties);
+        this._animationStyle = 'none';
+        this._animationDurationMs = DEFAULT_STREAM_ANIMATION_DURATION_MS;
+        this._motionEnabled = () => true;
+        this._entranceActive = false;
+        this._animationStartTime = null;
+        this._tickCallbackId = 0;
+        this._animationResolvers = [];
+    }
+
+    vfunc_unmap() {
+        this.finishEntranceAnimation();
+        super.vfunc_unmap();
+    }
+
+    configureStreamAnimation(options = {}) {
+        let style = options.style ?? 'none';
+
+        try {
+            if (typeof style === 'function')
+                style = style();
+        } catch (_error) {
+            style = 'none';
+        }
+
+        this._animationStyle = normalizeStreamAnimationStyle(style);
+        const durationMs = Number(options.durationMs);
+        this._animationDurationMs = Math.max(
+            1,
+            Number.isFinite(durationMs) ? durationMs : DEFAULT_STREAM_ANIMATION_DURATION_MS,
+        );
+        this._motionEnabled = typeof options.motionEnabled === 'function'
+            ? options.motionEnabled
+            : () => options.motionEnabled !== false;
+
+        if (!this._animationsEnabled())
+            this.finishEntranceAnimation();
+    }
+
+    startEntranceAnimation() {
+        this.finishEntranceAnimation();
+
+        if (!this._animationsEnabled())
+            return false;
+
+        this._entranceActive = true;
+        this._animationStartTime = null;
+        this._tickCallbackId = this.add_tick_callback((_widget, frameClock) => {
+            const now = frameClock.get_frame_time();
+
+            this._animationStartTime ??= now;
+            this.queue_draw();
+
+            if (now < this._animationStartTime + (this._animationDurationMs * 1000))
+                return GLib.SOURCE_CONTINUE;
+
+            this._entranceActive = false;
+            this._animationStartTime = null;
+            this._tickCallbackId = 0;
+            this._resolveAnimations();
+            return GLib.SOURCE_REMOVE;
+        });
+        this.queue_draw();
+        return true;
+    }
+
+    finishEntranceAnimation() {
+        this._entranceActive = false;
+        this._animationStartTime = null;
+
+        if (this._tickCallbackId) {
+            this.remove_tick_callback(this._tickCallbackId);
+            this._tickCallbackId = 0;
+        }
+
+        this.queue_draw();
+        this._resolveAnimations();
+    }
+
+    waitForEntranceAnimation() {
+        if (!this._entranceActive)
+            return Promise.resolve();
+
+        return new Promise((resolve) => {
+            this._animationResolvers.push(resolve);
+        });
+    }
+
+    _animationsEnabled() {
+        if (this._animationStyle === 'none' || !this._motionEnabled())
+            return false;
+
+        try {
+            return Adw.get_enable_animations(this);
+        } catch (_error) {
+            return true;
+        }
+    }
+
+    _resolveAnimations() {
+        const resolvers = this._animationResolvers.splice(0);
+
+        for (const resolve of resolvers)
+            resolve();
+    }
+
+    vfunc_snapshot(snapshot) {
+        if (!this._entranceActive || !this._animationsEnabled()) {
+            if (this._entranceActive)
+                this.finishEntranceAnimation();
+
+            super.vfunc_snapshot(snapshot);
+            return;
+        }
+
+        const now = GLib.get_monotonic_time();
+        const progress = this._animationStartTime === null
+            ? 0
+            : (now - this._animationStartTime) / (this._animationDurationMs * 1000);
+        const frame = streamEntranceFrame(this._animationStyle, progress);
+        const translation = new Graphene.Point();
+
+        translation.init(0, frame.translationY);
+        snapshot.save();
+        snapshot.translate(translation);
+        snapshot.push_opacity(frame.opacity);
+
+        if (frame.blurRadius > 0.01)
+            snapshot.push_blur(frame.blurRadius);
+
+        super.vfunc_snapshot(snapshot);
+
+        if (frame.blurRadius > 0.01)
+            snapshot.pop();
+
+        snapshot.pop();
+        snapshot.restore();
     }
 });

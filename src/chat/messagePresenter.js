@@ -9,6 +9,7 @@ import {
     copyTextToClipboard,
     createMessageContent,
 } from './messageView.js';
+import { AnimatedMessageActions } from './streamAnimation.js';
 import {
     isWelcomeMessage,
     welcomeStreamFrame,
@@ -189,6 +190,10 @@ export class MessagePresenter {
         return this._agentActivityPresenter._createAgentWorkingRow(startedAt);
     }
 
+    _createAgentCompletedRow(label) {
+        return this._agentActivityPresenter._createAgentCompletedRow(label);
+    }
+
     _createKnotStatusRow(text = '', options = {}) {
         return this._agentActivityPresenter._createKnotStatusRow(text, options);
     }
@@ -328,7 +333,13 @@ export class MessagePresenter {
         const reasoningText = kind === 'assistant'
             ? getMessageReasoningContent(message)
             : '';
+        const completedRunDuration = kind === 'assistant'
+            ? messageRunDurationLabel(message)
+            : '';
         const isStreamingAssistant = kind === 'assistant' && !message;
+        let actionStreamPreferences = isStreamingAssistant
+            ? this._streamPresentationPreferences()
+            : {};
         let reasoningContent = null;
         let reasoningExpander = null;
         let reasoningBodyText = reasoningText || ' ';
@@ -391,6 +402,7 @@ export class MessagePresenter {
         let currentBodyText = String(initialDisplayBody ?? '');
         let loadingRow = null;
         let workingRow = null;
+        let workingCompletionLabel = '';
         let hasToolResults = false;
 
         if ((isStreamingAssistant || imageAttachmentPreviews) && !currentBodyText)
@@ -433,14 +445,40 @@ export class MessagePresenter {
             if (!isStreamingAssistant || workingRow)
                 return;
 
-            workingRow = this._createAgentWorkingRow(startedAt);
+            workingRow = workingCompletionLabel
+                ? this._createAgentCompletedRow(workingCompletionLabel)
+                : this._createAgentWorkingRow(startedAt);
             bubble.append(workingRow);
+        };
+        const setRunDuration = (durationMilliseconds) => {
+            const nextLabel = messageRunDurationLabel({
+                metadata: { agentRunDurationMs: durationMilliseconds },
+            });
+
+            if (!isStreamingAssistant || !nextLabel)
+                return;
+
+            workingCompletionLabel = nextLabel;
+
+            if (!workingRow) {
+                workingRow = this._createAgentCompletedRow(nextLabel);
+                bubble.append(workingRow);
+                return;
+            }
+
+            workingRow.complete?.(nextLabel);
         };
         const finishWorking = () => {
             if (!workingRow)
                 return;
 
             workingRow.stop?.();
+
+            // Keep the settled footer rooted until the canonical transcript
+            // row replaces this streaming view in the same layout position.
+            if (workingCompletionLabel)
+                return;
+
             bubble.remove(workingRow);
             workingRow = null;
         };
@@ -495,11 +533,36 @@ export class MessagePresenter {
         if (imageAttachmentPreviews && kind !== 'user')
             bubble.append(imageAttachmentPreviews);
 
+        if (completedRunDuration)
+            bubble.append(this._createAgentCompletedRow(completedRunDuration));
+
         if (currentBodyText || isStreamingAssistant || kind !== 'user')
             wrapper.append(bubble);
 
-        if (message?.id && kind !== 'system')
-            wrapper.append(this._createMessageActions(message));
+        let actions = null;
+        const configureActionAnimation = () => {
+            actions?.configureStreamAnimation?.({
+                style: actionStreamPreferences.streamAnimationStyle,
+                motionEnabled: actionStreamPreferences.motionEnabled,
+                durationMs: actionStreamPreferences.streamAnimationDurationMs,
+            });
+        };
+        const showActions = (actionMessage) => {
+            if (actions || !actionMessage?.id || kind === 'system')
+                return;
+
+            actions = this._createMessageActions(actionMessage);
+            configureActionAnimation();
+            wrapper.append(actions);
+
+            if (isStreamingAssistant)
+                actions.startEntranceAnimation?.();
+
+            if (wrapper.get_parent())
+                this._scrollToBottom();
+        };
+
+        showActions(message);
 
         this._appendMessageWidget(wrapper);
         this._scrollToBottom();
@@ -511,18 +574,37 @@ export class MessagePresenter {
             set_status: showLoading,
             clear_loading: clearLoading,
             start_working: startWorking,
+            set_run_duration: setRunDuration,
             finish_working: finishWorking,
             finish_stream: (finishOptions = {}) => {
+                const {
+                    onContentRevealed,
+                    ...presentationOptions
+                } = finishOptions;
+
                 return Promise.all([
-                    bodyContent.finishStreaming?.({ selectable: true, ...finishOptions }),
-                    reasoningContent?.finishStreaming?.({ selectable: true, ...finishOptions }),
-                    reasoningExpander?.finishPreviewAnimation?.(),
+                    bodyContent.finishStreaming?.({
+                        selectable: true,
+                        ...presentationOptions,
+                        onContentRevealed,
+                    }),
+                    reasoningContent?.finishStreaming?.({
+                        selectable: true,
+                        ...presentationOptions,
+                    }),
+                    reasoningExpander?.finishPreviewAnimation?.(presentationOptions),
                 ]);
             },
+            show_actions: showActions,
             set_stream_preferences: (streamOptions) => {
+                actionStreamPreferences = {
+                    ...actionStreamPreferences,
+                    ...streamOptions,
+                };
                 bodyContent.setStreamPreferences?.(streamOptions);
                 reasoningContent?.setStreamPreferences?.(streamOptions);
                 reasoningExpander?.setStreamPreferences?.(streamOptions);
+                configureActionAnimation();
             },
             set_reasoning: (text) => {
                 if (!reasoningExpander)
@@ -599,7 +681,7 @@ export class MessagePresenter {
     }
 
     _createMessageActions(message) {
-        const actions = new Gtk.Box({
+        const actions = new AnimatedMessageActions({
             orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 2,
             halign: message.role === 'user' ? Gtk.Align.END : Gtk.Align.START,
@@ -626,22 +708,6 @@ export class MessagePresenter {
         actions.append(this._createMessageActionButton('tab-new-symbolic', 'Branch from message', () => {
             this._branchFromMessage(message);
         }, { iconFile: GIT_BRANCH_ICON_FILE }));
-
-        const runDuration = message.role === 'assistant'
-            ? messageRunDurationLabel(message)
-            : '';
-
-        if (runDuration) {
-            const durationLabel = new Gtk.Label({
-                label: runDuration,
-                tooltip_text: 'Agent run duration',
-                valign: Gtk.Align.CENTER,
-            });
-            durationLabel.add_css_class('caption');
-            durationLabel.add_css_class('dim-label');
-            durationLabel.add_css_class('cusco-message-run-duration');
-            actions.append(durationLabel);
-        }
 
         return actions;
     }

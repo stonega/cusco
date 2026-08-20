@@ -840,6 +840,26 @@ assertEqual(extractOpenAiReasoning({
         content: [{ type: 'reasoning_text', text: 'DeepSeek reasoning' }],
     }],
 }), 'DeepSeek reasoning', 'DeepSeek reasoning content extraction');
+const separatedDeepSeekResponse = extractOpenAiResponse({
+    output: [{
+        type: 'reasoning',
+        summary: [],
+        content: [{ type: 'reasoning_text', text: 'DeepSeek reasoning' }],
+    }, {
+        type: 'message',
+        content: [{ type: 'output_text', text: 'DeepSeek answer' }],
+    }],
+});
+assertEqual(
+    separatedDeepSeekResponse.reasoning,
+    'DeepSeek reasoning',
+    'DeepSeek response keeps reasoning in its own channel',
+);
+assertEqual(
+    separatedDeepSeekResponse.text,
+    'DeepSeek answer',
+    'DeepSeek response excludes reasoning from answer text',
+);
 const openAiUsage = extractOpenAiUsage({
     usage: {
         input_tokens: 10,

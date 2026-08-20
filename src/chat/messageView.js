@@ -336,10 +336,14 @@ function createMarkdownLabel(content, options = {}) {
             motionEnabled: nextOptions.motionEnabled,
             durationMs: nextOptions.streamAnimationDurationMs,
             staggerMs: nextOptions.streamAnimationStaggerMs,
+            pressure: nextOptions.streamAnimationPressure,
+            maximumAnimatedUnits: nextOptions.streamMaximumAnimatedUnits,
         });
         label.set_selectable(nextOptions.selectable !== false);
         label.setRenderModel(markdownToPangoRenderModel(nextContent), {
-            animate: initialized && nextOptions.streaming === true,
+            animate: initialized
+                && nextOptions.streaming === true
+                && nextOptions.streamAnimateUpdate !== false,
             replace: nextOptions.streamReplace === true,
         });
         applyReferenceTextStyles(label, nextOptions.references, nextOptions.referenceStyles);
@@ -1029,6 +1033,9 @@ export function createMessageContent(body, options = {}) {
             : renderMessageContent(container, displayBody, renderingOptions);
         renderedBody = displayBody;
         renderingOptions.streamReplace = false;
+        renderingOptions.streamAnimateUpdate = true;
+        renderingOptions.streamAnimationPressure = 0;
+        delete renderingOptions.streamMaximumAnimatedUnits;
 
         if (renderingOptions.streaming)
             renderingOptions.onStreamFrame?.(displayBody);
@@ -1073,6 +1080,9 @@ export function createMessageContent(body, options = {}) {
             onUpdate: (visibleText, state) => {
                 displayBody = visibleText;
                 renderingOptions.streamReplace = state.replace;
+                renderingOptions.streamAnimateUpdate = state.animate !== false;
+                renderingOptions.streamAnimationPressure = state.animationPressure ?? 0;
+                renderingOptions.streamMaximumAnimatedUnits = state.maximumAnimatedUnits;
                 // The smoother is already the render throttle. Deferring this
                 // again can merge multiple reveal units into one visible frame.
                 requestRender(false);
@@ -1156,6 +1166,7 @@ export function createMessageContent(body, options = {}) {
             displayBody = currentBody;
             cancelQueuedRender();
             render();
+            finishOptions.onContentRevealed?.();
             await Promise.all(activeAnimationPromises());
             disposeSmoother();
             renderingOptions.streaming = false;

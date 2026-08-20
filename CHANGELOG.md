@@ -7,6 +7,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- Remove the leftover inner padding from transparent assistant messages while preserving padded user-message bubbles.
+- Adapt assistant and thinking-stream pacing to provider speed and buffered text, with bounded catch-up after completion so long responses no longer remain half-revealed.
+- Reduce the icon-button footprint beneath messages for a more compact action row.
+
+### Fixed
+
+- Keep the Agent Mode run timer in one stable footer position when a streamed response changes from “Working…” to its completed duration, preventing a duplicate-looking completion flash.
+- Keep DeepSeek Responses reasoning confined to the reasoning card instead of duplicating it at the start of the assistant answer.
+- Show assistant message actions as soon as the complete streamed text is visible, entering with the selected stream-reveal motion instead of waiting for the final word animation to settle.
+
 ## [0.5.39] - 2026-08-19
 
 ### Added
