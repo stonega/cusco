@@ -330,9 +330,12 @@ export class AgentActivityPresenter {
             spacing: 4,
             hexpand: true,
         });
+        const showLoadingPreview = options.showPreview ?? options.isActive;
         const revealer = new Gtk.Revealer({
             reveal_child: false,
-            transition_type: Gtk.RevealerTransitionType.SLIDE_DOWN,
+            transition_type: showLoadingPreview
+                ? Gtk.RevealerTransitionType.NONE
+                : Gtk.RevealerTransitionType.SLIDE_DOWN,
         });
         const headerButton = new Gtk.Button({
             halign: Gtk.Align.START,
@@ -346,7 +349,7 @@ export class AgentActivityPresenter {
             orientation: Gtk.Orientation.VERTICAL,
             hexpand: true,
         });
-        const previewLabel = (options.showPreview ?? options.isActive)
+        const previewLabel = showLoadingPreview
             ? createReasoningPreviewLabel(this._messageContentOptions())
             : null;
         const chevron = new Gtk.Image({
@@ -424,6 +427,11 @@ export class AgentActivityPresenter {
             headerButton.set_visible(!loadingPreviewActive);
             previewLabel.set_visible(hasPreview);
             if (hasPreview && !previewCollapsedByUser) {
+                if (loadingPreviewActive) {
+                    revealer.set_transition_type(
+                        Gtk.RevealerTransitionType.NONE,
+                    );
+                }
                 revealer.set_reveal_child(true);
                 updateExpandedState(true);
             }
@@ -438,7 +446,9 @@ export class AgentActivityPresenter {
                 logError(error, 'Failed to flush reasoning preview');
             });
             previewLabel?.set_visible(false);
+            revealer.set_transition_type(Gtk.RevealerTransitionType.NONE);
             revealer.set_reveal_child(false);
+            revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN);
             updateExpandedState(false);
         };
         container.setStreamPreferences = (streamOptions) => {

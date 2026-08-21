@@ -25,6 +25,11 @@ function interpolate(first, second, progress) {
     return first + (second - first) * progress;
 }
 
+function easeOutCubic(value) {
+    const progress = clamp(value, 0, 1);
+    return 1 - Math.pow(1 - progress, 3);
+}
+
 export function reasoningTransitionPlan(pendingLineCount, options = {}) {
     const pendingLines = Math.max(0, Math.floor(Number(pendingLineCount) || 0));
     const pressureValue = Number(options.pressure);
@@ -149,7 +154,8 @@ export function createReasoningPreviewLabel(options = {}) {
     let latestStreamPressure = 0;
     let finishRequested = false;
     let wasMapped = false;
-    let transitionSourceId = 0;
+    let transitionTickId = 0;
+    let transitionRow = null;
     let transitionRunning = false;
     let transitionCount = 0;
     const finishResolvers = [];
@@ -199,60 +205,75 @@ export function createReasoningPreviewLabel(options = {}) {
         for (const resolve of finishResolvers.splice(0))
             resolve();
     };
-    const cancelTransitionSource = () => {
-        if (!transitionSourceId)
-            return;
+    const cancelLineTransition = () => {
+        if (transitionTickId && transitionRow)
+            transitionRow.label.remove_tick_callback(transitionTickId);
 
-        GLib.Source.remove(transitionSourceId);
-        transitionSourceId = 0;
-    };
-    const removeRows = () => {
-        cancelTransitionSource();
+        transitionTickId = 0;
+        transitionRow?.label.set_opacity(1);
+        transitionRow = null;
         transitionRunning = false;
-
-        for (const row of rows.splice(0)) {
-            if (row.revealer.get_parent() === container)
-                container.remove(row.revealer);
-        }
     };
-    const createRow = (
-        lineIndex,
-        revealed = true,
-        transitionDurationMs = REASONING_LINE_TRANSITION_MS,
-    ) => {
-        const label = createReasoningLine(latestLines[lineIndex]);
+    const createRow = () => {
+        const label = createReasoningLine();
         const revealer = new Gtk.Revealer({
             child: label,
-            reveal_child: revealed,
-            transition_duration: transitionDurationMs,
-            transition_type: animationsEnabled()
-                ? Gtk.RevealerTransitionType.SLIDE_UP
-                : Gtk.RevealerTransitionType.NONE,
+            reveal_child: true,
+            transition_duration: 0,
+            transition_type: Gtk.RevealerTransitionType.NONE,
         });
-        const row = { label, lineIndex, revealer };
+        const row = { label, lineIndex: -1, revealer };
 
         container.append(revealer);
         rows.push(row);
         return row;
     };
     const syncRows = () => {
-        for (const row of rows)
-            row.label.set_label(latestLines[row.lineIndex] || ' ');
+        for (const row of rows) {
+            const line = row.lineIndex >= 0 ? latestLines[row.lineIndex] : '';
+            row.label.set_label(line || ' ');
+        }
     };
     const rebuildRows = (lineCount = latestLines.length) => {
-        removeRows();
+        cancelLineTransition();
         displayedLineCount = lineCount;
+        const visibleLineCount = Math.min(lineCount, REASONING_PREVIEW_LINES);
         const firstLineIndex = Math.max(0, lineCount - REASONING_PREVIEW_LINES);
 
-        for (let lineIndex = firstLineIndex; lineIndex < lineCount; lineIndex++)
-            createRow(lineIndex);
+        rows.forEach((row, index) => {
+            row.lineIndex = index < visibleLineCount
+                ? firstLineIndex + index
+                : -1;
+            row.label.set_opacity(1);
+        });
+        syncRows();
 
         resolveFinished();
     };
+    const startLineEntrance = (row, transitionDurationMs) => {
+        const startTime = GLib.get_monotonic_time();
+        const durationUs = Math.max(1, transitionDurationMs) * 1000;
+
+        row.label.set_opacity(0);
+        transitionRow = row;
+        transitionRunning = true;
+        transitionCount++;
+        transitionTickId = row.label.add_tick_callback((widget, frameClock) => {
+            const progress = (frameClock.get_frame_time() - startTime) / durationUs;
+
+            widget.set_opacity(easeOutCubic(progress));
+            if (progress < 1)
+                return GLib.SOURCE_CONTINUE;
+
+            widget.set_opacity(1);
+            transitionTickId = 0;
+            transitionRow = null;
+            finishLineAdvance();
+            return GLib.SOURCE_REMOVE;
+        });
+    };
     let advanceOneLine = null;
     const finishLineAdvance = () => {
-        cancelTransitionSource();
-
         transitionRunning = false;
         syncRows();
         if (finishRequested && displayedLineCount < latestLines.length)
@@ -288,7 +309,7 @@ export function createReasoningPreviewLabel(options = {}) {
         }
 
         syncRows();
-        const outgoingRow = rows.length >= REASONING_PREVIEW_LINES ? rows[0] : null;
+        const tickerFull = displayedLineCount >= REASONING_PREVIEW_LINES;
 
         // Once the three-line ticker is full, reuse its existing rows. Adding
         // a fourth Gtk.Revealer temporarily increases the widget's preferred
@@ -296,7 +317,7 @@ export function createReasoningPreviewLabel(options = {}) {
         // bottom-following transcript jump up and then back down. A full
         // ticker updates frequently enough that an instant in-place rotation
         // is also clearer than continuously animating its layout.
-        if (outgoingRow) {
+        if (tickerFull) {
             displayedLineCount = latestLines.length;
             const firstLineIndex = Math.max(
                 0,
@@ -311,26 +332,15 @@ export function createReasoningPreviewLabel(options = {}) {
             return;
         }
 
-        const incomingRow = createRow(
-            displayedLineCount,
-            false,
-            transitionPlan.transitionDurationMs,
-        );
-
-        transitionRunning = true;
-        transitionCount++;
+        const incomingRow = rows[displayedLineCount];
+        incomingRow.lineIndex = displayedLineCount;
+        incomingRow.label.set_label(latestLines[displayedLineCount] || ' ');
         displayedLineCount++;
-        incomingRow.revealer.set_reveal_child(true);
-        transitionSourceId = GLib.timeout_add(
-            GLib.PRIORITY_DEFAULT,
-            transitionPlan.transitionDurationMs + 20,
-            () => {
-                transitionSourceId = 0;
-                finishLineAdvance();
-                return GLib.SOURCE_REMOVE;
-            },
-        );
+        startLineEntrance(incomingRow, transitionPlan.transitionDurationMs);
     };
+
+    for (let index = 0; index < REASONING_PREVIEW_LINES; index++)
+        createRow();
 
     const applyPreview = (preview, state = {}) => {
         const model = markdownToPangoRenderModel(stabilizeStreamingMarkdown(preview));
@@ -461,14 +471,14 @@ export function createReasoningPreviewLabel(options = {}) {
         disposeSmoother();
         await finishLineTransitions();
     };
-    container.getReasoningPreviewLines = () => rows.map((row) => (
-        latestLines[row.lineIndex] ?? ''
-    ));
+    container.getReasoningPreviewLines = () => rows
+        .filter((row) => row.lineIndex >= 0)
+        .map((row) => latestLines[row.lineIndex] ?? '');
     container.getReasoningLineTransitionCount = () => transitionCount;
     container.getReasoningPreviewText = () => currentPreview;
     container.getReasoningLineTransitionType = () => (
         animationsEnabled()
-            ? Gtk.RevealerTransitionType.SLIDE_UP
+            ? Gtk.RevealerTransitionType.CROSSFADE
             : Gtk.RevealerTransitionType.NONE
     );
     return container;

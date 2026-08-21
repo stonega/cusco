@@ -334,6 +334,7 @@ if (Gtk.init_check()) {
 
     let trackReasoningGeometry = false;
     const reasoningFrameHeights = [];
+    const reasoningMeasureWidth = 720;
     let reasoningPreview = null;
 
     reasoningPreview = createReasoningPreviewLabel({
@@ -347,7 +348,7 @@ if (Gtk.init_check()) {
 
             const [minimum, natural] = reasoningPreview.measure(
                 Gtk.Orientation.VERTICAL,
-                reasoningPreview.get_width(),
+                reasoningMeasureWidth,
             );
 
             reasoningFrameHeights.push({
@@ -366,17 +367,36 @@ if (Gtk.init_check()) {
     await delay(30);
     reasoningPreview.updateReasoningPreview('First thought');
     await reasoningPreview.finishReasoningPreview();
+    await delay(30);
     const initialTransitionCount = reasoningPreview.getReasoningLineTransitionCount();
+    const initialReasoningRows = [];
+    let initialReasoningRow = reasoningPreview.get_first_child();
 
+    while (initialReasoningRow) {
+        initialReasoningRows.push(initialReasoningRow);
+        initialReasoningRow = initialReasoningRow.get_next_sibling();
+    }
+
+    assert(
+        initialReasoningRows.length === 3,
+        'Live reasoning did not reserve its fixed three-row footprint',
+    );
+    const [initialReasoningMinimum, initialReasoningNatural] = reasoningPreview.measure(
+        Gtk.Orientation.VERTICAL,
+        reasoningMeasureWidth,
+    );
+    const initialReasoningHeight = reasoningPreview.get_height();
+
+    trackReasoningGeometry = true;
     reasoningPreview.updateReasoningPreview('First thought\nSecond thought still streaming');
     const reasoningTransitionEnabled = reasoningPreview.getReasoningLineTransitionType()
-        === Gtk.RevealerTransitionType.SLIDE_UP;
+        === Gtk.RevealerTransitionType.CROSSFADE;
 
     await reasoningPreview.finishReasoningPreview();
     if (reasoningTransitionEnabled) {
         assert(
             reasoningPreview.getReasoningLineTransitionCount() === initialTransitionCount + 1,
-            'Completed reasoning line did not start an upward transition',
+            'Completed reasoning line did not start its fixed-slot fade',
         );
     }
     reasoningPreview.updateReasoningPreview([
@@ -385,6 +405,16 @@ if (Gtk.init_check()) {
         'Third thought',
     ].join('\n'));
     await reasoningPreview.finishReasoningPreview();
+    trackReasoningGeometry = false;
+    assert(
+        reasoningFrameHeights.length > 0
+            && reasoningFrameHeights.every(({ allocated, minimum, natural }) => (
+                allocated === initialReasoningHeight
+                    && minimum === initialReasoningMinimum
+                    && natural === initialReasoningNatural
+            )),
+        `Reasoning initial fill changed its fixed layout footprint: ${JSON.stringify(reasoningFrameHeights)}`,
+    );
 
     const reasoningRowsBeforeRollover = [];
     let reasoningRow = reasoningPreview.get_first_child();
@@ -396,11 +426,12 @@ if (Gtk.init_check()) {
 
     const [baselineReasoningMinimum, baselineReasoningNatural] = reasoningPreview.measure(
         Gtk.Orientation.VERTICAL,
-        reasoningPreview.get_width(),
+        reasoningMeasureWidth,
     );
     const baselineReasoningHeight = reasoningPreview.get_height();
     const rolloverTransitionStart = reasoningPreview.getReasoningLineTransitionCount();
 
+    reasoningFrameHeights.length = 0;
     trackReasoningGeometry = true;
     reasoningPreview.updateReasoningPreview([
         'First thought',
@@ -505,6 +536,10 @@ if (Gtk.init_check()) {
         reasoningRevealer.get_reveal_child(),
         'Live reasoning did not keep its body expanded while streaming',
     );
+    assert(
+        reasoningRevealer.get_transition_type() === Gtk.RevealerTransitionType.NONE,
+        'Live reasoning retained a layout-affecting body transition',
+    );
     reasoningExpander.clearPreview();
     assert(
         reasoningHeader.get_visible(),
@@ -513,6 +548,10 @@ if (Gtk.init_check()) {
     assert(
         !reasoningRevealer.get_reveal_child(),
         'Completed reasoning kept the temporary loading preview expanded',
+    );
+    assert(
+        reasoningRevealer.get_transition_type() === Gtk.RevealerTransitionType.SLIDE_DOWN,
+        'Completed reasoning did not restore its normal expander transition',
     );
     expanderWindow.destroy();
 }

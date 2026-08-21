@@ -24,7 +24,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Keep DeepSeek Responses reasoning confined to the reasoning card instead of duplicating it at the start of the assistant answer.
 - Show assistant message actions as soon as the complete streamed text is visible, entering with the selected stream-reveal motion instead of waiting for the final word animation to settle.
 - Preflight streamed transcript growth before GTK paints it, preventing delayed whole-message vertical jumps while following the latest response.
-- Keep the full three-line thinking ticker at a stable height by rotating its existing rows in place instead of briefly adding a fourth sliding row.
+- Keep the live thinking ticker at a fixed three-row height from its first line, fading text inside reserved slots and rotating later rows in place so concurrent reasoning and answer streams no longer shift or ghost.
 - Hide the expandable “Reasoning” header while its live preview is streaming, then restore it when the reasoning is complete.
 
 ## [0.5.39] - 2026-08-19
