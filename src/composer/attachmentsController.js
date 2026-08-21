@@ -81,11 +81,26 @@ export class ComposerAttachments {
         this._imageViewer = null;
     }
 
-    supportsImages() {
-        const providerId = this._conversations.activeConversation?.providerId
+    _activeProviderSelection() {
+        const conversation = this._conversations.activeConversation;
+        const providerId = conversation?.providerId
             ?? this._getProviderPicker()?.get_active_id?.()
             ?? '';
-        return this._providerConfigs.getProvider(providerId)?.supportsImageAttachments !== false;
+        const provider = this._providerConfigs.getProvider(providerId);
+        const model = provider?.models?.find((candidate) => candidate.id === conversation?.modelId)
+            ?? this._providerConfigs.getDefaultModel?.(providerId)
+            ?? null;
+
+        return { provider, model };
+    }
+
+    supportsImages() {
+        const { provider, model } = this._activeProviderSelection();
+
+        if (typeof model?.supportsImageAttachments === 'boolean')
+            return model.supportsImageAttachments;
+
+        return provider?.supportsImageAttachments !== false;
     }
 
     imageAttachCapability() {
@@ -94,10 +109,13 @@ export class ComposerAttachments {
     }
 
     unsupportedMessage() {
-        const providerId = this._conversations.activeConversation?.providerId
-            ?? this._getProviderPicker()?.get_active_id?.()
-            ?? '';
-        const provider = this._providerConfigs.getProvider(providerId);
+        const { provider, model } = this._activeProviderSelection();
+
+        if (model && provider?.models?.some((candidate) => candidate.supportsImageAttachments === true)) {
+            return `${model.name ?? model.id} does not support image attachments. `
+                + 'Select an image-capable model.';
+        }
+
         return `${provider?.name ?? 'The selected provider'} does not support image attachments.`;
     }
 

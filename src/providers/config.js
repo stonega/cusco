@@ -444,6 +444,7 @@ const PROVIDER_SUPPORTED_MODEL_IDS = {
     deepseek: new Set([
         'deepseek-v4-pro',
         'deepseek-v4-flash',
+        'deepseek-v4-flash-vision-exp',
     ]),
     grok: new Set([
         'grok-4.6',
@@ -676,9 +677,8 @@ const KIMI_MODEL_METADATA = {
 };
 const DEEPSEEK_RESPONSES_THINKING = {
     api: 'openai-responses',
-    levels: ['low', 'high', 'max'],
+    levels: ['off', 'low', 'high', 'max'],
     defaultLevel: 'high',
-    alwaysOn: true,
 };
 const DEEPSEEK_MODEL_METADATA = {
     'deepseek-v4-pro': {
@@ -695,6 +695,16 @@ const DEEPSEEK_MODEL_METADATA = {
         description: 'DeepSeek lower-latency model.',
         contextWindowTokens: 1000000,
         maxOutputTokens: 384000,
+        thinking: DEEPSEEK_RESPONSES_THINKING,
+    },
+    'deepseek-v4-flash-vision-exp': {
+        id: 'deepseek-v4-flash-vision-exp',
+        name: 'DeepSeek V4 Flash Vision Experimental',
+        description: 'Experimental DeepSeek model for visual understanding with text and image input.',
+        contextWindowTokens: 1000000,
+        maxOutputTokens: 384000,
+        supportsImageAttachments: true,
+        supportedImageMimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
         thinking: DEEPSEEK_RESPONSES_THINKING,
     },
 };
@@ -865,6 +875,10 @@ function normalizeStoredModels(models, providerId = '') {
             ?? model?.contextLength,
         );
         const thinking = normalizeStoredThinkingCapability(model?.thinking ?? metadata?.thinking);
+        const supportsImageAttachments = metadata?.supportsImageAttachments
+            ?? model?.supportsImageAttachments;
+        const supportedImageMimeTypes = metadata?.supportedImageMimeTypes
+            ?? model?.supportedImageMimeTypes;
         const maxOutputTokens = normalizeMaxOutputTokens(
             metadata?.maxOutputTokens
             ?? model?.maxOutputTokens
@@ -878,6 +892,15 @@ function normalizeStoredModels(models, providerId = '') {
 
         if (thinking !== undefined)
             normalizedModel.thinking = thinking;
+
+        if (typeof supportsImageAttachments === 'boolean')
+            normalizedModel.supportsImageAttachments = supportsImageAttachments;
+
+        if (Array.isArray(supportedImageMimeTypes)) {
+            normalizedModel.supportedImageMimeTypes = [...new Set(supportedImageMimeTypes
+                .map((value) => String(value).trim().toLowerCase())
+                .filter(Boolean))];
+        }
 
         seenIds.add(id);
         normalizedModels.push(normalizedModel);
@@ -1187,6 +1210,7 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         models: [
             { ...DEEPSEEK_MODEL_METADATA['deepseek-v4-pro'] },
             { ...DEEPSEEK_MODEL_METADATA['deepseek-v4-flash'] },
+            { ...DEEPSEEK_MODEL_METADATA['deepseek-v4-flash-vision-exp'] },
         ],
     },
     {

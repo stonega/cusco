@@ -386,6 +386,8 @@ export class AgentActivityPresenter {
         if (previewLabel)
             body.append(previewLabel);
 
+        headerButton.set_visible(!loadingPreviewActive);
+
         const updateExpandedState = (expanded) => {
             headerButton.set_tooltip_text(expanded ? 'Collapse reasoning' : 'Expand reasoning');
 
@@ -419,6 +421,7 @@ export class AgentActivityPresenter {
             const preview = reasoningPreviewText(text);
             const hasPreview = Boolean(preview);
 
+            headerButton.set_visible(!loadingPreviewActive);
             previewLabel.set_visible(hasPreview);
             if (hasPreview && !previewCollapsedByUser) {
                 revealer.set_reveal_child(true);
@@ -430,6 +433,7 @@ export class AgentActivityPresenter {
         container.clearPreview = () => {
             loadingPreviewActive = false;
             previewCollapsedByUser = false;
+            headerButton.set_visible(true);
             previewLabel?.finishReasoningPreview({ flush: true })?.catch((error) => {
                 logError(error, 'Failed to flush reasoning preview');
             });

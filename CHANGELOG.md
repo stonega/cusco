@@ -7,10 +7,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Add the experimental `deepseek-v4-flash-vision-exp` model with model-specific image attachments and documented DeepSeek reasoning controls.
+
 ### Changed
 
 - Remove the leftover inner padding from transparent assistant messages while preserving padded user-message bubbles.
 - Adapt assistant and thinking-stream pacing to provider speed and buffered text, with bounded catch-up after completion so long responses no longer remain half-revealed.
+- Animate each multi-word catch-up reveal as one cohesive group instead of staggering its words independently.
 - Reduce the icon-button footprint beneath messages for a more compact action row.
 
 ### Fixed
@@ -18,6 +23,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Keep the Agent Mode run timer in one stable footer position when a streamed response changes from “Working…” to its completed duration, preventing a duplicate-looking completion flash.
 - Keep DeepSeek Responses reasoning confined to the reasoning card instead of duplicating it at the start of the assistant answer.
 - Show assistant message actions as soon as the complete streamed text is visible, entering with the selected stream-reveal motion instead of waiting for the final word animation to settle.
+- Preflight streamed transcript growth before GTK paints it, preventing delayed whole-message vertical jumps while following the latest response.
+- Keep the full three-line thinking ticker at a stable height by rotating its existing rows in place instead of briefly adding a fourth sliding row.
+- Hide the expandable “Reasoning” header while its live preview is streaming, then restore it when the reasoning is complete.
 
 ## [0.5.39] - 2026-08-19
 

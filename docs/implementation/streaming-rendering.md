@@ -2,18 +2,22 @@
 
 Cusco's native implementation adapts the newly-mounted-text behavior of [Vercel Streamdown](https://github.com/vercel/streamdown) to GTK/Pango rather than embedding its React renderer. Cusco keeps provider ingestion, canonical conversation state, and visible text pacing separate. Provider chunks update the in-memory assistant message immediately, while `StreamingTextSmoother` releases complete display units on a steady GLib timer. This prevents provider-specific chunk sizes and pauses from directly controlling the native transcript's cadence.
 
-The smoother reveals the first display unit immediately, then reveals exactly one language-aware unit every 24 milliseconds. Its update is rendered synchronously instead of passing through a second UI throttle, so adjacent units cannot be merged into one visible update. Provider completion keeps the same cadence for any remaining visual tail, while turn cleanup and queued-message handling continue immediately. Authoritative replacement chunks bypass the queue so stale text is never revealed. Persistence, tools, exports, retry decisions, and response hooks always use canonical provider text rather than the paced display prefix.
+The smoother reveals the first display unit immediately, then updates every 24 milliseconds with an adaptive number of language-aware units based on provider arrival rate and buffered text. Each smoother update is rendered synchronously instead of passing through a second UI throttle. A multi-unit update becomes one animation group, so its words share one entrance instead of cascading independently. Under pressure, catch-up work is bounded and the group effect shortens; provider completion drains the remaining visual tail within a short deadline. Authoritative replacement chunks bypass the queue so stale text is never revealed. Persistence, tools, exports, retry decisions, and response hooks always use canonical provider text rather than the paced display prefix.
+
+While the transcript is following the active response, each render callback synchronously measures the already-invalidated conversation stack and publishes any larger scrollbar bound before GTK allocates and paints it. Adjustment changes still pin to the exact post-layout bottom value, and queued passes remain as a fallback for initial mounting and asynchronously sized content. This prevents GTK from painting one frame with the previous offset and correcting it afterward, keeping existing text stationary relative to the latest-message anchor as wrapped lines are added.
+
+The live reasoning preview keeps at most three single-line rows. Its expandable “Reasoning” header remains hidden while the preview is active and returns when the reasoning completes. Entrances may slide while the preview is still filling, because those height increases are persistent. Once all three slots are occupied, later reasoning lines reuse the same row widgets and rotate their text in place. The preview also emits the normal stream-frame callback after each paced update. This avoids a transient fourth `Gtk.Revealer` changing the preferred height, which previously moved the transcript upward and then restored it after the paired transitions completed.
 
 `createMessageContent()` retains stable completed Markdown blocks and updates only the unfinished tail. The unit slicer keeps paired Markdown delimiters together, and incomplete emphasis, code, and link syntax is held or virtually closed until it can render without flashing raw punctuation. Markdown labels track rendered plain-text byte ranges separately from Markdown source positions, which prevents existing words from animating again when incomplete syntax becomes valid. Inline and fenced code, tables, dividers, artifacts, and tool surfaces are excluded from text effects.
 
-`AnimatedMarkdownLabel` preserves a normal selectable and accessible `Gtk.Label` as the content widget. During a stream it temporarily snapshots newly visible Pango ranges over the label with one frame clock per label. The available effects are:
+`AnimatedMarkdownLabel` preserves a normal selectable and accessible `Gtk.Label` as the content widget. During a stream it temporarily snapshots newly visible Pango ranges over the label with one frame clock per label. All ranges produced by one smoother update share the same start time, duration, easing, opacity, and transform, while later updates remain independent. The available effects are:
 
 - `blurIn`: opacity and a four-pixel blur resolve together.
 - `fadeIn`: opacity resolves without movement.
 - `slideUp`: opacity resolves while the range rises four pixels.
 - `none`: visible content is updated without pacing or animation.
 
-The Chat appearance preference controls the effect. Cusco's Reduced motion setting and GNOME's `gtk-enable-animations` setting override it and flush pending visible text immediately across active and cached conversations. If a cached conversation becomes unmapped, its pending reveal and animation ranges are also flushed because GTK does not drive frame callbacks for hidden `Gtk.Stack` children. When a response completes, the paced reveal and active effect ranges finish before the message is converted to its static selectable state; completed messages retain no animation timer or overlay state.
+The Chat appearance preference controls the effect. Cusco's Reduced motion setting and GNOME's `gtk-enable-animations` setting override it and flush pending visible text immediately across active and cached conversations. If a cached conversation becomes unmapped, its pending reveal and animation groups are also flushed because GTK does not drive frame callbacks for hidden `Gtk.Stack` children. When a response completes, the paced reveal and active effect groups finish before the message is converted to its static selectable state; completed messages retain no animation timer or overlay state.
 
 Run these focused checks while changing the pipeline:
 
@@ -21,6 +25,7 @@ Run these focused checks while changing the pipeline:
 gjs -m tests/streaming-text-smoke.js
 gjs -m tests/stream-animation-smoke.js
 gjs -m tests/stream-replay-window-smoke.js
+gjs -m tests/scroll-controller-smoke.js
 gjs -m tests/markdown-smoke.js
 gjs -m tests/message-view-smoke.js
 gjs -m tests/window-provider-fallback-smoke.js
@@ -29,7 +34,7 @@ gjs -m tests/window-provider-fallback-smoke.js
 For interactive reproduction, open Settings → About → Debug → Stream replay. The
 window accepts arbitrary Markdown and drives the production assistant card with
 configurable provider cadence, reveal cadence, idle flush timing, text effect,
-effect duration, stagger, motion, and an optional final provider revision. It
+group effect duration, motion, and an optional final provider revision. It
 also uses the production working timer and reports provider and visible progress.
 
 `tests/stream-animation-smoke.js` exercises the pure animation model everywhere. When a GTK display is available, it additionally presents a real window and verifies mapped animation completion plus the hidden-`Gtk.Stack` flush path.

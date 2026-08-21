@@ -108,6 +108,11 @@ const svgPath = GLib.build_filenamev([
 ]);
 const svgBytes = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h1v1H0z"/></svg>');
 GLib.file_set_contents(svgPath, svgBytes);
+const bmpPath = GLib.build_filenamev([
+    GLib.get_tmp_dir(),
+    `cusco-provider-bmp-${GLib.uuid_string_random()}.bmp`,
+]);
+GLib.file_set_contents(bmpPath, imageBytes);
 const imageMessages = [
     createMessage('user', 'Describe this image', {
         attachments: [{
@@ -124,6 +129,16 @@ const svgImageMessages = [
             name: 'icon.svg',
             mimeType: 'image/svg+xml',
             path: svgPath,
+        }],
+    }),
+];
+const bmpImageMessages = [
+    createMessage('user', 'Read this bitmap', {
+        attachments: [{
+            kind: 'image',
+            name: 'bitmap.bmp',
+            mimeType: 'image/bmp',
+            path: bmpPath,
         }],
     }),
 ];
@@ -331,9 +346,18 @@ const deepSeekResponsesModel = {
     id: 'deepseek-v4-pro',
     thinking: {
         api: 'openai-responses',
-        levels: ['low', 'high', 'max'],
+        levels: ['off', 'low', 'high', 'max'],
         defaultLevel: 'high',
-        alwaysOn: true,
+    },
+};
+const deepSeekVisionModel = {
+    id: 'deepseek-v4-flash-vision-exp',
+    supportsImageAttachments: true,
+    supportedImageMimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
+    thinking: {
+        api: 'openai-responses',
+        levels: ['off', 'low', 'high', 'max'],
+        defaultLevel: 'high',
     },
 };
 const deepSeekResponsesBody = buildOpenAiResponsesBody(
@@ -364,6 +388,39 @@ const deepSeekImageBody = buildOpenAiResponsesBody(imageMessages, 'deepseek-v4-p
     provider: deepSeekResponsesProviderConfig,
 });
 assertEqual(deepSeekImageBody.input[0].content, 'Describe this image', 'DeepSeek omitted image input');
+const deepSeekVisionImageBody = buildOpenAiResponsesBody(
+    imageMessages,
+    'deepseek-v4-flash-vision-exp',
+    {
+        provider: deepSeekResponsesProviderConfig,
+        model: deepSeekVisionModel,
+    },
+);
+assertEqual(deepSeekVisionImageBody.input[0].content[1].type, 'input_image', 'DeepSeek vision image part');
+assertEqual(
+    deepSeekVisionImageBody.input[0].content[1].image_url,
+    `data:image/png;base64,${imageData}`,
+    'DeepSeek vision image data URL',
+);
+const deepSeekVisionBmpBody = buildOpenAiResponsesBody(
+    bmpImageMessages,
+    'deepseek-v4-flash-vision-exp',
+    {
+        provider: deepSeekResponsesProviderConfig,
+        model: deepSeekVisionModel,
+    },
+);
+assertEqual(deepSeekVisionBmpBody.input[0].content, 'Read this bitmap', 'DeepSeek vision omitted unsupported BMP input');
+const deepSeekVisionOffBody = buildOpenAiResponsesBody(
+    messages,
+    'deepseek-v4-flash-vision-exp',
+    {
+        provider: deepSeekResponsesProviderConfig,
+        model: deepSeekVisionModel,
+        thinkingLevel: 'off',
+    },
+);
+assertEqual(deepSeekVisionOffBody.reasoning.effort, 'none', 'DeepSeek vision disabled reasoning');
 const deepSeekToolImageBody = buildOpenAiResponsesBody(nativeToolMessages, 'deepseek-v4-pro', {
     provider: deepSeekResponsesProviderConfig,
 });
@@ -371,6 +428,19 @@ assertEqual(
     JSON.stringify(deepSeekToolImageBody.input).includes('input_image'),
     false,
     'DeepSeek omitted tool-result screenshots',
+);
+const deepSeekVisionToolImageBody = buildOpenAiResponsesBody(
+    nativeToolMessages,
+    'deepseek-v4-flash-vision-exp',
+    {
+        provider: deepSeekResponsesProviderConfig,
+        model: deepSeekVisionModel,
+    },
+);
+assertEqual(
+    JSON.stringify(deepSeekVisionToolImageBody.input).includes('input_image'),
+    true,
+    'DeepSeek vision retained tool-result screenshots',
 );
 const deepSeekCrossProviderBody = buildOpenAiResponsesBody(
     crossProviderReasoningMessages,

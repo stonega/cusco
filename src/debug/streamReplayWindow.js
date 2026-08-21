@@ -5,10 +5,7 @@ import Gtk from 'gi://Gtk?version=4.0';
 import { createAgentWorkingRow } from '../chat/agentActivityPresenter.js';
 import { createMessageWrapper } from '../chat/messagePresenter.js';
 import { createMessageContent } from '../chat/messageView.js';
-import {
-    DEFAULT_STREAM_ANIMATION_DURATION_MS,
-    DEFAULT_STREAM_ANIMATION_STAGGER_MS,
-} from '../chat/streamAnimation.js';
+import { DEFAULT_STREAM_ANIMATION_DURATION_MS } from '../chat/streamAnimation.js';
 import {
     DEFAULT_STREAM_ANIMATION_STYLE,
     DEFAULT_STREAM_IDLE_FLUSH_MS,
@@ -293,23 +290,14 @@ export function createStreamReplayWindow(parent = null, options = {}) {
 
     const animationDurationRow = createSpinRow(
         'Effect duration',
-        'Milliseconds for each rendered text effect.',
+        'Milliseconds for each rendered reveal-group effect.',
         options.animationDurationMs ?? DEFAULT_STREAM_ANIMATION_DURATION_MS,
         1,
         2000,
         1,
     );
-    const animationStaggerRow = createSpinRow(
-        'Effect stagger',
-        'Milliseconds between effects when a frame adds multiple units.',
-        options.animationStaggerMs ?? DEFAULT_STREAM_ANIMATION_STAGGER_MS,
-        0,
-        500,
-        1,
-    );
     const effectGroup = new Adw.PreferencesGroup({ title: 'Text effect' });
     effectGroup.add(animationDurationRow);
-    effectGroup.add(animationStaggerRow);
 
     const controlsBox = new Gtk.Box({
         orientation: Gtk.Orientation.VERTICAL,
@@ -495,7 +483,6 @@ export function createStreamReplayWindow(parent = null, options = {}) {
         revealIntervalMs: Math.max(1, Math.round(revealIntervalRow.get_value())),
         idleFlushMs: Math.max(1, Math.round(idleFlushRow.get_value())),
         animationDurationMs: Math.max(1, Math.round(animationDurationRow.get_value())),
-        animationStaggerMs: Math.max(0, Math.round(animationStaggerRow.get_value())),
     });
 
     const replayStream = () => {
@@ -539,7 +526,6 @@ export function createStreamReplayWindow(parent = null, options = {}) {
             streamRevealIntervalMs: config.revealIntervalMs,
             streamIdleFlushMs: config.idleFlushMs,
             streamAnimationDurationMs: config.animationDurationMs,
-            streamAnimationStaggerMs: config.animationStaggerMs,
             onStreamFrame: (visibleText) => {
                 if (!run || run.id !== runId)
                     return;
@@ -741,7 +727,6 @@ export function createStreamReplayWindow(parent = null, options = {}) {
             ['revealIntervalMs', revealIntervalRow],
             ['idleFlushMs', idleFlushRow],
             ['animationDurationMs', animationDurationRow],
-            ['animationStaggerMs', animationStaggerRow],
         ];
 
         for (const [name, row] of numericRows) {

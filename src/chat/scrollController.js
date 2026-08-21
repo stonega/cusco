@@ -1,4 +1,5 @@
 import GLib from 'gi://GLib?version=2.0';
+import Gtk from 'gi://Gtk?version=4.0';
 
 const SCROLL_TO_BOTTOM_ANIMATION_MS = 180;
 const SCROLL_TO_BOTTOM_ANIMATION_INTERVAL_MS = 16;
@@ -33,6 +34,15 @@ export class TranscriptScrollController {
         this._animationSourceId = 0;
     }
 
+    _cancelBottomPasses() {
+        if (this._scrollSourceId) {
+            GLib.source_remove(this._scrollSourceId);
+            this._scrollSourceId = 0;
+        }
+
+        this._scrollPasses = 0;
+    }
+
     getBottomValue() {
         const scroller = this._getScroller();
         if (!scroller)
@@ -40,6 +50,69 @@ export class TranscriptScrollController {
 
         const adjustment = scroller.get_vadjustment();
         return Math.max(0, adjustment.get_upper() - adjustment.get_page_size());
+    }
+
+    preflightBottom() {
+        if (this._isBatchRendering())
+            return false;
+
+        const scroller = this._getScroller();
+        const child = scroller?.get_child?.();
+
+        if (!scroller || !child)
+            return false;
+
+        const adjustment = scroller.get_vadjustment();
+        const pageSize = adjustment.get_page_size();
+        const allocatedWidth = child.get_width?.() ?? 0;
+
+        if (pageSize <= 0 || allocatedWidth <= 0 || typeof child.measure !== 'function')
+            return false;
+
+        const [minimumHeight, naturalHeight] = child.measure(
+            Gtk.Orientation.VERTICAL,
+            allocatedWidth,
+        );
+        const measuredUpper = Math.max(
+            pageSize,
+            Math.ceil(minimumHeight),
+            Math.ceil(naturalHeight),
+        );
+
+        if (!Number.isFinite(measuredUpper) || measuredUpper <= adjustment.get_upper())
+            return false;
+
+        // Gtk updates a viewport adjustment's upper bound during allocation.
+        // Streaming labels can already report their new height before that
+        // allocation begins, so publish the measured bound now. Otherwise the
+        // old scroll offset is painted for one frame and corrected afterward,
+        // visibly moving the whole message and its Working footer.
+        adjustment.set_upper(measuredUpper);
+        adjustment.set_value(Math.max(0, measuredUpper - pageSize));
+        return true;
+    }
+
+    pinToBottom() {
+        if (this._isBatchRendering()) {
+            this._scrollPasses = Math.max(this._scrollPasses, 1);
+            return false;
+        }
+
+        const scroller = this._getScroller();
+
+        if (!scroller)
+            return false;
+
+        this.stopAnimation();
+        this._cancelBottomPasses();
+        const adjustment = scroller.get_vadjustment();
+
+        adjustment.set_value(Math.max(
+            0,
+            adjustment.get_upper() - adjustment.get_page_size(),
+        ));
+        this.syncButton();
+        return true;
     }
 
     animateToBottom() {
@@ -119,6 +192,9 @@ export class TranscriptScrollController {
             return;
         }
 
+        if (this.followLatest)
+            this.preflightBottom();
+
         if (options.animate && !this.followLatest) {
             this.animateToBottom();
             return;
@@ -148,9 +224,6 @@ export class TranscriptScrollController {
 
     dispose() {
         this.stopAnimation();
-        if (this._scrollSourceId) {
-            GLib.source_remove(this._scrollSourceId);
-            this._scrollSourceId = 0;
-        }
+        this._cancelBottomPasses();
     }
 }

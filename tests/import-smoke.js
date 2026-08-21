@@ -218,6 +218,52 @@ if (!clipboardAttachments.pasteClipboardText()
     throw new Error('Composer text paste was not routed through the long-text handler');
 }
 
+const deepSeekAttachmentProvider = {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    supportsImageAttachments: false,
+    models: [
+        { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+        {
+            id: 'deepseek-v4-flash-vision-exp',
+            name: 'DeepSeek V4 Flash Vision Experimental',
+            supportsImageAttachments: true,
+        },
+    ],
+};
+const deepSeekAttachmentConversation = {
+    activeConversation: {
+        providerId: 'deepseek',
+        modelId: 'deepseek-v4-pro',
+    },
+};
+const modelSpecificAttachments = new ComposerAttachments({
+    providerConfigs: {
+        getProvider: () => deepSeekAttachmentProvider,
+        getDefaultModel: () => deepSeekAttachmentProvider.models[0],
+    },
+    conversations: deepSeekAttachmentConversation,
+    getProviderPicker: () => null,
+    getComposer: () => null,
+    getComposerBuffer: () => null,
+    getAttachmentRow: () => null,
+    getAttachmentPreviewList: () => null,
+    getParentWindow: () => null,
+    showToast: () => {},
+    presentWindow: () => {},
+    focusComposer: () => {},
+});
+
+if (modelSpecificAttachments.supportsImages()
+    || !modelSpecificAttachments.unsupportedMessage().includes('DeepSeek V4 Pro')) {
+    throw new Error('Composer image support should follow the selected DeepSeek text model');
+}
+
+deepSeekAttachmentConversation.activeConversation.modelId = 'deepseek-v4-flash-vision-exp';
+
+if (!modelSpecificAttachments.supportsImages())
+    throw new Error('Composer image support did not enable the selected DeepSeek vision model');
+
 if (conversationListPageTarget(0, 50) !== 0
     || conversationListPageTarget(125, 50) !== 50
     || conversationListPageTarget(125, 100) !== 100

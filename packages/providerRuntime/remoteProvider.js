@@ -259,12 +259,15 @@ function isSvgAttachment(attachment) {
     return name.endsWith('.svg');
 }
 
-function imageAttachments(message) {
+function imageAttachments(message, { supportedMimeTypes = null } = {}) {
     return (message?.attachments ?? []).filter((attachment) => {
         if (attachment?.kind !== 'image')
             return false;
 
         if (isSvgAttachment(attachment))
+            return false;
+
+        if (supportedMimeTypes && !supportedMimeTypes.has(imageMimeTypeForAttachment(attachment)))
             return false;
 
         const path = String(attachment.path ?? '').trim();
@@ -281,8 +284,8 @@ function encodedImageAttachment(attachment) {
     };
 }
 
-function encodedImageAttachments(message) {
-    return imageAttachments(message).map(encodedImageAttachment);
+function encodedImageAttachments(message, options = {}) {
+    return imageAttachments(message, options).map(encodedImageAttachment);
 }
 
 function imageDataUrl(image) {
@@ -1833,13 +1836,27 @@ export function extractGeminiToolCalls(response) {
         .filter((toolCall) => toolCall.name);
 }
 
-function providerSupportsImageAttachments(provider) {
+function providerSupportsImageAttachments(provider, model = null) {
+    if (typeof model?.supportsImageAttachments === 'boolean')
+        return model.supportsImageAttachments;
+
     return provider?.supportsImageAttachments !== false;
+}
+
+function supportedImageMimeTypes(provider, model = null) {
+    const values = model?.supportedImageMimeTypes ?? provider?.supportedImageMimeTypes;
+
+    if (!Array.isArray(values) || values.length === 0)
+        return null;
+
+    return new Set(values.map((value) => String(value).trim().toLowerCase()).filter(Boolean));
 }
 
 export function openAiMessages(messages, options = {}) {
     const provider = options.provider ?? options.config;
-    const includeImages = providerSupportsImageAttachments(provider);
+    const model = options.model ?? null;
+    const includeImages = providerSupportsImageAttachments(provider, model);
+    const imageMimeTypes = supportedImageMimeTypes(provider, model);
     const includeReasoning = provider?.supportsReasoningContentItems === true;
     const output = [];
 
@@ -1884,12 +1901,12 @@ export function openAiMessages(messages, options = {}) {
                 output: messageContent(message),
             });
 
-            if (includeImages && imageAttachments(message).length > 0) {
+            if (includeImages && imageAttachments(message, { supportedMimeTypes: imageMimeTypes }).length > 0) {
                 output.push({
                     role: 'user',
                     content: openAiContent(
                         toolResultImageMessage(message, message.toolName ?? 'computer tool'),
-                        { responses: true, includeImages },
+                        { responses: true, includeImages, supportedImageMimeTypes: imageMimeTypes },
                     ),
                 });
             }
@@ -1898,13 +1915,18 @@ export function openAiMessages(messages, options = {}) {
 
         if (message.role === 'assistant'
             && !messageContent(message)
-            && (!includeImages || imageAttachments(message).length === 0)) {
+            && (!includeImages
+                || imageAttachments(message, { supportedMimeTypes: imageMimeTypes }).length === 0)) {
             continue;
         }
 
         output.push({
             role: message.role === 'system' ? 'developer' : message.role,
-            content: openAiContent(message, { responses: true, includeImages }),
+            content: openAiContent(message, {
+                responses: true,
+                includeImages,
+                supportedImageMimeTypes: imageMimeTypes,
+            }),
         });
     }
 
@@ -1912,7 +1934,10 @@ export function openAiMessages(messages, options = {}) {
 }
 
 export function openAiCompatibleMessages(messages, options = {}) {
-    const includeImages = providerSupportsImageAttachments(options.provider ?? options.config);
+    const provider = options.provider ?? options.config;
+    const model = options.model ?? null;
+    const includeImages = providerSupportsImageAttachments(provider, model);
+    const imageMimeTypes = supportedImageMimeTypes(provider, model);
     const output = [];
 
     for (const message of providerMessages(messages, { includeImages })) {
@@ -1942,12 +1967,12 @@ export function openAiCompatibleMessages(messages, options = {}) {
                 content: messageContent(message),
             });
 
-            if (includeImages && imageAttachments(message).length > 0) {
+            if (includeImages && imageAttachments(message, { supportedMimeTypes: imageMimeTypes }).length > 0) {
                 output.push({
                     role: 'user',
                     content: openAiContent(
                         toolResultImageMessage(message, message.toolName ?? 'computer tool'),
-                        { includeImages: true },
+                        { includeImages: true, supportedImageMimeTypes: imageMimeTypes },
                     ),
                 });
             }
@@ -1956,7 +1981,10 @@ export function openAiCompatibleMessages(messages, options = {}) {
 
         output.push({
             role: message.role,
-            content: openAiContent(message, { includeImages }),
+            content: openAiContent(message, {
+                includeImages,
+                supportedImageMimeTypes: imageMimeTypes,
+            }),
         });
     }
 
@@ -2054,7 +2082,9 @@ export function geminiPayload(messages) {
 function openAiContent(message, options = {}) {
     const images = options.includeImages === false
         ? []
-        : encodedImageAttachments(message);
+        : encodedImageAttachments(message, {
+            supportedMimeTypes: options.supportedImageMimeTypes ?? null,
+        });
 
     if (images.length === 0)
         return messageContent(message);
@@ -2337,7 +2367,7 @@ export function buildOpenAiResponsesBody(messages, modelId, options = {}) {
         model: modelId,
         input: openAiMessages(
             messagesWithLocalAttachmentPaths(messages, options.tools),
-            { provider },
+            { provider, model: options.model },
         ),
         max_output_tokens: normalizeMaxOutputTokens(options.maxOutputTokens),
     };

@@ -6,6 +6,7 @@ import { markdownToPangoRenderModel } from '../src/chat/markdown.js';
 import {
     AnimatedMessageActions,
     AnimatedMarkdownLabel,
+    animationByteRangeGroup,
     animationByteRanges,
     animationVisibleByteRanges,
     streamEntranceFrame,
@@ -46,6 +47,36 @@ assert(ranges.length > 0, 'Animation did not identify new rendered text');
 assert(
     !ranges.some((range) => range.start < codeEnd && codeStart < range.end),
     'Inline code was included in animated text ranges',
+);
+const groupedRanges = animationByteRangeGroup('Hello', 'Hello one two three');
+
+assert(
+    groupedRanges.length === 1
+        && groupedRanges[0].start === encoder.encode('Hello').length
+        && groupedRanges[0].end === encoder.encode('Hello one two three').length,
+    'A multi-word reveal was not merged into one animation group range',
+);
+const groupedMarkdownRanges = animationByteRangeGroup(
+    '',
+    model.plainText,
+    model.excludedAnimationRanges,
+);
+
+assert(
+    groupedMarkdownRanges.length === 2
+        && !groupedMarkdownRanges.some(
+            (range) => range.start < codeEnd && codeStart < range.end,
+        ),
+    'Grouped animation ranges did not preserve the inline-code exclusion',
+);
+const boundedText = 'Start one two three four five six seven eight nine ten';
+const boundedUnits = animationByteRanges('Start', boundedText).slice(-4);
+const boundedGroup = animationByteRangeGroup('Start', boundedText, [], 4);
+
+assert(
+    boundedGroup[0].start === boundedUnits[0].start
+        && boundedGroup.at(-1).end === boundedUnits.at(-1).end,
+    'Grouped catch-up animation did not retain only the final bounded units',
 );
 
 const baseRanges = animationVisibleByteRanges([{ start: 6, end: 11 }], 11);
@@ -213,24 +244,34 @@ if (Gtk.init_check()) {
         assert(label.get_mapped(), `${style} test label was not mapped`);
         label.configureStreamAnimation({ style, motionEnabled: () => true });
         label.setRenderModel(markdownToPangoRenderModel('Hello'), { animate: false });
-        label.setRenderModel(markdownToPangoRenderModel('Hello world'), { animate: true });
-        assert(label._activeRanges.length > 0, `${style} did not create an active range`);
+        label.setRenderModel(markdownToPangoRenderModel('Hello one two three'), { animate: true });
+        assert(
+            label._activeGroups.length === 1
+                && label._activeGroups[0].ranges.length === 1,
+            `${style} did not collect a multi-word reveal into one animation group`,
+        );
+        const firstGroup = label._activeGroups[0];
+        const firstGroupRanges = JSON.stringify(firstGroup.ranges);
+
+        label.setRenderModel(
+            markdownToPangoRenderModel('Hello one two three four five'),
+            { animate: true },
+        );
+        assert(
+            label._activeGroups.length === 2
+                && label._activeGroups[0].startTime === firstGroup.startTime
+                && JSON.stringify(label._activeGroups[0].ranges) === firstGroupRanges,
+            `${style} did not keep later reveal updates in independent animation groups`,
+        );
         const snapshot = new Gtk.Snapshot();
         label.vfunc_snapshot(snapshot);
         await label.waitForAnimations();
+        assert(
+            label._activeGroups.length === 0,
+            `${style} retained a completed animation group`,
+        );
         window.destroy();
     }
-
-    const zeroStaggerLabel = new AnimatedMarkdownLabel();
-    zeroStaggerLabel.configureStreamAnimation({
-        style: 'fadeIn',
-        staggerMs: 0,
-        motionEnabled: () => true,
-    });
-    assert(
-        zeroStaggerLabel._animationStaggerMs === 0,
-        'Stream animation did not accept a zero-millisecond debug stagger',
-    );
 
     const pressuredLabel = new AnimatedMarkdownLabel({ wrap: true, xalign: 0 });
     const pressuredWindow = new Gtk.Window({ child: pressuredLabel });
@@ -240,23 +281,25 @@ if (Gtk.init_check()) {
     pressuredLabel.configureStreamAnimation({
         style: 'fadeIn',
         durationMs: 200,
-        staggerMs: 28,
         pressure: 1,
         maximumAnimatedUnits: 4,
         motionEnabled: () => true,
     });
     assert(
-        pressuredLabel._animationDurationMs === 120
-            && pressuredLabel._animationStaggerMs === 5,
+        pressuredLabel._animationDurationMs === 120,
         'Backlog pressure did not shorten the streaming animation',
     );
     pressuredLabel.setRenderModel(markdownToPangoRenderModel('Start'), { animate: false });
-    pressuredLabel.setRenderModel(markdownToPangoRenderModel(
-        'Start one two three four five six seven eight nine ten',
-    ), { animate: true });
+    const pressuredText = 'Start one two three four five six seven eight nine ten';
+    const expectedPressureRanges = animationByteRanges('Start', pressuredText).slice(-4);
+
+    pressuredLabel.setRenderModel(markdownToPangoRenderModel(pressuredText), { animate: true });
+    const pressuredGroup = pressuredLabel._activeGroups[0];
     assert(
-        pressuredLabel._activeRanges.length <= 4,
-        'Catch-up animation was not restricted to the final reveal units',
+        pressuredLabel._activeGroups.length === 1
+            && pressuredGroup.ranges[0].start === expectedPressureRanges[0].start
+            && pressuredGroup.ranges.at(-1).end === expectedPressureRanges.at(-1).end,
+        'Catch-up animation did not group the final bounded reveal units',
     );
     await pressuredLabel.waitForAnimations();
     pressuredWindow.destroy();
@@ -284,16 +327,40 @@ if (Gtk.init_check()) {
     hiddenLabel.setRenderModel(markdownToPangoRenderModel('Hello world'), { animate: true });
     await hiddenLabel.waitForAnimations();
     assert(
-        hiddenLabel._activeRanges.length === 0,
-        'An unmapped cached conversation retained an animation range',
+        hiddenLabel._activeGroups.length === 0,
+        'An unmapped cached conversation retained an animation group',
     );
     hiddenWindow.destroy();
 
-    const reasoningPreview = createReasoningPreviewLabel({
+    let trackReasoningGeometry = false;
+    const reasoningFrameHeights = [];
+    let reasoningPreview = null;
+
+    reasoningPreview = createReasoningPreviewLabel({
         streamAnimationStyle: 'fadeIn',
+        streamRevealIntervalMs: 1,
+        streamIdleFlushMs: 1,
         motionEnabled: () => true,
+        onStreamFrame: () => {
+            if (!trackReasoningGeometry)
+                return;
+
+            const [minimum, natural] = reasoningPreview.measure(
+                Gtk.Orientation.VERTICAL,
+                reasoningPreview.get_width(),
+            );
+
+            reasoningFrameHeights.push({
+                allocated: reasoningPreview.get_height(),
+                minimum,
+                natural,
+            });
+        },
     });
-    const reasoningWindow = new Gtk.Window({ child: reasoningPreview });
+    const reasoningWindow = new Gtk.Window({
+        child: reasoningPreview,
+        default_width: 720,
+    });
 
     reasoningWindow.present();
     await delay(30);
@@ -312,7 +379,29 @@ if (Gtk.init_check()) {
             'Completed reasoning line did not start an upward transition',
         );
     }
-    const burstTransitionStart = reasoningPreview.getReasoningLineTransitionCount();
+    reasoningPreview.updateReasoningPreview([
+        'First thought',
+        'Second thought still streaming',
+        'Third thought',
+    ].join('\n'));
+    await reasoningPreview.finishReasoningPreview();
+
+    const reasoningRowsBeforeRollover = [];
+    let reasoningRow = reasoningPreview.get_first_child();
+
+    while (reasoningRow) {
+        reasoningRowsBeforeRollover.push(reasoningRow);
+        reasoningRow = reasoningRow.get_next_sibling();
+    }
+
+    const [baselineReasoningMinimum, baselineReasoningNatural] = reasoningPreview.measure(
+        Gtk.Orientation.VERTICAL,
+        reasoningPreview.get_width(),
+    );
+    const baselineReasoningHeight = reasoningPreview.get_height();
+    const rolloverTransitionStart = reasoningPreview.getReasoningLineTransitionCount();
+
+    trackReasoningGeometry = true;
     reasoningPreview.updateReasoningPreview([
         'First thought',
         'Second thought still streaming',
@@ -320,12 +409,53 @@ if (Gtk.init_check()) {
         'Fourth thought arriving from below',
     ].join('\n'));
     await reasoningPreview.finishReasoningPreview();
+    trackReasoningGeometry = false;
+
+    const reasoningRowsAfterRollover = [];
+
+    reasoningRow = reasoningPreview.get_first_child();
+    while (reasoningRow) {
+        reasoningRowsAfterRollover.push(reasoningRow);
+        reasoningRow = reasoningRow.get_next_sibling();
+    }
+
+    assert(
+        reasoningRowsAfterRollover.length === 3
+            && reasoningRowsAfterRollover.every(
+                (row, index) => row === reasoningRowsBeforeRollover[index],
+            ),
+        'A full reasoning ticker replaced its stable row widgets during rollover',
+    );
+    assert(
+        reasoningPreview.getReasoningLineTransitionCount() === rolloverTransitionStart,
+        'A full reasoning ticker animated a layout-affecting rollover',
+    );
+    assert(
+        reasoningFrameHeights.length > 0
+            && reasoningFrameHeights.every(({ allocated, minimum, natural }) => (
+                allocated === baselineReasoningHeight
+                    && minimum === baselineReasoningMinimum
+                    && natural === baselineReasoningNatural
+            )),
+        `Reasoning rollover changed its layout footprint: ${JSON.stringify(reasoningFrameHeights)}`,
+    );
+
+    const burstTransitionStart = reasoningPreview.getReasoningLineTransitionCount();
+    reasoningPreview.updateReasoningPreview([
+        'First thought',
+        'Second thought still streaming',
+        'Third thought',
+        'Fourth thought arriving from below',
+        'Fifth thought',
+        'Sixth thought',
+        'Seventh thought',
+    ].join('\n'));
+    await reasoningPreview.finishReasoningPreview();
     const visibleReasoningLines = reasoningPreview.getReasoningPreviewLines();
 
     assert(
         visibleReasoningLines.length === 3
-            && visibleReasoningLines[0] === 'Third thought'
-            && visibleReasoningLines.slice(1).join('') === 'Fourth thought arriving from below',
+            && visibleReasoningLines.join('\n') === 'Fifth thought\nSixth thought\nSeventh thought',
         `Live reasoning ticker retained unexpected lines: ${JSON.stringify(visibleReasoningLines)}`,
     );
     assert(
@@ -333,7 +463,7 @@ if (Gtk.init_check()) {
         'Live reasoning queued every intermediate line transition during catch-up',
     );
     assert(
-        reasoningPreview.getReasoningPreviewText().endsWith('Fourth thought arriving from below'),
+        reasoningPreview.getReasoningPreviewText().endsWith('Seventh thought'),
         'Reasoning text smoother did not reach its canonical target',
     );
     const firstReasoningRow = reasoningPreview.get_first_child();
@@ -368,10 +498,18 @@ if (Gtk.init_check()) {
     const reasoningRevealer = reasoningHeader.get_next_sibling();
 
     assert(
+        !reasoningHeader.get_visible(),
+        'Live reasoning displayed the completed reasoning header while streaming',
+    );
+    assert(
         reasoningRevealer.get_reveal_child(),
         'Live reasoning did not keep its body expanded while streaming',
     );
     reasoningExpander.clearPreview();
+    assert(
+        reasoningHeader.get_visible(),
+        'Completed reasoning did not restore its expandable header',
+    );
     assert(
         !reasoningRevealer.get_reveal_child(),
         'Completed reasoning kept the temporary loading preview expanded',

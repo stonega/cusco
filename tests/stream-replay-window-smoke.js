@@ -59,7 +59,6 @@ if (Gtk.init_check()) {
         window.setReplayConfig({
             animationStyle: 'fadeIn',
             animationDurationMs: 1,
-            animationStaggerMs: 0,
             providerIntervalMs: 1,
             providerUnitsPerChunk: 4,
             revealIntervalMs: 1,

@@ -335,7 +335,6 @@ function createMarkdownLabel(content, options = {}) {
             style: nextOptions.streamAnimationStyle ?? 'none',
             motionEnabled: nextOptions.motionEnabled,
             durationMs: nextOptions.streamAnimationDurationMs,
-            staggerMs: nextOptions.streamAnimationStaggerMs,
             pressure: nextOptions.streamAnimationPressure,
             maximumAnimatedUnits: nextOptions.streamMaximumAnimatedUnits,
         });

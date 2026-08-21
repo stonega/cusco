@@ -216,6 +216,14 @@ for (const providerId of expectedProviderIds) {
         throw new Error(`Missing provider config: ${providerId}`);
 }
 
+const deepSeekProvider = providers.getProvider('deepseek');
+
+if (deepSeekProvider.defaultModelId !== 'deepseek-v4-pro'
+    || deepSeekProvider.models.map((model) => model.id).join(',')
+        !== 'deepseek-v4-pro,deepseek-v4-flash,deepseek-v4-flash-vision-exp') {
+    throw new Error('DeepSeek chat models were not configured');
+}
+
 const geminiProvider = providers.getProvider('gemini');
 
 if (geminiProvider.defaultModelId !== 'gemini-3.7-flash'

@@ -213,6 +213,9 @@ if (defaultStore.resolve('kimi', 'kimi-k3').model.maxOutputTokens !== 131072)
 if (defaultStore.resolve('deepseek', 'deepseek-v4-pro').model.maxOutputTokens !== 384000)
     throw new Error('DeepSeek V4 Pro output limit should match the model catalog');
 
+if (defaultStore.resolve('deepseek', 'deepseek-v4-flash-vision-exp').model.maxOutputTokens !== 384000)
+    throw new Error('DeepSeek V4 Flash Vision Experimental output limit should match the model catalog');
+
 if (defaultStore.getDefaultModel('openai').id !== 'gpt-5.6-sol')
     throw new Error('OpenAI default GPT-5.6 Sol model was not configured');
 
@@ -341,7 +344,25 @@ if (deepSeekProvider.apiFormat !== 'openai-responses'
     || deepSeekProvider.baseUrl !== 'https://api.deepseek.com'
     || deepSeekProvider.supportsImageAttachments !== false
     || deepSeekProvider.supportsReasoningContentItems !== true) {
-    throw new Error('DeepSeek should use the text-only Responses API with reasoning history');
+    throw new Error('DeepSeek should use the Responses API with model-specific image input and reasoning history');
+}
+
+const deepSeekModelIds = deepSeekProvider.models.map((model) => model.id);
+const expectedDeepSeekModelIds = [
+    'deepseek-v4-pro',
+    'deepseek-v4-flash',
+    'deepseek-v4-flash-vision-exp',
+];
+
+if (deepSeekModelIds.join(',') !== expectedDeepSeekModelIds.join(','))
+    throw new Error(`DeepSeek model list was not limited to supported models: ${deepSeekModelIds.join(', ')}`);
+
+const deepSeekVisionModel = defaultStore.resolve('deepseek', 'deepseek-v4-flash-vision-exp').model;
+
+if (deepSeekVisionModel.contextWindowTokens !== 1000000
+    || deepSeekVisionModel.supportsImageAttachments !== true
+    || deepSeekVisionModel.supportedImageMimeTypes.join(',') !== 'image/jpeg,image/png,image/gif,image/webp') {
+    throw new Error('DeepSeek V4 Flash Vision Experimental metadata was incomplete');
 }
 
 if (defaultStore.getWebSearchProviderId() !== 'duckduckgo'
@@ -846,15 +867,20 @@ if (kimiDiscoveryStore.getThinkingLevels('kimi', 'kimi-k2.7-code').join(',') !==
 if (kimiDiscoveryStore.resolve('kimi', 'kimi-k3').model.contextWindowTokens !== 1000000)
     throw new Error('Kimi discovery did not retain built-in Kimi K3 metadata');
 
-if (defaultStore.getThinkingLevels('deepseek', 'deepseek-v4-pro').join(',') !== 'low,high,max'
+if (defaultStore.getThinkingLevels('deepseek', 'deepseek-v4-pro').join(',') !== 'off,low,high,max'
     || defaultStore.getDefaultThinkingLevel('deepseek', 'deepseek-v4-pro') !== 'high'
     || defaultStore.getDefaultThinkingLevel('deepseek', 'deepseek-v4-pro', 'off') !== 'high') {
-    throw new Error('DeepSeek V4 Pro should expose always-on Responses reasoning efforts');
+    throw new Error('DeepSeek V4 Pro should expose optional Responses reasoning efforts');
 }
 
-if (defaultStore.getThinkingLevels('deepseek', 'deepseek-v4-flash').join(',') !== 'low,high,max'
+if (defaultStore.getThinkingLevels('deepseek', 'deepseek-v4-flash').join(',') !== 'off,low,high,max'
     || defaultStore.getDefaultThinkingLevel('deepseek', 'deepseek-v4-flash') !== 'high') {
     throw new Error('DeepSeek V4 Flash should expose Responses reasoning efforts');
+}
+
+if (defaultStore.getThinkingLevels('deepseek', 'deepseek-v4-flash-vision-exp').join(',') !== 'off,low,high,max'
+    || defaultStore.getDefaultThinkingLevel('deepseek', 'deepseek-v4-flash-vision-exp') !== 'high') {
+    throw new Error('DeepSeek V4 Flash Vision Experimental should expose Responses reasoning efforts');
 }
 
 const staleDeepSeekSettings = new MemorySettings({
@@ -877,7 +903,7 @@ const staleDeepSeekStore = new ProviderConfigStore(undefined, {
 if (staleDeepSeekStore.getProvider('deepseek').models.some((model) => model.id === 'deepseek-v3'))
     throw new Error('Unsupported DeepSeek model was loaded from persisted settings');
 
-if (staleDeepSeekStore.getThinkingLevels('deepseek', 'deepseek-v4-pro').join(',') !== 'low,high,max')
+if (staleDeepSeekStore.getThinkingLevels('deepseek', 'deepseek-v4-pro').join(',') !== 'off,low,high,max')
     throw new Error('Persisted DeepSeek models should be enriched with thinking support');
 
 try {

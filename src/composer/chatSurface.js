@@ -313,7 +313,7 @@ export class ChatSurfaceBuilder {
         });
         this._scroller.get_vadjustment().connect('changed', () => {
             if (this._scrollController.followLatest)
-                this._scrollToBottom({ passes: 2 });
+                this._scrollController.pinToBottom();
 
             this._syncScrollToBottomButton();
         });

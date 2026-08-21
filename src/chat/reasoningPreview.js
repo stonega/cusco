@@ -250,16 +250,8 @@ export function createReasoningPreviewLabel(options = {}) {
         resolveFinished();
     };
     let advanceOneLine = null;
-    const finishLineAdvance = (outgoingRow) => {
+    const finishLineAdvance = () => {
         cancelTransitionSource();
-
-        if (outgoingRow?.revealer.get_parent() === container) {
-            container.remove(outgoingRow.revealer);
-            const outgoingIndex = rows.indexOf(outgoingRow);
-
-            if (outgoingIndex >= 0)
-                rows.splice(outgoingIndex, 1);
-        }
 
         transitionRunning = false;
         syncRows();
@@ -297,6 +289,28 @@ export function createReasoningPreviewLabel(options = {}) {
 
         syncRows();
         const outgoingRow = rows.length >= REASONING_PREVIEW_LINES ? rows[0] : null;
+
+        // Once the three-line ticker is full, reuse its existing rows. Adding
+        // a fourth Gtk.Revealer temporarily increases the widget's preferred
+        // height before the paired slide transitions settle, which makes the
+        // bottom-following transcript jump up and then back down. A full
+        // ticker updates frequently enough that an instant in-place rotation
+        // is also clearer than continuously animating its layout.
+        if (outgoingRow) {
+            displayedLineCount = latestLines.length;
+            const firstLineIndex = Math.max(
+                0,
+                displayedLineCount - REASONING_PREVIEW_LINES,
+            );
+
+            rows.forEach((row, index) => {
+                row.lineIndex = firstLineIndex + index;
+            });
+            syncRows();
+            resolveFinished();
+            return;
+        }
+
         const incomingRow = createRow(
             displayedLineCount,
             false,
@@ -306,17 +320,13 @@ export function createReasoningPreviewLabel(options = {}) {
         transitionRunning = true;
         transitionCount++;
         displayedLineCount++;
-        if (outgoingRow) {
-            outgoingRow.revealer.set_transition_duration(transitionPlan.transitionDurationMs);
-            outgoingRow.revealer.set_reveal_child(false);
-        }
         incomingRow.revealer.set_reveal_child(true);
         transitionSourceId = GLib.timeout_add(
             GLib.PRIORITY_DEFAULT,
             transitionPlan.transitionDurationMs + 20,
             () => {
                 transitionSourceId = 0;
-                finishLineAdvance(outgoingRow);
+                finishLineAdvance();
                 return GLib.SOURCE_REMOVE;
             },
         );
@@ -338,6 +348,7 @@ export function createReasoningPreviewLabel(options = {}) {
             || nextLines.length < displayedLineCount) {
             initialized = true;
             rebuildRows();
+            options.onStreamFrame?.(preview);
             return preview;
         }
 
@@ -346,6 +357,8 @@ export function createReasoningPreviewLabel(options = {}) {
             advanceOneLine();
         else
             resolveFinished();
+
+        options.onStreamFrame?.(preview);
 
         return preview;
     };

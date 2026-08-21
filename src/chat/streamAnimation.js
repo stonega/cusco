@@ -12,10 +12,7 @@ import {
 
 const UTF8_ENCODER = new TextEncoder();
 export const DEFAULT_STREAM_ANIMATION_DURATION_MS = 200;
-export const DEFAULT_STREAM_ANIMATION_STAGGER_MS = 28;
 const PRESSURED_STREAM_ANIMATION_DURATION_MS = 120;
-const PRESSURED_STREAM_ANIMATION_STAGGER_MS = 5;
-const MAX_ANIMATION_STAGGER_MS = 168;
 const MAX_ACTIVE_ANIMATION_RANGES = 32;
 const BLUR_RADIUS_PX = 4;
 const SLIDE_OFFSET_PX = 4;
@@ -176,28 +173,8 @@ function appendClippedLayout(snapshot, layout, color, ranges, lines) {
     }
 }
 
-function compactAnimationRanges(ranges, maximumRanges) {
-    if (ranges.length <= maximumRanges)
-        return ranges;
-
-    const leadingCount = Math.max(0, maximumRanges - 1);
-    const compacted = ranges.slice(0, leadingCount);
-    const firstTail = ranges[leadingCount];
-
-    if (!firstTail)
-        return compacted;
-
-    const tail = { ...firstTail };
-
-    for (let index = leadingCount + 1; index < ranges.length; index++) {
-        if (ranges[index].start !== tail.end)
-            break;
-
-        tail.end = ranges[index].end;
-    }
-
-    compacted.push(tail);
-    return compacted;
+function animationGroupRanges(groups) {
+    return groups.flatMap((group) => group.ranges);
 }
 
 export function animationByteRanges(previousText, nextText, excludedRanges = []) {
@@ -224,17 +201,38 @@ export function animationByteRanges(previousText, nextText, excludedRanges = [])
     return ranges;
 }
 
+export function animationByteRangeGroup(
+    previousText,
+    nextText,
+    excludedRanges = [],
+    maximumAnimatedUnits = MAX_ACTIVE_ANIMATION_RANGES,
+) {
+    const maximumValue = Number(maximumAnimatedUnits);
+    const maximum = Number.isFinite(maximumValue)
+        ? clamp(Math.floor(maximumValue), 0, MAX_ACTIVE_ANIMATION_RANGES)
+        : MAX_ACTIVE_ANIMATION_RANGES;
+
+    if (maximum === 0)
+        return [];
+
+    let ranges = animationByteRanges(previousText, nextText, excludedRanges);
+
+    if (ranges.length > maximum)
+        ranges = ranges.slice(-maximum);
+
+    return mergeByteRanges(ranges, utf8Length(nextText));
+}
+
 export const AnimatedMarkdownLabel = GObject.registerClass(
 class AnimatedMarkdownLabel extends Gtk.Label {
     _init(properties = {}) {
         super._init(properties);
         this._animationStyle = 'none';
         this._animationDurationMs = DEFAULT_STREAM_ANIMATION_DURATION_MS;
-        this._animationStaggerMs = DEFAULT_STREAM_ANIMATION_STAGGER_MS;
         this._motionEnabled = () => true;
         this._plainText = '';
-        this._activeRanges = [];
-        this._maximumNewAnimationRanges = MAX_ACTIVE_ANIMATION_RANGES;
+        this._activeGroups = [];
+        this._maximumNewAnimationUnits = MAX_ACTIVE_ANIMATION_RANGES;
         this._tickCallbackId = 0;
         this._animationResolvers = [];
     }
@@ -247,14 +245,9 @@ class AnimatedMarkdownLabel extends Gtk.Label {
     configureStreamAnimation(options = {}) {
         this._animationStyle = normalizeStreamAnimationStyle(options.style ?? 'none');
         const durationMs = Number(options.durationMs);
-        const staggerMs = Number(options.staggerMs);
         const baseDurationMs = Math.max(
             1,
             Number.isFinite(durationMs) ? durationMs : DEFAULT_STREAM_ANIMATION_DURATION_MS,
-        );
-        const baseStaggerMs = Math.max(
-            0,
-            Number.isFinite(staggerMs) ? staggerMs : DEFAULT_STREAM_ANIMATION_STAGGER_MS,
         );
         const pressureValue = Number(options.pressure);
         const pressure = Number.isFinite(pressureValue)
@@ -267,13 +260,8 @@ class AnimatedMarkdownLabel extends Gtk.Label {
             Math.min(baseDurationMs, PRESSURED_STREAM_ANIMATION_DURATION_MS),
             pressure,
         );
-        this._animationStaggerMs = interpolate(
-            baseStaggerMs,
-            Math.min(baseStaggerMs, PRESSURED_STREAM_ANIMATION_STAGGER_MS),
-            pressure,
-        );
-        this._maximumNewAnimationRanges = Number.isFinite(maximumAnimatedUnits)
-            ? Math.max(0, Math.floor(maximumAnimatedUnits))
+        this._maximumNewAnimationUnits = Number.isFinite(maximumAnimatedUnits)
+            ? clamp(Math.floor(maximumAnimatedUnits), 0, MAX_ACTIVE_ANIMATION_RANGES)
             : MAX_ACTIVE_ANIMATION_RANGES;
         this._motionEnabled = options.motionEnabled ?? (() => true);
 
@@ -299,56 +287,42 @@ class AnimatedMarkdownLabel extends Gtk.Label {
             return;
         }
 
-        let ranges = animationByteRanges(
+        const ranges = animationByteRangeGroup(
             animationStartText,
             nextPlainText,
             model?.excludedAnimationRanges ?? [],
+            this._maximumNewAnimationUnits,
         );
-
-        if (ranges.length === 0)
-            return;
-
-        if (this._maximumNewAnimationRanges === 0)
-            return;
-
-        if (ranges.length > this._maximumNewAnimationRanges)
-            ranges = ranges.slice(-this._maximumNewAnimationRanges);
 
         if (ranges.length === 0)
             return;
 
         const now = GLib.get_monotonic_time();
         const nextTextBytes = utf8Length(nextPlainText);
-        this._activeRanges = this._activeRanges.filter((range) => range.end <= nextTextBytes);
-        const availableSlots = Math.max(
-            1,
-            MAX_ACTIVE_ANIMATION_RANGES - this._activeRanges.length,
-        );
-        ranges = compactAnimationRanges(ranges, availableSlots);
+        this._activeGroups = this._activeGroups
+            .map((group) => ({
+                ...group,
+                ranges: group.ranges.filter((range) => range.end <= nextTextBytes),
+            }))
+            .filter((group) => group.ranges.length > 0);
+        this._activeGroups.push({
+            ranges,
+            startTime: now,
+            durationUs: this._animationDurationMs * 1000,
+        });
 
-        if (this._activeRanges.length + ranges.length > MAX_ACTIVE_ANIMATION_RANGES) {
-            this._activeRanges.splice(
-                0,
-                this._activeRanges.length + ranges.length - MAX_ACTIVE_ANIMATION_RANGES,
-            );
+        while (this._activeGroups.length > 1
+            && animationGroupRanges(this._activeGroups).length
+                > MAX_ACTIVE_ANIMATION_RANGES) {
+            this._activeGroups.shift();
         }
 
-        ranges.forEach((range, index) => {
-            this._activeRanges.push({
-                ...range,
-                startTime: now + Math.min(
-                    index * this._animationStaggerMs,
-                    MAX_ANIMATION_STAGGER_MS,
-                ) * 1000,
-                durationUs: this._animationDurationMs * 1000,
-            });
-        });
         this._ensureAnimationTick();
         this.queue_draw();
     }
 
     clearAnimations() {
-        this._activeRanges = [];
+        this._activeGroups = [];
 
         if (this._tickCallbackId) {
             this.remove_tick_callback(this._tickCallbackId);
@@ -365,7 +339,7 @@ class AnimatedMarkdownLabel extends Gtk.Label {
             return Promise.resolve();
         }
 
-        if (this._activeRanges.length === 0)
+        if (this._activeGroups.length === 0)
             return Promise.resolve();
 
         return new Promise((resolve) => {
@@ -388,17 +362,17 @@ class AnimatedMarkdownLabel extends Gtk.Label {
     }
 
     _ensureAnimationTick() {
-        if (this._tickCallbackId || this._activeRanges.length === 0)
+        if (this._tickCallbackId || this._activeGroups.length === 0)
             return;
 
         this._tickCallbackId = this.add_tick_callback((_widget, frameClock) => {
             const now = frameClock.get_frame_time();
-            this._activeRanges = this._activeRanges.filter((range) => (
-                now < range.startTime + range.durationUs
+            this._activeGroups = this._activeGroups.filter((group) => (
+                now < group.startTime + group.durationUs
             ));
             this.queue_draw();
 
-            if (this._activeRanges.length > 0)
+            if (this._activeGroups.length > 0)
                 return GLib.SOURCE_CONTINUE;
 
             this._tickCallbackId = 0;
@@ -415,8 +389,8 @@ class AnimatedMarkdownLabel extends Gtk.Label {
     }
 
     vfunc_snapshot(snapshot) {
-        if (this._activeRanges.length === 0 || !this._animationsEnabled()) {
-            if (this._activeRanges.length > 0)
+        if (this._activeGroups.length === 0 || !this._animationsEnabled()) {
+            if (this._activeGroups.length > 0)
                 this.clearAnimations();
 
             super.vfunc_snapshot(snapshot);
@@ -430,6 +404,7 @@ class AnimatedMarkdownLabel extends Gtk.Label {
         const textLength = utf8Length(layout.get_text());
         const lines = layoutLineMetrics(layout);
         const layoutPoint = new Graphene.Point();
+        const activeRanges = animationGroupRanges(this._activeGroups);
         layoutPoint.init(layoutX, layoutY);
 
         snapshot.save();
@@ -438,15 +413,15 @@ class AnimatedMarkdownLabel extends Gtk.Label {
             snapshot,
             layout,
             color,
-            animationVisibleByteRanges(this._activeRanges, textLength),
+            animationVisibleByteRanges(activeRanges, textLength),
             lines,
         );
         snapshot.restore();
 
-        for (const range of this._activeRanges) {
+        for (const group of this._activeGroups) {
             const frame = streamEntranceFrame(
                 this._animationStyle,
-                (now - range.startTime) / range.durationUs,
+                (now - group.startTime) / group.durationUs,
             );
             const translation = new Graphene.Point();
             translation.init(
@@ -460,7 +435,7 @@ class AnimatedMarkdownLabel extends Gtk.Label {
             if (frame.blurRadius > 0.01)
                 snapshot.push_blur(frame.blurRadius);
 
-            appendClippedLayout(snapshot, layout, color, [range], lines);
+            appendClippedLayout(snapshot, layout, color, group.ranges, lines);
 
             if (frame.blurRadius > 0.01)
                 snapshot.pop();
