@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.41] - 2026-08-28
+
 ### Added
 
 - Add Z.ai GLM-5.3-Flash with 1M context, native image input, always-on reasoning controls, and streamed tool calls.
@@ -418,7 +420,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.40...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.41...HEAD
+[0.5.41]: https://github.com/stonega/cusco/compare/v0.5.40...v0.5.41
 [0.5.40]: https://github.com/stonega/cusco/compare/v0.5.39...v0.5.40
 [0.5.39]: https://github.com/stonega/cusco/compare/v0.5.38...v0.5.39
 [0.5.38]: https://github.com/stonega/cusco/compare/v0.5.37...v0.5.38
