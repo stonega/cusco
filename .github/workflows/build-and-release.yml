@@ -38,6 +38,7 @@ jobs:
             gjs \
             gir1.2-adw-1 \
             gir1.2-atspi-2.0 \
+            gir1.2-goa-1.0 \
             gir1.2-gtk-4.0 \
             gir1.2-gtksource-5 \
             gir1.2-secret-1 \
@@ -98,7 +99,7 @@ jobs:
           Priority: optional
           Architecture: all
           Maintainer: Cusco maintainers <noreply@github.com>
-          Depends: gjs, gir1.2-adw-1, gir1.2-atspi-2.0, gir1.2-gtk-4.0, gir1.2-gtksource-5, gir1.2-secret-1, gir1.2-soup-3.0, gir1.2-webkit-6.0
+          Depends: gjs, gir1.2-adw-1, gir1.2-atspi-2.0, gir1.2-goa-1.0, gir1.2-gtk-4.0, gir1.2-gtksource-5, gir1.2-secret-1, gir1.2-soup-3.0, gir1.2-webkit-6.0
           Homepage: https://github.com/stonega/cusco
           Description: Native GNOME AI chat application
            Cusco is a native GTK/libadwaita AI chat application for GNOME.
@@ -157,6 +158,7 @@ jobs:
 
           Requires: gjs
           Requires: at-spi2-core
+          Requires: gnome-online-accounts-libs
           Requires: gtk4
           Requires: libadwaita
           Requires: gtksourceview5

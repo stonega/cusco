@@ -21,6 +21,7 @@ Requires:       at-spi2-core
 Requires:       gdk-pixbuf2
 Requires:       gjs
 Requires:       gnome-shell
+Requires:       gnome-online-accounts-libs
 Requires:       gtk4
 Requires:       gtksourceview5
 Requires:       hicolor-icon-theme

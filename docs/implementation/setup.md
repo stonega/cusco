@@ -2,9 +2,9 @@
 
 ## Dependencies
 
-Cusco uses GJS, GTK 4, libadwaita, GtkSourceView 5, WebKitGTK 6.0, libsecret, libsoup 3, Meson, and Ninja. WebKitGTK is used only for sandboxed HTML artifacts; the application shell remains native GTK/libadwaita.
+Cusco uses GJS, GTK 4, libadwaita, GtkSourceView 5, WebKitGTK 6.0, libsecret, libsoup 3, GNOME Online Accounts, Meson, and Ninja. WebKitGTK is used only for sandboxed HTML artifacts; the application shell remains native GTK/libadwaita.
 
-Fedora provides the required GTK 4 WebKit runtime as `webkitgtk6.0`. Debian and Ubuntu provide its GObject-introspection bindings as `gir1.2-webkit-6.0`.
+Fedora provides the required GTK 4 WebKit and GOA runtimes as `webkitgtk6.0` and `gnome-online-accounts-libs`. Debian and Ubuntu provide their GObject-introspection bindings as `gir1.2-webkit-6.0` and `gir1.2-goa-1.0`.
 
 Quick smoke check:
 

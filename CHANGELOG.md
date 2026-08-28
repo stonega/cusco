@@ -39,6 +39,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Declare the GNOME Online Accounts runtime dependency in CI and release packages so the native Gmail connector loads on fresh installs.
 - Show sent messages and Agent activity in the first UI frame, keep optimistic message rows in place after approval, and refresh MCP and connector tools concurrently so preflight work no longer leaves the transcript visually idle.
 - Correct the Add MCP Server form’s transport selector and compound input rows, and keep scrollbars flush-right in server and skill detail dialogs.
 - Refresh expiring MCP access tokens from Secret Service, preserve rotated refresh tokens, and validate OAuth discovery and callback metadata.
