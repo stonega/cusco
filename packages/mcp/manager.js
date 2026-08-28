@@ -9,6 +9,8 @@ import { McpClient } from './client.js';
 import {
     authorizeMcpServer,
     createDefaultMcpTokenStore,
+    refreshMcpToken,
+    shouldRefreshMcpToken,
 } from './auth.js';
 
 const MAX_SCHEMA_DESCRIPTION_CHARS = 1200;
@@ -33,7 +35,13 @@ function cloneServer(server) {
         ...server,
         args: [...(server.args ?? [])],
         env: { ...(server.env ?? {}) },
+        envPassthrough: [...(server.envPassthrough ?? [])],
         headers: { ...(server.headers ?? {}) },
+        headerEnv: { ...(server.headerEnv ?? {}) },
+        oauth: {
+            ...(server.oauth ?? {}),
+            scopes: [...(server.oauth?.scopes ?? [])],
+        },
         roots: [...(server.roots ?? [])],
     };
 }
@@ -256,6 +264,7 @@ export class McpManager {
         this._tokenStore = tokenStore;
         this._servers = [];
         this._clients = new Map();
+        this._tokenRefreshes = new Map();
         this._status = new Map();
         this._serverTools = new Map();
         this._serverResources = new Map();
@@ -309,19 +318,24 @@ export class McpManager {
     }
 
     listServers() {
-        return this._servers.map((server) => ({
-            ...cloneServer(server),
-            status: this._status.get(server.key) ?? {
-                state: server.enabled ? 'idle' : 'disabled',
-                message: server.enabled ? 'Not connected.' : 'Disabled.',
-                updatedAt: '',
-                auth: null,
-            },
-            toolCount: this._serverTools.get(server.key)?.length ?? 0,
-            resourceCount: (this._serverResources.get(server.key)?.length ?? 0)
-                + (this._serverResourceTemplates.get(server.key)?.length ?? 0),
-            promptCount: this._serverPrompts.get(server.key)?.length ?? 0,
-        }));
+        return this._servers.map((server) => {
+            const token = this._tokenStore?.lookup?.(server.key);
+
+            return {
+                ...cloneServer(server),
+                authenticated: Boolean(token?.accessToken),
+                status: this._status.get(server.key) ?? {
+                    state: server.enabled ? 'idle' : 'disabled',
+                    message: server.enabled ? 'Not connected.' : 'Disabled.',
+                    updatedAt: '',
+                    auth: null,
+                },
+                toolCount: this._serverTools.get(server.key)?.length ?? 0,
+                resourceCount: (this._serverResources.get(server.key)?.length ?? 0)
+                    + (this._serverResourceTemplates.get(server.key)?.length ?? 0),
+                promptCount: this._serverPrompts.get(server.key)?.length ?? 0,
+            };
+        });
     }
 
     addWorkspaceServer(server) {
@@ -362,6 +376,7 @@ export class McpManager {
             throw createUserVisibleError('Config-file MCP servers must be removed from the config file.');
 
         this._workspaceManager.deleteRecord('mcpServers', server.id);
+        this._tokenStore?.clear?.(key);
         this.disconnectServer(key);
         this.reloadConfig();
     }
@@ -418,24 +433,42 @@ export class McpManager {
             return;
         }
 
-        const client = this._clientFor(server);
-        this._setStatus(key, 'connecting', 'Connecting...');
+        try {
+            const client = await this._clientFor(server, options);
+            this._setStatus(key, 'connecting', 'Connecting...');
 
-        await client.connect(options);
-        const tools = await this._tryList(() => client.listTools(options));
-        const resources = await this._tryList(() => client.listResources(options));
-        const templates = await this._tryList(() => client.listResourceTemplates(options));
-        const prompts = await this._tryList(() => client.listPrompts(options));
+            await client.connect(options);
+            const tools = await this._tryList(() => client.listTools(options));
+            const resources = await this._tryList(() => client.listResources(options));
+            const templates = await this._tryList(() => client.listResourceTemplates(options));
+            const prompts = await this._tryList(() => client.listPrompts(options));
 
-        this._serverTools.set(key, tools);
-        this._serverResources.set(key, resources);
-        this._serverResourceTemplates.set(key, templates);
-        this._serverPrompts.set(key, prompts);
-        this._setStatus(
-            key,
-            'connected',
-            `${tools.length} tools, ${resources.length + templates.length} resources, ${prompts.length} prompts.`,
-        );
+            this._serverTools.set(key, tools);
+            this._serverResources.set(key, resources);
+            this._serverResourceTemplates.set(key, templates);
+            this._serverPrompts.set(key, prompts);
+            this._setStatus(
+                key,
+                'connected',
+                `${tools.length} tools, ${resources.length + templates.length} resources, ${prompts.length} prompts.`,
+            );
+        } catch (error) {
+            this._setErrorStatus(key, error);
+            throw error;
+        }
+    }
+
+    async connectServer(key, options = {}) {
+        try {
+            await this.refreshServer(key, options);
+        } catch (error) {
+            if (!error?.mcpAuth)
+                throw error;
+
+            await this.authorizeServer(key, options);
+        }
+
+        return this.listServers().find((server) => server.key === key) ?? null;
     }
 
     async authorizeServer(key, options = {}) {
@@ -445,10 +478,28 @@ export class McpManager {
             throw createUserVisibleError(`Unknown MCP server: ${key}`);
 
         const status = this._status.get(key);
-        await authorizeMcpServer(server, status?.auth ?? {}, this._tokenStore, options);
+        const callerStatus = options.onStatus;
+        await authorizeMcpServer(server, status?.auth ?? {}, this._tokenStore, {
+            ...options,
+            onStatus: (phase, message) => {
+                this._setStatus(key, 'authorizing', message);
+                callerStatus?.(phase, message);
+            },
+        });
         this.disconnectServer(key);
         await this.refreshServer(key, options);
         return this.listServers().find((item) => item.key === key);
+    }
+
+    clearServerAuthorization(key) {
+        const server = this._servers.find((item) => item.key === key);
+
+        if (!server)
+            throw createUserVisibleError(`Unknown MCP server: ${key}`);
+
+        this._tokenStore?.clear?.(key);
+        this.disconnectServer(key);
+        this._setStatus(key, 'idle', 'Authorization removed.');
     }
 
     async callTool(serverKeyValue, toolName, input, options = {}) {
@@ -461,7 +512,8 @@ export class McpManager {
         const tool = tools.find((item) => item.name === toolName);
         const args = parseMcpToolArguments(input, tool?.inputSchema);
         try {
-            const result = await this._clientFor(server).callTool(toolName, args, options);
+            const client = await this._clientFor(server, options);
+            const result = await client.callTool(toolName, args, options);
             return formatMcpToolResult(result);
         } catch (error) {
             this._setErrorStatus(server.key, error);
@@ -486,7 +538,8 @@ export class McpManager {
             throw createUserVisibleError('MCP resource URI cannot be empty.');
 
         try {
-            return formatMcpResourceRead(await this._clientFor(server).readResource(uri, options));
+            const client = await this._clientFor(server, options);
+            return formatMcpResourceRead(await client.readResource(uri, options));
         } catch (error) {
             this._setErrorStatus(server.key, error);
             throw error;
@@ -508,7 +561,8 @@ export class McpManager {
             throw createUserVisibleError('MCP prompt name cannot be empty.');
 
         try {
-            return formatMcpPrompt(await this._clientFor(server).getPrompt(name, args, options));
+            const client = await this._clientFor(server, options);
+            return formatMcpPrompt(await client.getPrompt(name, args, options));
         } catch (error) {
             this._setErrorStatus(server.key, error);
             throw error;
@@ -530,13 +584,48 @@ export class McpManager {
             client.disconnect();
 
         this._clients.clear();
+        this._tokenRefreshes.clear();
     }
 
-    _clientFor(server) {
+    async _clientFor(server, options = {}) {
         let client = this._clients.get(server.key);
+        let token = this._tokenStore?.lookup?.(server.key);
+
+        if (token && shouldRefreshMcpToken(token)) {
+            if (token.refreshToken) {
+                try {
+                    let refresh = this._tokenRefreshes.get(server.key);
+
+                    if (!refresh) {
+                        refresh = refreshMcpToken(server, token, this._tokenStore, options)
+                            .finally(() => this._tokenRefreshes.delete(server.key));
+                        this._tokenRefreshes.set(server.key, refresh);
+                    }
+
+                    token = await refresh;
+                    client?.disconnect();
+                    this._clients.delete(server.key);
+                    client = null;
+                } catch (error) {
+                    if (!error?.mcpReauthorizationRequired)
+                        throw error;
+
+                    this._tokenStore?.clear?.(server.key);
+                    token = null;
+                    client?.disconnect();
+                    this._clients.delete(server.key);
+                    client = null;
+                }
+            } else if (shouldRefreshMcpToken(token, { skewMilliseconds: 0 })) {
+                this._tokenStore?.clear?.(server.key);
+                token = null;
+                client?.disconnect();
+                this._clients.delete(server.key);
+                client = null;
+            }
+        }
 
         if (!client) {
-            const token = this._tokenStore?.lookup?.(server.key);
             const authToken = token?.accessToken && String(token.tokenType ?? 'Bearer').toLowerCase() === 'bearer'
                 ? token.accessToken
                 : '';

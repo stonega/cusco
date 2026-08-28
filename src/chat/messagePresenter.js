@@ -373,7 +373,7 @@ export class MessagePresenter {
         bubble.add_css_class('cusco-message-bubble');
         bubble.add_css_class(kind === 'user' ? 'cusco-message-user' : 'cusco-message-assistant');
 
-        const imageAttachmentPreviews = this._createMessageImageAttachmentPreviews(message, kind);
+        let imageAttachmentPreviews = this._createMessageImageAttachmentPreviews(message, kind);
         const displayBody = hideBinaryAttachmentData(
             displayBodyWithoutImageAttachmentLines(body, message),
             message?.attachments,
@@ -561,6 +561,32 @@ export class MessagePresenter {
             if (wrapper.get_parent())
                 this._scrollToBottom();
         };
+        const promoteUserMessage = (nextMessage) => {
+            if (kind !== 'user' || !nextMessage)
+                return;
+
+            const nextAttachmentPreviews = this._createMessageImageAttachmentPreviews(
+                nextMessage,
+                kind,
+            );
+
+            if (imageAttachmentPreviews?.get_parent() === wrapper)
+                wrapper.remove(imageAttachmentPreviews);
+
+            imageAttachmentPreviews = nextAttachmentPreviews;
+
+            if (imageAttachmentPreviews)
+                wrapper.prepend(imageAttachmentPreviews);
+
+            if (!bubble.get_parent())
+                wrapper.append(bubble);
+
+            updateBodyContent(hideBinaryAttachmentData(
+                displayBodyWithoutImageAttachmentLines(nextMessage.content, nextMessage),
+                nextMessage.attachments,
+            ));
+            showActions(nextMessage);
+        };
 
         showActions(message);
 
@@ -595,6 +621,7 @@ export class MessagePresenter {
                     reasoningExpander?.finishPreviewAnimation?.(presentationOptions),
                 ]);
             },
+            promote_user_message: promoteUserMessage,
             show_actions: showActions,
             set_stream_preferences: (streamOptions) => {
                 actionStreamPreferences = {

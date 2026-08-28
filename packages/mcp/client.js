@@ -314,6 +314,13 @@ class McpStdioSession extends McpJsonRpcSession {
         if (this.config.cwd)
             launcher.set_cwd(this.config.cwd);
 
+        for (const name of this.config.envPassthrough ?? []) {
+            const value = GLib.getenv(name);
+
+            if (value !== null)
+                launcher.setenv(name, value, true);
+        }
+
         for (const [name, value] of Object.entries(this.config.env ?? {}))
             launcher.setenv(name, value, true);
 
@@ -436,10 +443,26 @@ class McpHttpSession extends McpJsonRpcSession {
         if (this._sessionId)
             message.request_headers.append('Mcp-Session-Id', this._sessionId);
 
-        for (const [name, value] of Object.entries(this.config.headers ?? {}))
+        const requestHeaders = { ...(this.config.headers ?? {}) };
+
+        for (const [name, environmentName] of Object.entries(this.config.headerEnv ?? {})) {
+            const value = GLib.getenv(environmentName);
+
+            if (value !== null && !hasHeader(requestHeaders, name))
+                requestHeaders[name] = value;
+        }
+
+        const bearerToken = this.config.bearerTokenEnvVar
+            ? GLib.getenv(this.config.bearerTokenEnvVar)
+            : '';
+
+        if (bearerToken && !hasHeader(requestHeaders, 'Authorization'))
+            requestHeaders.Authorization = `Bearer ${bearerToken}`;
+
+        for (const [name, value] of Object.entries(requestHeaders))
             message.request_headers.append(name, value);
 
-        if (this.config.authToken && !hasHeader(this.config.headers, 'Authorization'))
+        if (this.config.authToken && !hasHeader(requestHeaders, 'Authorization'))
             message.request_headers.append('Authorization', `Bearer ${this.config.authToken}`);
 
         message.set_request_body_from_bytes('application/json', encodeJsonBody(payload));

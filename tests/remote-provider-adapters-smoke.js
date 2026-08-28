@@ -657,6 +657,34 @@ const zaiGlm53ThinkingBody = buildOpenAiCompatibleChatBody(messages, 'glm-5.3', 
 assertEqual(zaiGlm53ThinkingBody.thinking.type, 'enabled', 'Z.ai GLM-5.3 always enables thinking');
 assertEqual(zaiGlm53ThinkingBody.reasoning_effort, 'low', 'Z.ai GLM-5.3 low reasoning effort');
 assertEqual(zaiGlm53ThinkingBody.max_tokens, 128000, 'Z.ai GLM-5.3 maximum output tokens');
+const zaiGlm53FlashBody = buildOpenAiCompatibleChatBody(imageMessages, 'glm-5.3-flash', {
+    provider: { supportsImageAttachments: false },
+    model: {
+        supportsImageAttachments: true,
+        supportsToolStreaming: true,
+        thinking: {
+            api: 'zai-thinking',
+            levels: ['low', 'high', 'max'],
+            defaultLevel: 'max',
+            alwaysOn: true,
+            supportsReasoningEffort: true,
+        },
+    },
+    thinkingLevel: 'max',
+    maxOutputTokens: 131072,
+    stream: true,
+    tools: [mcpTool],
+});
+assertEqual(zaiGlm53FlashBody.messages[0].content[1].type, 'image_url', 'Z.ai GLM-5.3-Flash image part');
+assertEqual(
+    zaiGlm53FlashBody.messages[0].content[1].image_url.url,
+    `data:image/png;base64,${imageData}`,
+    'Z.ai GLM-5.3-Flash image data URL',
+);
+assertEqual(zaiGlm53FlashBody.thinking.type, 'enabled', 'Z.ai GLM-5.3-Flash always enables thinking');
+assertEqual(zaiGlm53FlashBody.reasoning_effort, 'max', 'Z.ai GLM-5.3-Flash reasoning effort');
+assertEqual(zaiGlm53FlashBody.max_tokens, 131072, 'Z.ai GLM-5.3-Flash maximum output tokens');
+assertEqual(zaiGlm53FlashBody.tool_stream, true, 'Z.ai GLM-5.3-Flash streams tool calls');
 const zaiThinkingOffBody = buildOpenAiCompatibleChatBody(messages, 'glm-5.2', {
     model: {
         thinking: {

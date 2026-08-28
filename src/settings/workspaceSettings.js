@@ -1,4 +1,6 @@
 import Adw from 'gi://Adw?version=1';
+import Gio from 'gi://Gio?version=2.0';
+import GLib from 'gi://GLib?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
 import Pango from 'gi://Pango?version=1.0';
 
@@ -6,6 +8,7 @@ import { findPromptVariables, formatPromptVariables } from '../workspace/promptV
 import { createMcpConfigGroup } from './mcpSettings.js';
 import { createComputerUseSettingsGroup } from './computerUseSettings.js';
 import { createHooksConfigGroup } from './hooksSettings.js';
+import { presentDetailDialog } from '../detailDialog.js';
 
 const ADD_PROMPT_HELPER_TEXT = [
     'Write the reusable prompt here.',
@@ -186,8 +189,143 @@ function addRecordRows(group, records, collectionName, workspaceManager, refresh
 function skillSubtitle(skill) {
     return [
         skill.loadError ? `Error: ${skill.loadError}` : skill.description,
-        `${skill.source === 'global' ? 'Installed' : 'Custom'}: ${skill.path}`,
+        skill.path,
     ].filter(Boolean).join('\n');
+}
+
+function displayUserPath(path) {
+    const value = String(path ?? '');
+    const homePath = GLib.get_home_dir();
+
+    if (value === homePath)
+        return '~';
+
+    return value.startsWith(`${homePath}/`)
+        ? `~${value.slice(homePath.length)}`
+        : value;
+}
+
+function createSkillSourceTag(skill) {
+    const isGlobal = skill.source === 'global';
+    const tag = new Gtk.Label({
+        label: isGlobal ? 'Global' : 'Cusco',
+        tooltip_text: isGlobal
+            ? 'Discovered from ~/.agents/skills'
+            : 'Managed by this Cusco repository',
+        valign: Gtk.Align.CENTER,
+    });
+    tag.add_css_class('caption');
+    tag.add_css_class('cusco-skill-source-tag');
+    tag.add_css_class(isGlobal
+        ? 'cusco-skill-source-global'
+        : 'cusco-skill-source-local');
+    return tag;
+}
+
+function showSkillImportError(parent, error) {
+    const dialog = new Adw.AlertDialog({
+        heading: 'Could Not Add Skill',
+        body: error.message || 'The selected folder could not be imported.',
+    });
+    dialog.add_response('close', 'Close');
+    dialog.set_close_response('close');
+    dialog.present(parent);
+}
+
+function skillSourceLabel(skill) {
+    switch (skill.source) {
+    case 'global':
+        return 'Global skill';
+    case 'plugin':
+        return 'Installed plugin';
+    case 'cusco':
+        return 'Cusco repository';
+    case 'custom':
+        return 'Custom location';
+    case 'builtin':
+        return 'Built into Cusco';
+    default:
+        return skill.source || 'Local skill';
+    }
+}
+
+function skillContent(skill) {
+    return String(skill.content ?? '').trim();
+}
+
+function skillDetailRow(title, value) {
+    return new Adw.ActionRow({
+        title,
+        subtitle: String(value ?? ''),
+        subtitle_lines: 3,
+    });
+}
+
+export function presentSkillDetailsDialog(parent, skill) {
+    const content = new Gtk.Box({
+        orientation: Gtk.Orientation.VERTICAL,
+        spacing: 16,
+        margin_top: 12,
+        margin_bottom: 24,
+        margin_start: 24,
+        margin_end: 24,
+    });
+    const description = new Gtk.Label({
+        label: skill.loadError
+            ? `This skill could not be loaded: ${skill.loadError}`
+            : skill.description || 'No description provided.',
+        xalign: 0,
+        wrap: true,
+        selectable: true,
+        max_width_chars: 62,
+        hexpand: true,
+        valign: Gtk.Align.CENTER,
+    });
+    description.add_css_class('cusco-detail-description');
+    description.add_css_class('cusco-detail-hero');
+    content.append(description);
+
+    const details = new Adw.PreferencesGroup({ title: 'Details' });
+    details.add(skillDetailRow(
+        'Status',
+        skill.loadError ? 'Unavailable' : (skill.enabled ? 'Enabled' : 'Disabled'),
+    ));
+    details.add(skillDetailRow('Source', skillSourceLabel(skill)));
+    details.add(skillDetailRow('Identifier', skill.id || skill.name));
+    if (skill.path)
+        details.add(skillDetailRow('Location', displayUserPath(skill.path)));
+    content.append(details);
+
+    const skillText = skillContent(skill);
+    if (skillText) {
+        const contentGroup = new Adw.PreferencesGroup({ title: 'Skill content' });
+        const contentLabel = new Gtk.Label({
+            label: skillText,
+            xalign: 0,
+            yalign: 0,
+            wrap: true,
+            selectable: true,
+            max_width_chars: 72,
+        });
+        contentLabel.add_css_class('cusco-detail-skill-content');
+        contentGroup.add(contentLabel);
+        content.append(contentGroup);
+    }
+
+    const scroller = new Gtk.ScrolledWindow({
+        child: content,
+        min_content_height: 280,
+        max_content_height: 560,
+        propagate_natural_height: true,
+        hscrollbar_policy: Gtk.PolicyType.NEVER,
+        vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+        window_placement: Gtk.CornerType.TOP_LEFT,
+        vexpand: true,
+    });
+    return presentDetailDialog(parent, {
+        title: skill.name || 'Skill details',
+        child: scroller,
+    });
 }
 
 function normalizeSkillIdentity(value) {
@@ -202,7 +340,19 @@ function isSkillVisibleInSettings(skill) {
     ].some((value) => normalizeSkillIdentity(value).includes('codexcli'));
 }
 
-function addSkillRows(group, workspaceManager, refresh) {
+function loadSkillDetails(workspaceManager, skill) {
+    try {
+        return workspaceManager.loadSkill?.(skill.id) ?? skill;
+    } catch (error) {
+        logError(error, `Failed to load skill details for ${skill.id}`);
+        return {
+            ...skill,
+            loadError: error?.message || 'The skill content could not be loaded.',
+        };
+    }
+}
+
+function addSkillRows(group, workspaceManager, refresh, options = {}) {
     const rows = [];
 
     for (const skill of workspaceManager.skills.filter(isSkillVisibleInSettings)) {
@@ -210,7 +360,12 @@ function addSkillRows(group, workspaceManager, refresh) {
             title: skill.name,
             subtitle: skillSubtitle(skill),
             subtitle_lines: 2,
+            activatable: true,
         });
+        row.connect('activated', () => {
+            options.onShowDetails?.(loadSkillDetails(workspaceManager, skill));
+        });
+        row.add_suffix(createSkillSourceTag(skill));
         row.add_suffix(createSwitch(skill.enabled, 'Enable skill', (enabled) => {
             try {
                 workspaceManager.setSkillEnabled(skill.id, enabled);
@@ -228,7 +383,7 @@ function addSkillRows(group, workspaceManager, refresh) {
             }
         }));
 
-        if (skill.source !== 'global') {
+        if (skill.source === 'custom') {
             row.add_suffix(createActionButton('user-trash-symbolic', 'Delete skill', () => {
                 try {
                     workspaceManager.deleteRecord('skills', skill.id);
@@ -355,7 +510,12 @@ export function createWorkspaceSettingsPage(
     return page;
 }
 
-export function createSkillsSettingsPage(parent, workspaceManager, onChanged = () => {}) {
+export function createSkillsManagementPage(
+    parent,
+    workspaceManager,
+    onChanged = () => {},
+    options = {},
+) {
     const page = new Adw.PreferencesPage({
         title: 'Skills',
         icon_name: 'emblem-system-symbolic',
@@ -372,9 +532,10 @@ export function createSkillsSettingsPage(parent, workspaceManager, onChanged = (
         title: 'Skills',
         description: 'Use installed local SKILL.md instructions as optional chat context.',
     });
+    const cuscoSkillsPath = displayUserPath(workspaceManager.cuscoSkillsPath);
     const refreshSkillsRow = new Adw.ActionRow({
         title: 'Refresh installed skills',
-        subtitle: 'Scans ~/.agents/skills for skill folders.',
+        subtitle: `Scans ~/.agents/skills and ${cuscoSkillsPath}; installed plugin skills are included.`,
     });
     refreshSkillsRow.add_suffix(createActionButton('view-refresh-symbolic', 'Refresh installed skills', () => {
         try {
@@ -388,15 +549,27 @@ export function createSkillsSettingsPage(parent, workspaceManager, onChanged = (
 
     const addSkillRow = new Adw.ActionRow({
         title: 'Add skill folder',
-        subtitle: 'Register another folder containing SKILL.md.',
+        subtitle: `Copy a folder containing SKILL.md into ${cuscoSkillsPath}.`,
     });
     addSkillRow.add_suffix(createActionButton('list-add-symbolic', 'Add skill folder', () => {
-        promptForText(parent, 'Add Skill Folder', '~/path/to/skill', (path) => {
+        const dialog = new Gtk.FileDialog({
+            title: 'Add Skill Folder',
+        });
+        dialog.select_folder(parent, null, (_dialog, result) => {
             try {
-                workspaceManager.addSkillPath(path, { enabled: true });
+                const path = dialog.select_folder_finish(result)?.get_path();
+
+                if (!path)
+                    throw new Error('Only local skill folders are supported.');
+
+                workspaceManager.importSkillFolder(path, { enabled: true });
                 refresh();
             } catch (error) {
+                if (error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                    return;
+
                 logError(error, 'Failed to add skill folder');
+                showSkillImportError(parent, error);
             }
         });
     }));
@@ -407,11 +580,26 @@ export function createSkillsSettingsPage(parent, workspaceManager, onChanged = (
         for (const row of skillRows)
             skillsGroup.remove(row);
 
-        skillRows = addSkillRows(skillsGroup, workspaceManager, refresh);
+        skillRows = addSkillRows(skillsGroup, workspaceManager, refresh, {
+            onShowDetails: options.onShowDetails
+                ?? ((skill) => presentSkillDetailsDialog(parent, skill)),
+        });
     };
     refreshers.push(renderSkills);
     renderSkills();
 
     page.add(skillsGroup);
-    return page;
+    return {
+        widget: page,
+        refresh: renderSkills,
+    };
+}
+
+export function createSkillsSettingsPage(
+    parent,
+    workspaceManager,
+    onChanged = () => {},
+    options = {},
+) {
+    return createSkillsManagementPage(parent, workspaceManager, onChanged, options).widget;
 }

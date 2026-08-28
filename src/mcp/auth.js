@@ -12,4 +12,6 @@ export const {
     MemoryMcpTokenStore,
     createDefaultMcpTokenStore,
     authorizeMcpServer,
+    refreshMcpToken,
+    shouldRefreshMcpToken,
 } = implementation;

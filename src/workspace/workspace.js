@@ -2,8 +2,12 @@ import GLib from 'gi://GLib?version=2.0';
 
 import {
     buildSkillContext,
+    DEFAULT_CUSCO_PLUGINS_PATH,
+    DEFAULT_CUSCO_SKILLS_PATH,
     DEFAULT_GLOBAL_SKILLS_PATH,
     discoverInstalledSkills,
+    discoverPluginSkills,
+    importSkillFolder,
     loadSkillFromPath,
 } from '../skills/skills.js';
 import { normalizeMcpServerConfig } from '../mcp/config.js';
@@ -43,6 +47,7 @@ function defaultWorkspaceData() {
 }
 
 function normalizeSkillRecord(skill) {
+    const knownSources = new Set(['custom', 'cusco', 'global', 'plugin']);
     const normalized = normalizeRecord(skill, {
         name: 'Skill',
         description: '',
@@ -60,7 +65,7 @@ function normalizeSkillRecord(skill) {
         name: String(normalized.name ?? '').trim() || 'Skill',
         description: String(normalized.description ?? '').trim(),
         path: String(normalized.path ?? '').trim(),
-        source: normalized.source === 'global' ? 'global' : 'custom',
+        source: knownSources.has(normalized.source) ? normalized.source : 'custom',
         enabled: Boolean(normalized.enabled),
         selectedByDefault: Boolean(normalized.selectedByDefault),
         loadError: String(normalized.loadError ?? '').trim(),
@@ -77,9 +82,17 @@ function mergeSkillState(discoveredSkill, existingSkill = null) {
 }
 
 export class WorkspaceManager {
-    constructor({ store = null, globalSkillsPath = DEFAULT_GLOBAL_SKILLS_PATH, autoDiscoverSkills = true } = {}) {
+    constructor({
+        store = null,
+        globalSkillsPath = DEFAULT_GLOBAL_SKILLS_PATH,
+        cuscoSkillsPath = DEFAULT_CUSCO_SKILLS_PATH,
+        cuscoPluginsPath = DEFAULT_CUSCO_PLUGINS_PATH,
+        autoDiscoverSkills = true,
+    } = {}) {
         this._store = store;
         this._globalSkillsPath = globalSkillsPath;
+        this._cuscoSkillsPath = cuscoSkillsPath;
+        this._cuscoPluginsPath = cuscoPluginsPath;
         const stored = {
             ...defaultWorkspaceData(),
             ...this._load(),
@@ -149,6 +162,10 @@ export class WorkspaceManager {
 
     get enabledSkills() {
         return this._skills.filter((skill) => skill.enabled && !skill.loadError).map((skill) => ({ ...skill }));
+    }
+
+    get cuscoSkillsPath() {
+        return this._cuscoSkillsPath;
     }
 
     get pluginTools() {
@@ -249,23 +266,20 @@ export class WorkspaceManager {
     }
 
     refreshInstalledSkills({ persist = true } = {}) {
-        const discoveredSkills = discoverInstalledSkills({ rootPath: this._globalSkillsPath });
+        const discoveredSkills = [
+            ...discoverInstalledSkills({ rootPath: this._globalSkillsPath }),
+            ...discoverInstalledSkills({
+                rootPath: this._cuscoSkillsPath,
+                source: 'cusco',
+            }),
+            ...discoverPluginSkills({ pluginsRootPath: this._cuscoPluginsPath }),
+        ];
         const existingById = new Map(this._skills.map((skill) => [skill.id, skill]));
-        const discoveredIds = new Set(discoveredSkills.map((skill) => skill.id));
-        const customSkills = this._skills.filter((skill) => skill.source !== 'global');
-        const missingGlobalSkills = this._skills
-            .filter((skill) => skill.source === 'global' && !discoveredIds.has(skill.id))
-            .map((skill) => normalizeSkillRecord({
-                ...skill,
-                enabled: false,
-                selectedByDefault: false,
-                loadError: 'Skill is no longer installed.',
-                updatedAt: now(),
-            }));
+        const managedSources = new Set(['cusco', 'global', 'plugin']);
+        const customSkills = this._skills.filter((skill) => !managedSources.has(skill.source));
 
         this._skills = [
             ...discoveredSkills.map((skill) => mergeSkillState(skill, existingById.get(skill.id))),
-            ...missingGlobalSkills,
             ...customSkills,
         ];
 
@@ -278,6 +292,25 @@ export class WorkspaceManager {
     addSkillPath(path, { enabled = true } = {}) {
         const skill = loadSkillFromPath(path, {
             source: 'custom',
+            enabled,
+        });
+        const existingIndex = this._skills.findIndex((item) => item.id === skill.id);
+        const normalized = mergeSkillState(skill, existingIndex >= 0 ? this._skills[existingIndex] : null);
+
+        normalized.enabled = enabled && !normalized.loadError;
+
+        if (existingIndex >= 0)
+            this._skills[existingIndex] = normalized;
+        else
+            this._skills.unshift(normalized);
+
+        this._persist();
+        return { ...normalized };
+    }
+
+    importSkillFolder(path, { enabled = true } = {}) {
+        const skill = importSkillFolder(path, {
+            destinationRoot: this._cuscoSkillsPath,
             enabled,
         });
         const existingIndex = this._skills.findIndex((item) => item.id === skill.id);

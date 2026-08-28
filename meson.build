@@ -23,6 +23,16 @@ subdir('packages')
 subdir('src')
 subdir('data')
 
+install_subdir(
+  '.agents',
+  install_dir: pkgdatadir,
+)
+
+install_subdir(
+  'plugins',
+  install_dir: pkgdatadir,
+)
+
 gnome.post_install(
   glib_compile_schemas: true,
   gtk_update_icon_cache: true,

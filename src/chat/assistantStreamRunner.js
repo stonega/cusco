@@ -19,6 +19,7 @@ export class AssistantStreamRunner {
     constructor({
         appSettings,
         conversations,
+        connectors = null,
         hooks,
         mcp,
         tools,
@@ -51,6 +52,7 @@ export class AssistantStreamRunner {
     }) {
         this._appSettings = appSettings;
         this._conversations = conversations;
+        this._connectors = connectors;
         this._hooks = hooks;
         this._mcp = mcp;
         this._tools = tools;
@@ -114,28 +116,52 @@ export class AssistantStreamRunner {
 
         if (this._isActiveConversationId(conversation.id))
             this._setFollowLatestMessage(true);
-        let assistantView = null;
-        let assistantViewState = null;
+        const responseStartedAt = options.responseStartedAt ?? GLib.get_monotonic_time();
+        let assistantView = options.assistantView ?? this._createStreamingAssistantView(conversation, {
+            workingStartedAt: responseStartedAt,
+        });
+        let assistantViewState = {
+            view: assistantView,
+            workingStartedAt: responseStartedAt,
+        };
         let shouldSendQueued = false;
         let stoppedBeforeAssistantText = false;
         let presentationFinished = null;
-        const responseStartedAt = GLib.get_monotonic_time();
+
+        if (conversation.agentModeEnabled && typeof assistantView?.set_status === 'function')
+            assistantView.set_status('Agent is thinking...');
+        else
+            assistantView?.set_loading?.();
+
         this._startLongResponseNotification(cancellable);
 
         try {
             if (!await this._ensureTurnSessionHooks(conversation, cancellable)) {
                 stoppedBeforeAssistantText = true;
+                assistantView?.remove?.();
+                assistantView = null;
+                assistantViewState.view = null;
                 return { stoppedBeforeAssistantText };
             }
 
             this._injectMemoryContext(conversation);
             const activeSkills = this._injectSkillContext(conversation);
 
-            if (conversation.agentModeEnabled)
-                await this._mcp.refreshTools(this._tools, {
+            if (conversation.agentModeEnabled) {
+                const toolRefreshes = [this._mcp.refreshTools(this._tools, {
                     timeoutSeconds: this._appSettings.responseTimeoutSeconds,
                     cancellable,
-                });
+                })];
+
+                if (typeof this._connectors?.refreshTools === 'function') {
+                    toolRefreshes.push(this._connectors.refreshTools(this._tools, {
+                        timeoutSeconds: this._appSettings.responseTimeoutSeconds,
+                        cancellable,
+                    }));
+                }
+
+                await Promise.all(toolRefreshes);
+            }
 
             const compactionStatus = await this._maybeAutoCompactConversation(
                 conversation,
@@ -145,17 +171,11 @@ export class AssistantStreamRunner {
 
             if (compactionStatus === 'stopped') {
                 stoppedBeforeAssistantText = true;
+                assistantView?.remove?.();
+                assistantView = null;
+                assistantViewState.view = null;
                 return { stoppedBeforeAssistantText };
             }
-
-            assistantView = this._createStreamingAssistantView(conversation, {
-                workingStartedAt: responseStartedAt,
-            });
-            assistantViewState = {
-                view: assistantView,
-                workingStartedAt: responseStartedAt,
-            };
-            assistantView.set_loading();
 
             let providerMessages = this._buildProviderMessages(conversation, activeSkills, {
                 agentMode: Boolean(conversation.agentModeEnabled),

@@ -29,6 +29,7 @@ import {
 import { createCronCreateTool, CronJobManager } from '../src/cron/manager.js';
 import { ComputerUseService } from '../src/computerUse/service.js';
 import { createComputerUseTools } from '../src/computerUse/tools.js';
+import { GmailGoaConnector } from '../src/connectors/gmailGoa.js';
 import {
     canonicalHookToolName,
     discoverHookSources,
@@ -52,6 +53,7 @@ import { defaultMcpConfigFilePath, parseMcpConfigFile } from '../src/mcp/config.
 import { parseWwwAuthenticate, SecretServiceMcpTokenStore } from '../src/mcp/auth.js';
 import { McpClient } from '../src/mcp/client.js';
 import { McpManager } from '../src/mcp/manager.js';
+import { CuscoPluginClient, parsePluginMarketplaceJson } from '../src/plugins/client.js';
 import { ProviderConfigStore } from '../src/providers/config.js';
 import { ProviderAuthManager } from '../src/providers/auth.js';
 import { createImageGenerationTool, generateImageForProvider } from '../src/providers/imageGeneration.js';
@@ -70,9 +72,13 @@ import { createArchivedChatsWindow, presentArchivedChatsWindow } from '../src/se
 import { createComputerUseSettingsGroup } from '../src/settings/computerUseSettings.js';
 import { createHooksConfigGroup } from '../src/settings/hooksSettings.js';
 import { createMemorySettingsPage } from '../src/settings/memorySettings.js';
-import { createMcpSettingsPage } from '../src/settings/mcpSettings.js';
+import { createMcpManagementPage, createMcpSettingsPage } from '../src/settings/mcpSettings.js';
 import { createProviderSettingsPage, presentProviderSettingsDialog } from '../src/settings/providerSettings.js';
-import { createSkillsSettingsPage, createWorkspaceSettingsPage } from '../src/settings/workspaceSettings.js';
+import {
+    createSkillsManagementPage,
+    createSkillsSettingsPage,
+    createWorkspaceSettingsPage,
+} from '../src/settings/workspaceSettings.js';
 import {
     buildSkillContext,
     discoverInstalledSkills,
@@ -94,6 +100,7 @@ import {
     clipboardFormatsContainText,
     composerHintPresentation,
     conversationListPageTarget,
+    createAssistantStreamRunner,
     CuscoWindow,
     defaultConversationOptions,
     formatConversationUpdatedAt,
@@ -117,6 +124,17 @@ if (APP_NAME !== 'Cusco' || APP_VERSION.length === 0 || APP_AUTHOR.length === 0)
 
 if (typeof ProviderAuthManager !== 'function')
     throw new Error('Provider authentication package did not import correctly');
+
+if (typeof GmailGoaConnector !== 'function')
+    throw new Error('Gmail GNOME Online Accounts connector did not import correctly');
+
+const connectorMarker = { refreshTools() {} };
+const assistantStreamRunner = createAssistantStreamRunner({
+    _pluginConnectors: connectorMarker,
+});
+
+if (assistantStreamRunner._connectors !== connectorMarker)
+    throw new Error('Window did not wire native plugin connectors into the Agent Mode runner');
 
 const welcomeMessage = createWelcomeMessage();
 
@@ -517,6 +535,9 @@ if (typeof McpClient !== 'function'
 if (typeof MemoryFileStore !== 'function')
     throw new Error('MemoryFileStore did not import as a class');
 
+if (typeof CuscoPluginClient !== 'function' || typeof parsePluginMarketplaceJson !== 'function')
+    throw new Error('Plugin client helpers did not import');
+
 if (typeof ToolManager !== 'function' || typeof calculateExpression !== 'function' || typeof parseToolRequest !== 'function')
     throw new Error('Tool helpers did not import');
 
@@ -555,11 +576,17 @@ if (typeof createMemorySettingsPage !== 'function')
 if (typeof createMcpSettingsPage !== 'function')
     throw new Error('createMcpSettingsPage did not import as a function');
 
+if (typeof createMcpManagementPage !== 'function')
+    throw new Error('createMcpManagementPage did not import as a function');
+
 if (typeof createWorkspaceSettingsPage !== 'function')
     throw new Error('createWorkspaceSettingsPage did not import as a function');
 
 if (typeof createSkillsSettingsPage !== 'function')
     throw new Error('createSkillsSettingsPage did not import as a function');
+
+if (typeof createSkillsManagementPage !== 'function')
+    throw new Error('createSkillsManagementPage did not import as a function');
 
 if (typeof WorkspaceManager !== 'function' || typeof WorkspaceFileStore !== 'function' || typeof exportConversation !== 'function')
     throw new Error('Workspace helpers did not import');

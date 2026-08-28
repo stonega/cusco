@@ -10,6 +10,7 @@ Cusco starts as a standalone native GNOME application.
 - Provider layer: one interface for OpenAI, Anthropic, Gemini, DeepSeek, Grok, and custom OpenAI-compatible APIs.
 - Memory layer: user-approved memory extraction, memory lookup, and memory management.
 - Skill layer: local SKILL.md discovery, metadata persistence, and provider-context assembly.
+- Plugin layer: Cusco marketplace discovery, manifest enrichment, native MCP connector setup, and repository-local install/removal lifecycle.
 - Tool layer: web search, file context, calculations, and namespaced MCP tools.
 - Workspace layer: prompt library, agent profiles, folders, tags, export, local cache, plugin tools, and user-managed MCP server configs.
 - Artifact layer: immutable revisions, managed file bundles, message references, typed renderers, export, and an isolated HTML runtime.
@@ -31,10 +32,13 @@ Cusco starts as a standalone native GNOME application.
 - `src/artifacts/web/runtime.js`: restricted `cusco-artifact://` WebKit origin and capability policy.
 - `src/artifacts/views/workspace.js`: native artifact switcher, preview/source views, revision selection, editing, rename, fork, archive, and export.
 - `src/chat/usage.js`: approximate transcript usage estimator for composer context display.
+- `src/chat/pluginsPage.js`: native plugin catalog, search/filter controls, and install/removal interaction states.
 - `src/memory/memory.js`: user-approved memory proposal, lookup, management, import/export, and audit logic.
 - `src/mcp/config.js`: MCP server config normalization and `mcp.json` loading.
 - `src/mcp/client.js`: dependency-free MCP JSON-RPC client for stdio and Streamable HTTP transports.
 - `src/mcp/manager.js`: MCP server discovery, tool/resource/prompt registration, status tracking, and ToolManager integration.
+- `packages/plugins/`: standalone Cusco catalog reader, compatible plugin-manifest normalization, and safe repository-local plugin store.
+- `src/plugins/client.js`: source/install facade for the reusable plugin package.
 - `src/providers/config.js`: provider and model configuration registry.
 - `src/providers/provider.js`: common provider contract and message helper.
 - `src/providers/mockProvider.js`: local streaming provider used while the real API layer is designed.
@@ -43,7 +47,7 @@ Cusco starts as a standalone native GNOME application.
 - `src/settings/appSettings.js`: persistent chat preference store and preferences page.
 - `src/settings/memorySettings.js`: memory manager preferences page with search, edit, pin, disable, delete, import, and export.
 - `src/settings/providerSettings.js`: libadwaita settings dialog pages for provider management and API keys.
-- `src/skills/skills.js`: local skill discovery for `~/.agents/skills`, SKILL.md parsing, and prompt-context formatting.
+- `src/skills/skills.js`: skill discovery for global, Cusco repository, and plugin roots; SKILL.md parsing; and prompt-context formatting.
 - `src/storage/conversationStore.js`: local conversation database stored under the app data directory.
 - `src/storage/memoryStore.js`: local memory database stored under the app data directory.
 - `src/storage/workspaceStore.js`: local workspace database for prompts, profiles, folders, plugin descriptors, MCP configs, and cache entries.
@@ -74,7 +78,8 @@ Cusco starts as a standalone native GNOME application.
 - Built-in chat model lists and capability metadata, including supported thinking levels, live in the provider registry. Custom OpenAI-compatible APIs can discover and persist their model metadata from `/models`. Built-in provider endpoint overrides are explicit, warning-gated, separately persisted in GSettings, and resettable to official defaults; Kimi retains Global and CN as first-class official presets. The complete provider registry is documented in `docs/user/provider-models.md`.
 - Memory writes are never implicit: user messages can trigger a proposal dialog, and only explicit approval stores memory.
 - Memory use is per-chat controllable and creates a stored usage audit entry without adding a transcript system message.
-- Installed skills are discovered from `~/.agents/skills`, enabled in the Skills preferences page, selected per chat, and injected as ephemeral hidden provider context.
+- Skills are discovered from `~/.agents/skills`, `$REPO_ROOT/skills`, and each installed plugin's `skills/` directory. Imports from Plugins → Skills stage, validate, and atomically copy complete skill folders into `$REPO_ROOT/skills`, while source tags distinguish global skills from Cusco-managed skills. They remain visible and controllable beside the plugin catalog and are injected as ephemeral hidden provider context when selected.
+- Cusco reads its marketplace index and plugin manifests directly, validates and atomically copies plugins into `$REPO_ROOT/plugins`, and removes only repository-local plugin directories. Most connector-backed plugins are represented as Cusco-managed MCP servers; protected-resource and authorization-server discovery, PKCE, configured/CIMD/dynamic client registration, token endpoint authentication, automatic refresh, status verification, and Secret Service storage remain inside Cusco. The implementation is documented in [MCP Authorization](../implementation/mcp-authorization.md). Trusted desktop-native connectors may declare a namespaced `cusco.connectors` transport instead. Gmail uses this path to bind a GOA account ID, obtain request-scoped credentials from GNOME Online Accounts, authenticate to GOA's secure IMAP endpoint with XOAUTH2, and register bounded read-only tools without persisting Google tokens.
 - Tools run before the assistant response when requested with slash commands; sensitive web search asks for permission and tool results render as expandable transcript entries with citations where available. Models without native search use DuckDuckGo's non-JavaScript search surface through Cusco's existing HTTP stack, with Exa Search available as an opt-in fallback.
 - Local file and image attachments are selected through the native GTK file dialog and folded into the user message context.
 - GNOME integration uses app actions for shortcuts and desktop actions, native preferences windows, notifications for long responses, and a Shell SearchProvider2 conversation index.

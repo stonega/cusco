@@ -2,13 +2,30 @@ import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 
 export const SKILL_FILE_NAME = 'SKILL.md';
+const moduleDirectory = Gio.File.new_for_uri(import.meta.url).get_parent();
+const configuredRepositoryRoot = String(GLib.getenv('CUSCO_REPOSITORY_ROOT') ?? '').trim();
+const defaultRepositoryRoot = GLib.canonicalize_filename(
+    configuredRepositoryRoot || moduleDirectory.get_parent().get_parent().get_path(),
+    null,
+);
+
 export const DEFAULT_GLOBAL_SKILLS_PATH = GLib.build_filenamev([
     GLib.get_home_dir(),
     '.agents',
     'skills',
 ]);
+export const DEFAULT_CUSCO_SKILLS_PATH = GLib.build_filenamev([
+    defaultRepositoryRoot,
+    'skills',
+]);
+export const DEFAULT_CUSCO_PLUGINS_PATH = GLib.build_filenamev([
+    defaultRepositoryRoot,
+    'plugins',
+]);
 
 const MAX_SKILL_BYTES = 120000;
+const MAX_IMPORTED_SKILL_FILES = 20_000;
+const MAX_IMPORTED_SKILL_BYTES = 512 * 1024 * 1024;
 const CUSCO_MCP_SETUP_SKILL_CONTENT = [
     '# Cusco MCP Setup',
     '',
@@ -22,7 +39,7 @@ const CUSCO_MCP_SETUP_SKILL_CONTENT = [
     '',
     'Cusco infers the transport: `url` means `streamable-http`; no `url` means `stdio`. A `namespace` can be set to make tool names stable and easy to recognize.',
     '',
-    'After editing `mcp.json`, tell the user to reload the MCP config from Cusco Preferences, then use Agent. MCP tools appear as `mcp__<namespace>__<tool>`. Resource helpers appear as `mcp__<namespace>__list_resources` and `mcp__<namespace>__read_resource`; prompt helpers appear as `mcp__<namespace>__list_prompts` and `mcp__<namespace>__get_prompt`.',
+    'After editing `mcp.json`, tell the user to reload the MCP config from Plugins → MCP, then use Agent. MCP tools appear as `mcp__<namespace>__<tool>`. Resource helpers appear as `mcp__<namespace>__list_resources` and `mcp__<namespace>__read_resource`; prompt helpers appear as `mcp__<namespace>__list_prompts` and `mcp__<namespace>__get_prompt`.',
     '',
     'When working inside the Cusco repo, verify MCP behavior with `gjs -m tests/mcp-smoke.js`. The focused smoke test checks config parsing, stdio discovery, tool registration, resource helpers, prompt helpers, and tool calls.',
 ].join('\n');
@@ -239,6 +256,89 @@ function readSkillFile(skillFilePath) {
     return new TextDecoder().decode(contents);
 }
 
+function deleteRecursively(file, cancellable = null) {
+    if (!file.query_exists(cancellable))
+        return;
+
+    const info = file.query_info(
+        'standard::type',
+        Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS,
+        cancellable,
+    );
+
+    if (info.get_file_type() === Gio.FileType.DIRECTORY) {
+        const enumerator = file.enumerate_children(
+            'standard::name',
+            Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS,
+            cancellable,
+        );
+
+        try {
+            let childInfo = enumerator.next_file(cancellable);
+
+            while (childInfo) {
+                deleteRecursively(file.get_child(childInfo.get_name()), cancellable);
+                childInfo = enumerator.next_file(cancellable);
+            }
+        } finally {
+            enumerator.close(cancellable);
+        }
+    }
+
+    file.delete(cancellable);
+}
+
+function copySkillDirectory(source, destination, cancellable = null, state = { files: 0, bytes: 0 }) {
+    const info = source.query_info(
+        'standard::type,standard::size',
+        Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS,
+        cancellable,
+    );
+    const fileType = info.get_file_type();
+
+    state.files += 1;
+
+    if (state.files > MAX_IMPORTED_SKILL_FILES)
+        throw new Error('Skill exceeds Cusco import limits.');
+
+    if (fileType === Gio.FileType.REGULAR) {
+        state.bytes += Number(info.get_size());
+
+        if (state.bytes > MAX_IMPORTED_SKILL_BYTES)
+            throw new Error('Skill exceeds Cusco import limits.');
+
+        source.copy(destination, Gio.FileCopyFlags.NONE, cancellable, null);
+        return;
+    }
+
+    if (fileType !== Gio.FileType.DIRECTORY)
+        throw new Error(`Skill contains an unsupported file type: ${source.get_path()}`);
+
+    destination.make_directory(cancellable);
+    const enumerator = source.enumerate_children(
+        'standard::name',
+        Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS,
+        cancellable,
+    );
+
+    try {
+        let childInfo = enumerator.next_file(cancellable);
+
+        while (childInfo) {
+            const name = childInfo.get_name();
+            copySkillDirectory(
+                source.get_child(name),
+                destination.get_child(name),
+                cancellable,
+                state,
+            );
+            childInfo = enumerator.next_file(cancellable);
+        }
+    } finally {
+        enumerator.close(cancellable);
+    }
+}
+
 function createSkillRecord({
     id,
     name,
@@ -274,7 +374,11 @@ export function createSkillId(path, source = 'custom') {
     if (source === 'global')
         return basename;
 
-    return checksumId('custom-skill', normalizedPath);
+    const prefix = source === 'cusco'
+        ? 'cusco-skill'
+        : source === 'plugin' ? 'plugin-skill' : 'custom-skill';
+
+    return checksumId(prefix, normalizedPath);
 }
 
 export function loadSkillFromPath(path, { source = 'custom', id = null, enabled = false, selectedByDefault = false } = {}) {
@@ -329,7 +433,88 @@ export function loadSkillFromPath(path, { source = 'custom', id = null, enabled 
     }
 }
 
-export function discoverInstalledSkills({ rootPath = DEFAULT_GLOBAL_SKILLS_PATH } = {}) {
+export function importSkillFolder(
+    path,
+    {
+        destinationRoot = DEFAULT_CUSCO_SKILLS_PATH,
+        enabled = true,
+        cancellable = null,
+    } = {},
+) {
+    const sourcePath = normalizePath(path);
+    const rootPath = normalizePath(destinationRoot);
+
+    if (!sourcePath)
+        throw new Error('Select a skill folder to import.');
+    if (!rootPath)
+        throw new Error('Cusco skill storage is unavailable.');
+
+    const directoryName = GLib.path_get_basename(sourcePath);
+
+    if (directoryName.startsWith('.') || directoryName === '.' || directoryName === '..')
+        throw new Error('Hidden skill folders cannot be imported.');
+    if (rootPath === sourcePath || rootPath.startsWith(`${sourcePath}/`))
+        throw new Error('Cusco’s skill storage cannot be inside the selected skill folder.');
+
+    const sourceSkill = loadSkillFromPath(sourcePath);
+
+    if (sourceSkill.loadError)
+        throw new Error(`Cannot import skill: ${sourceSkill.loadError}`);
+
+    const destinationPath = GLib.build_filenamev([rootPath, directoryName]);
+
+    if (sourcePath === destinationPath) {
+        return loadSkillFromPath(destinationPath, {
+            source: 'cusco',
+            enabled,
+        });
+    }
+
+    const destination = Gio.File.new_for_path(destinationPath);
+
+    if (destination.query_exists(cancellable))
+        throw new Error(`A Cusco skill folder named ${directoryName} already exists.`);
+
+    GLib.mkdir_with_parents(rootPath, 0o755);
+    const stagingPath = GLib.build_filenamev([
+        rootPath,
+        `.${directoryName}.installing-${GLib.uuid_string_random()}`,
+    ]);
+    const source = Gio.File.new_for_path(sourcePath);
+    const staging = Gio.File.new_for_path(stagingPath);
+
+    try {
+        copySkillDirectory(source, staging, cancellable);
+
+        const stagedSkill = loadSkillFromPath(stagingPath, { source: 'cusco' });
+
+        if (stagedSkill.loadError)
+            throw new Error(`Copied skill failed validation: ${stagedSkill.loadError}`);
+
+        staging.move(destination, Gio.FileCopyFlags.NONE, cancellable, null);
+    } catch (error) {
+        if (staging.query_exists(null)) {
+            try {
+                deleteRecursively(staging, null);
+            } catch (cleanupError) {
+                logError(cleanupError, `Failed to remove skill staging directory: ${stagingPath}`);
+            }
+        }
+
+        throw error;
+    }
+
+    return loadSkillFromPath(destinationPath, {
+        source: 'cusco',
+        enabled,
+    });
+}
+
+export function discoverInstalledSkills({
+    rootPath = DEFAULT_GLOBAL_SKILLS_PATH,
+    source = 'global',
+    enabled = false,
+} = {}) {
     const normalizedRoot = normalizePath(rootPath);
 
     if (!normalizedRoot)
@@ -357,7 +542,58 @@ export function discoverInstalledSkills({ rootPath = DEFAULT_GLOBAL_SKILLS_PATH 
                 const skillFilePath = GLib.build_filenamev([skillPath, SKILL_FILE_NAME]);
 
                 if (GLib.file_test(skillFilePath, GLib.FileTest.EXISTS))
-                    skills.push(loadSkillFromPath(skillPath, { source: 'global', id: name }));
+                    skills.push(loadSkillFromPath(skillPath, {
+                        source,
+                        id: createSkillId(skillPath, source),
+                        enabled,
+                    }));
+            }
+
+            info = enumerator.next_file(null);
+        }
+    } finally {
+        enumerator.close(null);
+    }
+
+    return skills.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function discoverPluginSkills({
+    pluginsRootPath = DEFAULT_CUSCO_PLUGINS_PATH,
+    enabled = true,
+} = {}) {
+    const normalizedRoot = normalizePath(pluginsRootPath);
+
+    if (!normalizedRoot)
+        return [];
+
+    const root = Gio.File.new_for_path(normalizedRoot);
+
+    if (!root.query_exists(null))
+        return [];
+
+    const enumerator = root.enumerate_children(
+        'standard::name,standard::type',
+        Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS,
+        null,
+    );
+    const skills = [];
+
+    try {
+        let info = enumerator.next_file(null);
+
+        while (info) {
+            if (info.get_file_type() === Gio.FileType.DIRECTORY && !info.get_name().startsWith('.')) {
+                const pluginSkillsPath = GLib.build_filenamev([
+                    normalizedRoot,
+                    info.get_name(),
+                    'skills',
+                ]);
+                skills.push(...discoverInstalledSkills({
+                    rootPath: pluginSkillsPath,
+                    source: 'plugin',
+                    enabled,
+                }));
             }
 
             info = enumerator.next_file(null);

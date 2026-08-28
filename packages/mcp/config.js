@@ -28,6 +28,47 @@ function normalizeStringMap(value) {
     return normalized;
 }
 
+function normalizePositivePort(value) {
+    const port = Number.parseInt(value, 10);
+    return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 0;
+}
+
+function normalizeOauthScopes(value) {
+    if (Array.isArray(value))
+        return normalizeList(value);
+
+    return String(value ?? '').trim().split(/\s+/).filter(Boolean);
+}
+
+function normalizeOauthConfig(server) {
+    const oauth = server?.oauth && typeof server.oauth === 'object' && !Array.isArray(server.oauth)
+        ? server.oauth
+        : {};
+
+    return {
+        resource: String(
+            oauth.resource
+            ?? server?.oauthResource
+            ?? server?.oauth_resource
+            ?? '',
+        ).trim(),
+        clientId: String(oauth.clientId ?? oauth.client_id ?? '').trim(),
+        clientSecretEnvVar: String(
+            oauth.clientSecretEnvVar
+            ?? oauth.client_secret_env_var
+            ?? '',
+        ).trim(),
+        tokenEndpointAuthMethod: String(
+            oauth.tokenEndpointAuthMethod
+            ?? oauth.token_endpoint_auth_method
+            ?? '',
+        ).trim(),
+        callbackUrl: String(oauth.callbackUrl ?? oauth.callback_url ?? '').trim(),
+        callbackPort: normalizePositivePort(oauth.callbackPort ?? oauth.callback_port),
+        scopes: normalizeOauthScopes(oauth.scopes ?? oauth.scope),
+    };
+}
+
 export function defaultMcpConfigFilePath() {
     return GLib.build_filenamev([
         GLib.get_user_config_dir(),
@@ -73,8 +114,14 @@ export function normalizeMcpServerConfig(server, options = {}) {
         args: normalizeList(server?.args),
         cwd: String(server?.cwd ?? '').trim(),
         env: normalizeStringMap(server?.env),
+        envPassthrough: normalizeList(server?.envPassthrough ?? server?.env_passthrough),
         url,
         headers: normalizeStringMap(server?.headers),
+        headerEnv: normalizeStringMap(server?.headerEnv ?? server?.header_env),
+        bearerTokenEnvVar: String(
+            server?.bearerTokenEnvVar ?? server?.bearer_token_env_var ?? '',
+        ).trim(),
+        oauth: normalizeOauthConfig(server),
         roots: normalizeList(server?.roots),
         enabled,
         permissionPolicy: String(server?.permissionPolicy ?? 'ask').trim().toLowerCase() || 'ask',

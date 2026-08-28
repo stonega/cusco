@@ -48,6 +48,8 @@ gjs -m tests/stream-replay-window-smoke.js
 gjs -m tests/scroll-controller-smoke.js
 gjs -m tests/usage-smoke.js
 gjs -m tests/usage-page-smoke.js
+gjs -m tests/plugins-smoke.js
+gjs -m tests/gmail-goa-smoke.js
 gjs -m tests/compaction-smoke.js
 gjs -m tests/composer-readline-smoke.js
 gjs -m tests/hooks-smoke.js

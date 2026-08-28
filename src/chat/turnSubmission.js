@@ -55,6 +55,7 @@ export class TurnSubmission {
         beginActiveTurn,
         createAttachmentsForComposerReferences,
         createConversationWithDefaults,
+        createStreamingAssistantView,
         ensureConversationProviderAvailable,
         ensureTurnSessionHooks,
         finishActiveTurn,
@@ -91,6 +92,7 @@ export class TurnSubmission {
         this._beginActiveTurn = beginActiveTurn;
         this._createAttachmentsForComposerReferences = createAttachmentsForComposerReferences;
         this._createConversationWithDefaults = createConversationWithDefaults;
+        this._createStreamingAssistantView = createStreamingAssistantView;
         this._ensureConversationProviderAvailable = ensureConversationProviderAvailable;
         this._ensureTurnSessionHooks = ensureTurnSessionHooks;
         this._finishActiveTurn = finishActiveTurn;
@@ -313,9 +315,10 @@ export class TurnSubmission {
     async _sendMessage(text, references = [], pendingAttachments = []) {
         const conversation = this._conversations.activeConversation
             ?? this._createConversationWithDefaults();
+        const normalizedReferences = normalizeComposerReferences(references);
         const submissionDraft = {
             text,
-            references: normalizeComposerReferences(references),
+            references: normalizedReferences,
             attachments: pendingAttachments.map((attachment) => ({ ...attachment })),
         };
         const restoreComposerDraft = () => {
@@ -339,28 +342,6 @@ export class TurnSubmission {
             this.focusComposer();
         };
 
-        // The submit handler has already cleared the composer. Yield before
-        // provider validation and provisional message construction so GTK can
-        // paint the empty input immediately.
-        await waitForUiPresentation();
-
-        if (!this._ensureConversationProviderAvailable(conversation)) {
-            restoreComposerDraft();
-            return;
-        }
-
-        const cancellable = this._beginActiveTurn(conversation.id, null, {
-            refreshConversationList: false,
-        });
-
-        if (!cancellable) {
-            restoreComposerDraft();
-            return;
-        }
-
-        let shouldSendQueued = false;
-        let userMessageCommitted = false;
-        let presentationFinished = null;
         const provisionalAttachments = pendingAttachments.map((attachment) => ({ ...attachment }));
         const provisionalContent = this._formatUserMessageContent(text, provisionalAttachments);
         const provisionalView = this._addMessage(
@@ -370,6 +351,10 @@ export class TurnSubmission {
                 role: 'user',
                 content: provisionalContent,
                 attachments: provisionalAttachments,
+                metadata: {
+                    composerReferences: normalizedReferences,
+                    composerText: text,
+                },
             },
             { preserveLastAssistantMessageView: true },
         );
@@ -386,31 +371,73 @@ export class TurnSubmission {
                 this._scrollToBottom();
             }
         };
+
+        if (!this._ensureConversationProviderAvailable(conversation)) {
+            removeProvisionalMessage();
+            restoreComposerDraft();
+            return;
+        }
+
+        const cancellable = this._beginActiveTurn(conversation.id, null, {
+            refreshConversationList: false,
+        });
+
+        if (!cancellable) {
+            removeProvisionalMessage();
+            restoreComposerDraft();
+            return;
+        }
+
+        let shouldSendQueued = false;
+        let userMessageCommitted = false;
+        let presentationFinished = null;
+        const responseStartedAt = GLib.get_monotonic_time();
+        let preparedAssistantView = this._createStreamingAssistantView(conversation, {
+            workingStartedAt: responseStartedAt,
+        });
+        let assistantViewHandedOff = false;
+        const showPreparedAssistant = () => {
+            if (conversation.agentModeEnabled)
+                preparedAssistantView?.set_status?.('Agent is thinking...');
+            else
+                preparedAssistantView?.set_loading?.();
+        };
+        const removePreparedAssistant = () => {
+            if (!preparedAssistantView || assistantViewHandedOff)
+                return;
+
+            preparedAssistantView.remove?.();
+            preparedAssistantView = null;
+        };
+        showPreparedAssistant();
+
         try {
-            // Let GTK paint the provisional row before hook discovery, sidebar
-            // rebuilding, transcript persistence, or provider work can run.
+            // Paint the cleared composer, optimistic user row, and response
+            // activity together before hooks, persistence, or provider work.
             await waitForUiPresentation();
             this._refreshConversationList();
 
             if (isCancellableCancelled(cancellable)) {
                 removeProvisionalMessage();
+                removePreparedAssistant();
                 restoreComposerDraft();
                 return;
             }
 
             if (!await this._ensureTurnSessionHooks(conversation, cancellable)) {
                 removeProvisionalMessage();
+                removePreparedAssistant();
                 restoreComposerDraft();
                 return;
             }
 
             if (!await this._runUserPromptHooks(conversation, text, cancellable)) {
                 removeProvisionalMessage();
+                removePreparedAssistant();
                 restoreComposerDraft();
                 return;
             }
 
-            const normalizedReferences = normalizeComposerReferences(references);
             const attachments = this._createAttachmentsForComposerReferences(
                 normalizedReferences,
                 pendingAttachments,
@@ -428,14 +455,28 @@ export class TurnSubmission {
             );
             this._conversations.appendMessage(conversation.id, userMessage);
             userMessageCommitted = true;
-            removeProvisionalMessage();
-            this._addMessageIfActiveConversation(conversation.id, userMessage);
+
+            if (typeof provisionalView?.promote_user_message === 'function') {
+                provisionalView.promote_user_message(userMessage);
+                provisionalVisible = false;
+            } else {
+                removePreparedAssistant();
+                removeProvisionalMessage();
+                this._addMessageIfActiveConversation(conversation.id, userMessage);
+                preparedAssistantView = this._createStreamingAssistantView(conversation, {
+                    workingStartedAt: responseStartedAt,
+                });
+                showPreparedAssistant();
+            }
+
             this._promptMemoryProposal(userMessage, conversation);
 
             const toolStatus = await this._runRequestedTool(text, conversation.id, cancellable);
             this._refreshConversationList();
 
             if (isCancellableCancelled(cancellable)) {
+                removePreparedAssistant();
+
                 if (toolStatus !== 'cancelled')
                     this._appendStoppedMessage(conversation.id, 'Response stopped before the provider request started.');
 
@@ -443,11 +484,14 @@ export class TurnSubmission {
             }
 
             this._drainPendingUserMessages(conversation.id);
+            assistantViewHandedOff = true;
             const responseResult = await this._streamAssistantResponse(conversation.id, {
+                assistantView: preparedAssistantView,
                 cancellable,
                 onPresentationSettling: (promise) => {
                     presentationFinished = promise;
                 },
+                responseStartedAt,
             });
             presentationFinished ??= responseResult?.presentationFinished ?? null;
             shouldSendQueued = shouldAutoSendQueuedMessages({
@@ -456,6 +500,7 @@ export class TurnSubmission {
             });
         } catch (error) {
             removeProvisionalMessage();
+            removePreparedAssistant();
 
             if (!userMessageCommitted)
                 restoreComposerDraft();

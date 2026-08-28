@@ -57,7 +57,7 @@ Keep this path boring and explicit. Most agent features should attach around it,
 | Memory | `src/memory/memory.js` | Keep approval and audit behavior. Improve selection and extraction before adding autonomous memory writes. |
 | Tasks | not implemented | Add a persisted task graph separately from transient todos. Use it for long-running goals, dependencies, and resumable work. |
 | Background work | partially notification-only | Run slow or external work outside the active UI path and inject completion notifications back into the conversation. |
-| MCP/plugins | MCP implemented for Agent Mode; plugins are descriptors | MCP servers are loaded from settings or `mcp.json`, discovered into namespaced tools, and routed through the existing permission and transcript audit path. |
+| MCP/plugins | MCP implemented for Agent Mode; standalone Cusco marketplace and repository plugin lifecycle implemented | MCP servers are managed in Plugins → MCP, loaded from `mcp.json`, and routed through the permission/audit path. Cusco reads marketplace metadata directly, owns install state under `$REPO_ROOT/plugins`, and connects plugin MCP endpoints with its native OAuth and Secret Service path. |
 
 ## Tool Development Rules
 

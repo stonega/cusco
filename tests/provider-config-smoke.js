@@ -490,7 +490,7 @@ if (defaultStore.getDefaultModel('zai').id !== 'glm-5.3')
 const zaiModelIds = zaiProvider.models.map((model) => model.id);
 const zaiImageModelIds = zaiProvider.imageModels.map((model) => model.id);
 
-if (zaiModelIds.join(',') !== 'glm-5.3,glm-5.2,glm-5-turbo')
+if (zaiModelIds.join(',') !== 'glm-5.3,glm-5.3-flash,glm-5.2,glm-5-turbo')
     throw new Error(`Z.ai model list was not limited to supported GLM models: ${zaiModelIds.join(', ')}`);
 
 if (zaiImageModelIds.join(',') !== 'glm-image')
@@ -505,6 +505,9 @@ if (defaultStore.getImageGenerationSelection().provider.id !== 'openai')
 if (defaultStore.resolve('zai', 'glm5.3').model.id !== 'glm-5.3')
     throw new Error('Z.ai GLM-5.3 alias should resolve to the canonical model id');
 
+if (defaultStore.resolve('zai', 'glm5.3-flash').model.id !== 'glm-5.3-flash')
+    throw new Error('Z.ai GLM-5.3-Flash alias should resolve to the canonical model id');
+
 const zaiGlm53 = defaultStore.resolve('zai', 'glm-5.3').model;
 
 if (zaiGlm53.contextWindowTokens !== 1000000 || zaiGlm53.maxOutputTokens !== 128000)
@@ -514,6 +517,21 @@ if (defaultStore.getThinkingLevels('zai', 'glm-5.3').join(',') !== 'low,high,max
     || defaultStore.getDefaultThinkingLevel('zai', 'glm-5.3') !== 'max'
     || defaultStore.getDefaultThinkingLevel('zai', 'glm-5.3', 'off') !== 'max') {
     throw new Error('Z.ai GLM-5.3 should expose always-on thinking and default to Max effort');
+}
+
+const zaiGlm53Flash = defaultStore.resolve('zai', 'glm-5.3-flash').model;
+
+if (zaiGlm53Flash.contextWindowTokens !== 1000000
+    || zaiGlm53Flash.maxOutputTokens !== 131072
+    || zaiGlm53Flash.supportsImageAttachments !== true
+    || zaiGlm53Flash.supportsToolStreaming !== true) {
+    throw new Error('Z.ai GLM-5.3-Flash capabilities and token limits were not configured');
+}
+
+if (defaultStore.getThinkingLevels('zai', 'glm-5.3-flash').join(',') !== 'low,high,max'
+    || defaultStore.getDefaultThinkingLevel('zai', 'glm-5.3-flash') !== 'max'
+    || defaultStore.getDefaultThinkingLevel('zai', 'glm-5.3-flash', 'off') !== 'max') {
+    throw new Error('Z.ai GLM-5.3-Flash should expose always-on thinking and default to Max effort');
 }
 
 if (defaultStore.getThinkingLevels('zai', 'glm-5.2').join(',') !== 'off,auto,high,max')
@@ -546,7 +564,7 @@ if (staleZaiStore.getProvider('zai').defaultModelId !== 'glm-5-turbo')
 if (staleZaiStore.getActiveSelection().model.id !== 'glm-5.2')
     throw new Error('Stale Z.ai active model id was not migrated');
 
-if (staleZaiModelIds.join(',') !== 'glm-5.3,glm-5.2,glm-5-turbo')
+if (staleZaiModelIds.join(',') !== 'glm-5.3,glm-5.3-flash,glm-5.2,glm-5-turbo')
     throw new Error(`Unsupported Z.ai models were loaded from persisted settings: ${staleZaiModelIds.join(', ')}`);
 
 const staleZaiImageSettings = new MemorySettings({

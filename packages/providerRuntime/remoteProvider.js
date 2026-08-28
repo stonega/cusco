@@ -2422,6 +2422,11 @@ export function buildOpenAiCompatibleChatBody(messages, modelId, options = {}) {
     if (tools.length > 0) {
         body.tools = tools;
         body.tool_choice = 'auto';
+
+        if (options.stream === true
+            && (options.model?.supportsToolStreaming ?? provider?.supportsToolStreaming) === true) {
+            body.tool_stream = true;
+        }
     }
 
     return body;

@@ -28,9 +28,10 @@ export { formatUsageNumberMarkup } from './usagePagePresentation.js';
 const DAILY_USAGE_CHART_REVEAL_DURATION_US = 280 * 1000;
 
 export class UsagePage {
-    constructor({ conversations, providerConfigs }) {
+    constructor({ conversations, providerConfigs, onBack = () => {} }) {
         this._conversations = conversations;
         this._providerConfigs = providerConfigs;
+        this._onBack = onBack;
         this._widget = null;
         this._periodDays = 30;
         this._refreshSourceId = 0;
@@ -106,29 +107,13 @@ export class UsagePage {
     _createSurface() {
         const toolbarView = new Adw.ToolbarView();
         const headerBar = new Adw.HeaderBar();
-        const usageTitle = new Gtk.Box({
-            orientation: Gtk.Orientation.VERTICAL,
-            halign: Gtk.Align.START,
-            valign: Gtk.Align.CENTER,
-            margin_start: 12,
+
+        const backButton = new Gtk.Button({
+            icon_name: 'go-previous-symbolic',
+            tooltip_text: 'Back to chat',
         });
-        const usageTitleLabel = new Gtk.Label({
-            label: 'Usage',
-            halign: Gtk.Align.START,
-            xalign: 0,
-        });
-        usageTitleLabel.add_css_class('heading');
-        this._windowSubtitleLabel = new Gtk.Label({
-            label: 'Last 30 days',
-            halign: Gtk.Align.START,
-            xalign: 0,
-        });
-        this._windowSubtitleLabel.add_css_class('caption');
-        this._windowSubtitleLabel.add_css_class('dim-label');
-        usageTitle.append(usageTitleLabel);
-        usageTitle.append(this._windowSubtitleLabel);
-        headerBar.set_show_title(false);
-        headerBar.pack_start(usageTitle);
+        backButton.connect('clicked', () => this._onBack());
+        headerBar.pack_start(backButton);
 
         const periodButtons = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL });
         periodButtons.add_css_class('linked');
@@ -150,6 +135,7 @@ export class UsagePage {
             });
             periodButtons.append(button);
         }
+        headerBar.set_title_widget(periodButtons);
 
         const refreshButton = new Gtk.Button({
             icon_name: 'view-refresh-symbolic',
@@ -157,7 +143,6 @@ export class UsagePage {
         });
         refreshButton.connect('clicked', () => this.refresh());
         headerBar.pack_end(refreshButton);
-        headerBar.pack_end(periodButtons);
         toolbarView.add_top_bar(headerBar);
 
         const content = new Gtk.Box({
@@ -577,9 +562,6 @@ export class UsagePage {
         const coveragePercentage = usage.assistantMessages > 0
             ? (usage.reportedMessages / usage.assistantMessages) * 100
             : 0;
-        this._windowSubtitleLabel?.set_label(
-            `${formatUsageDate(usage.startDate)} – ${formatUsageDate(usage.endDate)}`,
-        );
         for (const [label, value] of [
             [this._totalTokensLabel, formatStatisticCount(usage.totalTokens)],
             [this._conversationCountLabel, formatStatisticCount(usage.conversationCount)],

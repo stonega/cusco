@@ -74,7 +74,7 @@ if (Gtk.init_check()) {
             groupTitles.push(widget.get_title());
     });
 
-    const mcpIndex = groupTitles.indexOf('MCP Config File');
+    const mcpIndex = groupTitles.indexOf('MCP Servers');
     const hooksIndex = groupTitles.indexOf('Hooks Config File');
 
     if (mcpIndex < 0 || hooksIndex !== mcpIndex + 1)

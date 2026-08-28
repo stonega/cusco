@@ -1,0 +1,52 @@
+{
+  "name": "gmail",
+  "version": "0.2.0",
+  "description": "Read Gmail through a Google account configured in GNOME Online Accounts.",
+  "author": {
+    "name": "OpenAI",
+    "email": "support@openai.com",
+    "url": "https://openai.com/"
+  },
+  "homepage": "https://workspace.google.com/products/gmail/",
+  "repository": "https://github.com/openai/plugins",
+  "license": "MIT",
+  "keywords": [
+    "gmail",
+    "email",
+    "google"
+  ],
+  "skills": "./skills/",
+  "apps": "./.app.json",
+  "cusco": {
+    "connectors": [
+      {
+        "id": "gmail",
+        "name": "gmail",
+        "type": "gnome-online-accounts",
+        "provider": "google",
+        "service": "mail"
+      }
+    ]
+  },
+  "interface": {
+    "displayName": "Gmail",
+    "shortDescription": "Read Gmail with your GNOME account",
+    "longDescription": "Search and read Gmail locally through the Google account already connected in GNOME Online Accounts. Cusco does not store the Google access token.",
+    "developerName": "OpenAI",
+    "category": "Communication",
+    "capabilities": [
+      "Interactive",
+      "Read"
+    ],
+    "websiteURL": "https://workspace.google.com/products/gmail/",
+    "privacyPolicyURL": "https://policies.google.com/privacy",
+    "termsOfServiceURL": "https://policies.google.com/terms",
+    "defaultPrompt": [
+      "Summarize inbox, draft replies, or process email threads"
+    ],
+    "brandColor": "#EA4335",
+    "composerIcon": "./assets/gmail-small.svg",
+    "logo": "./assets/logo.png",
+    "screenshots": []
+  }
+}

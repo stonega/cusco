@@ -12,6 +12,7 @@ export const {
     readLocalTextFile,
     commandUsesSudo,
     normalizeBashTimeoutSeconds,
+    redactSensitiveText,
     runBashCommand,
     parseToolRequest,
     formatToolResultForTranscript,

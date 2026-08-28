@@ -30,6 +30,11 @@ const SENSITIVE_PATHS = [
     '.config/google-chrome',
     '.config/chromium',
 ];
+const BLOCKED_CREDENTIAL_COMMAND_PATTERNS = [
+    /org\.gnome\.OnlineAccounts\.(?:OAuth2Based|OAuthBased)\.GetAccessToken/i,
+    /org\.gnome\.OnlineAccounts[\s\S]*\bGetAccessToken\b/i,
+    /\bGetAccessToken\b[\s\S]*org\.gnome\.OnlineAccounts/i,
+];
 
 const BUILT_IN_TOOLS = {
     calc: {
@@ -92,6 +97,26 @@ function userVisibleError(message) {
     const error = new Error(message);
     error.userMessage = message;
     return error;
+}
+
+export function redactSensitiveText(value) {
+    return String(value ?? '')
+        .replace(/\bya29\.[A-Za-z0-9._~-]+/g, '[REDACTED_GOOGLE_OAUTH_TOKEN]')
+        .replace(/\bctx7sk-[A-Za-z0-9_-]+/gi, '[REDACTED_CONTEXT7_API_KEY]')
+        .replace(/(\bBearer\s+)[A-Za-z0-9._~-]{16,}/gi, '$1[REDACTED_BEARER_TOKEN]')
+        .replace(
+            /("[^"]*(?:api[_-]?key|access[_-]?token|client[_-]?secret|authorization)[^"]*"\s*:\s*")[^"\n]+(")/gi,
+            '$1[REDACTED_SECRET]$2',
+        )
+        .replace(/(\bClientSecret\s*=\s*')[^'\n]+(')/gi, '$1[REDACTED_SECRET]$2');
+}
+
+function assertBashCommandDoesNotExtractCredentials(command) {
+    if (BLOCKED_CREDENTIAL_COMMAND_PATTERNS.some((pattern) => pattern.test(command))) {
+        throw userVisibleError(
+            'Direct extraction of GNOME Online Accounts access tokens is blocked. Use the native service connector instead.',
+        );
+    }
 }
 
 function cancelledOperationError() {
@@ -895,11 +920,11 @@ function formatBashTranscript(result) {
     return [
         'Bash command',
         '```sh',
-        result.command,
+        redactSensitiveText(result.command),
         '```',
         `Exit status: ${result.exitStatus}${result.timedOut ? ' (timed out)' : ''}${result.cancelled ? ' (cancelled)' : ''}`,
-        result.stdout ? `\nstdout\n\`\`\`text\n${result.stdout}\n\`\`\`` : '',
-        result.stderr ? `\nstderr\n\`\`\`text\n${result.stderr}\n\`\`\`` : '',
+        result.stdout ? `\nstdout\n\`\`\`text\n${redactSensitiveText(result.stdout)}\n\`\`\`` : '',
+        result.stderr ? `\nstderr\n\`\`\`text\n${redactSensitiveText(result.stderr)}\n\`\`\`` : '',
     ].filter(Boolean).join('\n');
 }
 
@@ -1085,6 +1110,8 @@ export async function runBashCommand(command, options = {}) {
     if (!normalizedCommand)
         throw userVisibleError('Bash command cannot be empty.');
 
+    assertBashCommandDoesNotExtractCredentials(normalizedCommand);
+
     const timeoutSeconds = normalizeBashTimeoutSeconds(options.timeoutSeconds);
     const externalCancellable = options.cancellable ?? null;
     let externalCancelHandlerId = 0;
@@ -1148,10 +1175,10 @@ export async function runBashCommand(command, options = {}) {
     });
 
     const stdoutPromise = readTextPipe(subprocess.get_stdout_pipe(), (text) => {
-        outputNotifier.append('stdout', text);
+        outputNotifier.append('stdout', redactSensitiveText(text));
     }, pipeCancellable);
     const stderrPromise = readTextPipe(subprocess.get_stderr_pipe(), (text) => {
-        outputNotifier.append('stderr', text);
+        outputNotifier.append('stderr', redactSensitiveText(text));
     }, pipeCancellable);
 
     try {
@@ -1162,20 +1189,22 @@ export async function runBashCommand(command, options = {}) {
         ]);
         const exitStatus = subprocess.get_if_exited() ? subprocess.get_exit_status() : 124;
         const normalizedExitStatus = cancelled ? 130 : timedOut ? 124 : exitStatus;
+        const stdout = redactSensitiveText(stdoutResult.text);
+        const stderr = redactSensitiveText(stderrResult.text);
 
         return {
-            command: normalizedCommand,
+            command: redactSensitiveText(normalizedCommand),
             exitStatus: normalizedExitStatus,
-            stdout: stdoutResult.text,
-            stderr: stderrResult.text,
+            stdout,
+            stderr,
             stdoutTruncated: stdoutResult.truncated,
             stderrTruncated: stderrResult.truncated,
             timedOut,
             cancelled,
             output: formatBashOutput({
                 exitStatus: normalizedExitStatus,
-                stdout: stdoutResult.text,
-                stderr: stderrResult.text,
+                stdout,
+                stderr,
                 cancelled,
             }),
         };
@@ -1235,7 +1264,7 @@ export function formatToolResultForTranscript(result) {
             `File read: ${result.path}`,
             `${result.size} bytes${result.truncated ? ' (truncated)' : ''}`,
             '```text',
-            result.content,
+            redactSensitiveText(result.content),
             '```',
         ].join('\n');
 
@@ -1251,7 +1280,7 @@ export function formatToolResultForTranscript(result) {
             `Saved image: ${result.imagePath ?? 'unknown'}`,
         ].join('\n');
 
-    return result.output;
+    return redactSensitiveText(result.output);
 }
 
 export class ToolManager {

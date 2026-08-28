@@ -418,6 +418,7 @@ const PROVIDER_MODEL_ID_ALIASES = {
         'grok4.6': 'grok-4.6',
     },
     zai: {
+        'glm5.3-flash': 'glm-5.3-flash',
         'glm5.3': 'glm-5.3',
         'glm5.2': 'glm-5.2',
         'glm5-turbo': 'glm-5-turbo',
@@ -453,6 +454,7 @@ const PROVIDER_SUPPORTED_MODEL_IDS = {
     ]),
     zai: new Set([
         'glm-5.3',
+        'glm-5.3-flash',
         'glm-5.2',
         'glm-5-turbo',
     ]),
@@ -723,6 +725,22 @@ const ZAI_MODEL_METADATA = {
             supportsReasoningEffort: true,
         },
     },
+    'glm-5.3-flash': {
+        id: 'glm-5.3-flash',
+        name: 'GLM-5.3 Flash',
+        description: 'Z.ai cost-efficient native multimodal model for coding, agentic work, and visual understanding.',
+        contextWindowTokens: 1000000,
+        maxOutputTokens: 131072,
+        supportsImageAttachments: true,
+        supportsToolStreaming: true,
+        thinking: {
+            api: 'zai-thinking',
+            levels: ['low', 'high', 'max'],
+            defaultLevel: 'max',
+            alwaysOn: true,
+            supportsReasoningEffort: true,
+        },
+    },
     'glm-5.2': {
         id: 'glm-5.2',
         name: 'GLM-5.2',
@@ -877,6 +895,8 @@ function normalizeStoredModels(models, providerId = '') {
         const thinking = normalizeStoredThinkingCapability(model?.thinking ?? metadata?.thinking);
         const supportsImageAttachments = metadata?.supportsImageAttachments
             ?? model?.supportsImageAttachments;
+        const supportsToolStreaming = metadata?.supportsToolStreaming
+            ?? model?.supportsToolStreaming;
         const supportedImageMimeTypes = metadata?.supportedImageMimeTypes
             ?? model?.supportedImageMimeTypes;
         const maxOutputTokens = normalizeMaxOutputTokens(
@@ -895,6 +915,9 @@ function normalizeStoredModels(models, providerId = '') {
 
         if (typeof supportsImageAttachments === 'boolean')
             normalizedModel.supportsImageAttachments = supportsImageAttachments;
+
+        if (typeof supportsToolStreaming === 'boolean')
+            normalizedModel.supportsToolStreaming = supportsToolStreaming;
 
         if (Array.isArray(supportedImageMimeTypes)) {
             normalizedModel.supportedImageMimeTypes = [...new Set(supportedImageMimeTypes
@@ -1269,6 +1292,7 @@ export const DEFAULT_PROVIDER_CONFIGS = [
         defaultImageModelId: 'glm-image',
         models: [
             { ...ZAI_MODEL_METADATA['glm-5.3'] },
+            { ...ZAI_MODEL_METADATA['glm-5.3-flash'] },
             { ...ZAI_MODEL_METADATA['glm-5.2'] },
             { ...ZAI_MODEL_METADATA['glm-5-turbo'] },
         ],

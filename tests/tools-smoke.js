@@ -19,6 +19,7 @@ import {
     formatToolResultForTranscript,
     normalizeBashTimeoutSeconds,
     parseToolRequest,
+    redactSensitiveText,
     runBashCommand,
     searchWeb,
     summarizeStructuredData,
@@ -541,6 +542,47 @@ const bashResult = await manager.runRequest(manager.createRequest('bash', 'print
 
 if (bashResult.exitStatus !== 0 || !bashResult.stdout.includes('cusco-bash-smoke'))
     throw new Error(`Bash tool failed: ${bashResult.output}`);
+
+const googleToken = 'ya29.test_token_that_must_not_be_visible';
+const context7Key = 'ctx7sk-test-key-that-must-not-be-visible';
+const redacted = redactSensitiveText(JSON.stringify({
+    access_token: googleToken,
+    CONTEXT7_API_KEY: context7Key,
+}));
+
+if (redacted.includes(googleToken)
+    || redacted.includes(context7Key)
+    || !redacted.includes('[REDACTED_')) {
+    throw new Error('Credential text redaction did not remove OAuth and API key material');
+}
+
+const secretOutputResult = await runBashCommand(
+    `printf '%s\\n%s\\n' '${googleToken}' '${context7Key}'`,
+);
+const secretOutputTranscript = formatToolResultForTranscript({
+    ...secretOutputResult,
+    name: 'bash',
+});
+
+if (secretOutputResult.stdout.includes(googleToken)
+    || secretOutputResult.stdout.includes(context7Key)
+    || secretOutputResult.command.includes(googleToken)
+    || secretOutputTranscript.includes(context7Key)) {
+    throw new Error('Bash results or transcripts retained credential material');
+}
+
+let goaTokenExtractionBlocked = false;
+
+try {
+    await runBashCommand(
+        'gdbus call --session --dest org.gnome.OnlineAccounts --method org.gnome.OnlineAccounts.OAuth2Based.GetAccessToken',
+    );
+} catch (error) {
+    goaTokenExtractionBlocked = error.message.includes('Direct extraction');
+}
+
+if (!goaTokenExtractionBlocked)
+    throw new Error('Bash allowed direct GNOME Online Accounts token extraction');
 
 let sudoPasswordRequested = false;
 const noSudoPromptResult = await runBashCommand('printf no-sudo-prompt', {

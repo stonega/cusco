@@ -17,8 +17,9 @@ Cusco is a native GNOME AI chat application built with GJS, GTK 4, and libadwait
 - Secret Service API key storage, with environment variables as a development fallback.
 - User-approved memory proposals, per-chat memory controls, memory management, import/export, and visible audit notes.
 - Built-in tools for web search, calculator, structured data summaries, file context, and image attachment notes.
-- Workspace preferences for prompt snippets, agent profiles, conversation folders/tags, plugin tool descriptors, and optional MCP server configs.
-- Installed SKILL support from `~/.agents/skills`, with a top-level Skills preferences page and per-chat skill selection.
+- Workspace preferences for prompt snippets, agent profiles, conversation folders/tags, plugin tool descriptors, hooks, and computer-use controls.
+- SKILL support from `~/.agents/skills`, the repository `skills/` folder, and installed plugins, managed beside the plugin catalog with per-chat skill selection.
+- Native standalone plugin, Skill, and MCP management with header tabs, marketplace search, manifest metadata, and confirmed install or removal actions.
 - Optional Linux-only computer use for window capture, pointer/keyboard actions, and GNOME workspace switching on Wayland.
 - GNOME integration through app actions, keyboard shortcuts, notifications, adaptive layout, high contrast/reduced motion settings, desktop actions, and Shell search provider support.
 
@@ -76,15 +77,35 @@ gjs -m src/main.js
 
 Configure remote providers from Preferences. API keys are stored through Secret Service; for local development, provider-specific environment variables can also be used.
 
-Installed skills are discovered from:
+Skills are discovered from global, Cusco repository, and installed-plugin folders:
 
 ```sh
 ~/.agents/skills/<skill-id>/SKILL.md
+$REPO_ROOT/skills/<skill-id>/SKILL.md
+$REPO_ROOT/plugins/<plugin-id>/skills/<skill-id>/SKILL.md
 ```
 
-Enable skills in the Skills preferences page, then select them from the composer skill menu for a chat. Cusco sends selected skills as instruction context and records a visible transcript note; it does not execute skill files.
+The **Plugins → Skills** tab labels each entry as **Global** or **Cusco**. Adding a
+skill copies its complete folder into `$REPO_ROOT/skills/`; the original folder
+is left unchanged. Enable skills there, then select them from the composer skill
+menu for a chat. Cusco sends selected skills as instruction context and records
+a visible transcript note; it does not execute skill files.
 
 Cusco also ships compact built-in MCP setup guidance that is always available to the model. The repo includes the longer reference/installable version at [examples/skills/cusco-mcp-setup/SKILL.md](examples/skills/cusco-mcp-setup/SKILL.md).
+
+The Plugins destination provides **Plugins**, **Skills**, and **MCP** header tabs.
+The Plugins tab reads Cusco's own `$REPO_ROOT/.agents/plugins/marketplace.json`
+catalog and each plugin manifest directly. Install copies the complete plugin
+into `$REPO_ROOT/plugins/`; removal deletes only the Cusco-managed repository
+copy. Connector-backed plugins normally use Cusco's native MCP client and OAuth
+flow, with discovery, PKCE, confidential or public client registration,
+automatic refresh, and tokens stored in Secret Service. The complete flow and
+[configuration options are documented in MCP Authorization](docs/implementation/mcp-authorization.md). Gmail instead
+binds directly to a Google account in GNOME Online Accounts: GOA retains the
+credentials, while
+Cusco stores only the selected account ID and uses the GOA-provided secure IMAP
+configuration to expose bounded, permission-gated read tools without a hosted
+connector intermediary.
 
 ## Build
 
@@ -125,6 +146,7 @@ Some smoke tests skip automatically when the current environment has no display 
 - [Computer Use](docs/user/computer-use.md)
 - [Computer-Use Architecture](docs/implementation/computer-use.md)
 - [Provider Models](docs/user/provider-models.md)
+- [MCP Authorization](docs/implementation/mcp-authorization.md)
 
 ## License
 

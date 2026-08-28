@@ -11,6 +11,7 @@ if (getBundledIconForeground() !== '#2e3436'
 
 const resourceDirectory = Gio.File.new_for_path('data/resources');
 const multicolorIconPalettes = new Map([
+    ['plugins-symbolic.svg', ['#3584e4', '#9141ac', '#26a269', '#ff7800']],
     ['usage-symbolic.svg', ['#3584e4', '#ff7800', '#9141ac']],
 ]);
 const files = resourceDirectory.enumerate_children(

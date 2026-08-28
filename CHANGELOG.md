@@ -7,6 +7,51 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Add Z.ai GLM-5.3-Flash with 1M context, native image input, always-on reasoning controls, and streamed tool calls.
+- Add a native Gmail connector that uses Google accounts from GNOME Online Accounts, stores only the chosen GOA account ID, and exposes permission-gated search, message-read, and thread-read tools without a hosted connector server.
+- Add a native Plugins destination beside Usage that reads Cusco marketplace data directly, installs complete plugins into the Cusco repository, and supports confirmed removal.
+- Add repository-owned `skills/` discovery and automatic discovery of skills bundled inside installed Cusco plugins.
+- Add native STDIO and Streamable HTTP server creation in Plugins → MCP, including environment-backed secret fields.
+- Add a native Connect action for installed connector-backed plugins using Cusco-managed MCP configuration, OAuth, verified connection state, and Secret Service token storage.
+- Add native detail dialogs for plugin and skill rows, including provenance, status, capabilities, source information, and full monospaced skill content.
+
+### Changed
+
+- Negotiate MCP OAuth client authentication across public, confidential, pre-registered, Client ID Metadata Document, and dynamically registered clients; expose advanced resource, scope, callback, and client settings plus sign-out in Plugins → MCP.
+- Copy skills added from Settings into Cusco’s repository `skills/` folder and label skill rows as Global or Cusco.
+- Hide Browser, Build Web Apps, Build iOS Apps, Build macOS Apps, Codex App Tools, and Chrome from the Cusco plugin marketplace.
+- Hide internal marketplace source identifiers and OpenAI developer attribution from plugin descriptions.
+- Move Plugins, Usage, and Settings into a hamburger menu in the sidebar header, removing the footer destinations.
+- Keep the sidebar header buttons transparent while idle, with native feedback on interaction.
+- Declare that the current plugin catalog is ported from OpenAI and adapted for Cusco.
+- Move Skills and MCP management out of Settings and into native header tabs beside the plugin catalog.
+- Remove the installed/available summary card from the Plugins catalog while retaining compact source attribution.
+- Match the Add MCP Server dialog width to plugin and skill details.
+- Let plugin and skill details expand across the available window width for readable descriptions and metadata.
+- Use a native top-right close control for plugin and skill detail dialogs, and remove the decorative skill detail icon.
+- Remove the redundant Installed label from plugin rows and present Remove as a destructive action.
+- Match the Usage header to Plugins with a back button, centered interval tabs, and a refresh action.
+- Render the plugin catalog with the same native card layout and width as Skills, sized to the visible rows.
+
+### Fixed
+
+- Show sent messages and Agent activity in the first UI frame, keep optimistic message rows in place after approval, and refresh MCP and connector tools concurrently so preflight work no longer leaves the transcript visually idle.
+- Correct the Add MCP Server form’s transport selector and compound input rows, and keep scrollbars flush-right in server and skill detail dialogs.
+- Refresh expiring MCP access tokens from Secret Service, preserve rotated refresh tokens, and validate OAuth discovery and callback metadata.
+- Register connected Gmail tools in the Agent Mode runner, use one native tool call for "read latest email," and forbid shell-based mailbox or GOA credential fallbacks.
+- Use GOA's secure IMAP/XOAUTH2 mail configuration instead of the Gmail REST API, avoiding failures when GNOME's Google Cloud project does not enable `gmail.googleapis.com`.
+- Extract the OAuth access token from GOA's boolean-prefixed GJS finish tuple instead of accidentally sending the success flag as Gmail's bearer credential.
+- Keep the Plugins search and filter controls available when a filter has no results, and provide direct ways to return to all plugins or chat.
+- Keep detail descriptions unselected when their dialogs open by focusing the close control instead.
+- Load SKILL.md content on demand before opening skill details so the full monospaced content is shown.
+- Remove stale Global and Cusco skill rows after their folders are deleted.
+
+### Removed
+
+- Remove the bundled Figma plugin because Figma remote MCP access is restricted to approved catalog clients.
+
 ## [0.5.40] - 2026-08-21
 
 ### Added

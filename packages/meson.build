@@ -81,6 +81,20 @@ streaming_text_package_sources = files(
   'streamingText/README.md',
 )
 
+plugins_package_sources = files(
+  'plugins/index.js',
+  'plugins/client.js',
+  'plugins/README.md',
+)
+
+gmail_goa_package_sources = files(
+  'gmailGoa/index.js',
+  'gmailGoa/goa.js',
+  'gmailGoa/imap.js',
+  'gmailGoa/connector.js',
+  'gmailGoa/README.md',
+)
+
 install_data(
   provider_runtime_package_sources,
   install_dir: pkgdatadir / 'packages' / 'providerRuntime',
@@ -124,4 +138,14 @@ install_data(
 install_data(
   streaming_text_package_sources,
   install_dir: pkgdatadir / 'packages' / 'streamingText',
+)
+
+install_data(
+  plugins_package_sources,
+  install_dir: pkgdatadir / 'packages' / 'plugins',
+)
+
+install_data(
+  gmail_goa_package_sources,
+  install_dir: pkgdatadir / 'packages' / 'gmailGoa',
 )

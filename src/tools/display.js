@@ -1,6 +1,52 @@
 import { normalizeArtifacts } from '../chat/artifacts.js';
+import { redactSensitiveText } from './tools.js';
 
 const TOOL_DISPLAY_PRESETS = {
+    read_latest_email: {
+        label: 'Read latest Gmail message',
+        actions: {
+            running: 'Reading latest email',
+            completed: 'Read latest email',
+            failed: 'Latest email read failed',
+            cancelled: 'Latest email read stopped',
+        },
+    },
+    search_emails: {
+        label: 'Search Gmail',
+        actions: {
+            running: 'Searching Gmail',
+            completed: 'Searched Gmail',
+            failed: 'Gmail search failed',
+            cancelled: 'Gmail search stopped',
+        },
+    },
+    search_email_ids: {
+        label: 'Search Gmail message IDs',
+        actions: {
+            running: 'Searching Gmail',
+            completed: 'Searched Gmail',
+            failed: 'Gmail search failed',
+            cancelled: 'Gmail search stopped',
+        },
+    },
+    batch_read_email: {
+        label: 'Read Gmail messages',
+        actions: {
+            running: 'Reading emails',
+            completed: 'Read emails',
+            failed: 'Email read failed',
+            cancelled: 'Email read stopped',
+        },
+    },
+    read_email_thread: {
+        label: 'Read Gmail thread',
+        actions: {
+            running: 'Reading email thread',
+            completed: 'Read email thread',
+            failed: 'Email thread read failed',
+            cancelled: 'Email thread read stopped',
+        },
+    },
     bash: {
         label: 'Bash',
         actions: {
@@ -224,7 +270,7 @@ export function latestOutputLines(text, maxLines = TOOL_OUTPUT_PREVIEW_MAX_LINES
 }
 
 export function appendToolOutputPreview(current, chunk, maxChars = TOOL_OUTPUT_PREVIEW_MAX_CHARS) {
-    const combined = `${String(current ?? '')}${String(chunk ?? '')}`;
+    const combined = redactSensitiveText(`${String(current ?? '')}${String(chunk ?? '')}`);
 
     if (combined.length <= maxChars)
         return combined;
@@ -331,7 +377,7 @@ export function createToolCallFromRequest(request, options = {}) {
     return {
         name: normalizeString(request?.name),
         label: normalizeString(request?.label, toolPreset(request?.name).label),
-        input: String(request?.input ?? ''),
+        input: redactSensitiveText(request?.input),
         output: '',
         outputPreview: '',
         results: [],
@@ -352,15 +398,15 @@ export function createToolCallFromResult(result, options = {}) {
 
     return {
         ...base,
-        output: String(result?.output ?? ''),
-        outputPreview: String(options.outputPreview ?? result?.outputPreview ?? ''),
+        output: redactSensitiveText(result?.output),
+        outputPreview: redactSensitiveText(options.outputPreview ?? result?.outputPreview),
         results: Array.isArray(result?.results) ? result.results : [],
         artifacts: normalizeArtifacts(result?.artifacts),
         path: result?.path ?? '',
         query: result?.query ?? '',
-        command: result?.command ?? '',
-        stdout: result?.stdout ?? '',
-        stderr: result?.stderr ?? '',
+        command: redactSensitiveText(result?.command),
+        stdout: redactSensitiveText(result?.stdout),
+        stderr: redactSensitiveText(result?.stderr),
         stdoutTruncated: Boolean(result?.stdoutTruncated),
         stderrTruncated: Boolean(result?.stderrTruncated),
         exitStatus: result?.exitStatus ?? null,

@@ -1,0 +1,20 @@
+{
+  "name": "cusco",
+  "interface": {
+    "displayName": "Cusco"
+  },
+  "plugins": [
+    {
+      "name": "gmail",
+      "source": {
+        "source": "local",
+        "path": "./plugins/gmail"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Communication"
+    }
+  ]
+}

@@ -23,6 +23,7 @@ import { ConversationSidebar } from './chat/conversationSidebar.js';
 import { MessagePresenter } from './chat/messagePresenter.js';
 import { MessageActions } from './chat/messageActions.js';
 import { PendingMessagesController } from './chat/pendingMessages.js';
+import { PluginsPage } from './chat/pluginsPage.js';
 import {
     estimateConversationUsage,
 } from './chat/usage.js';
@@ -69,6 +70,7 @@ import {
 } from './composer/presentation.js';
 import { ComposerSuggestions } from './composer/suggestions.js';
 import { ComposerInputController } from './composer/inputController.js';
+import { GmailGoaConnector } from './connectors/gmailGoa.js';
 import { ComposerMenus } from './composer/menus.js';
 import { createCronCreateTool, CronJobManager } from './cron/manager.js';
 import { CronConversationSync } from './cron/conversationSync.js';
@@ -84,6 +86,7 @@ import { createImageGenerationTool } from './providers/imageGeneration.js';
 import { ModelPicker } from './providers/modelPicker.js';
 import { createMessage } from './providers/provider.js';
 import { AppSettingsStore } from './settings/appSettings.js';
+import { CuscoPluginClient } from './plugins/client.js';
 import { presentArchivedChatsWindow } from './settings/archivedChats.js';
 import { presentProviderSettingsDialog } from './settings/providerSettings.js';
 import { ConversationFileStore } from './storage/conversationStore.js';
@@ -515,12 +518,13 @@ function createRequestedToolRunner(window) {
     });
 }
 
-function createAssistantStreamRunner(window) {
+export function createAssistantStreamRunner(window) {
     const call = (name) => (...args) => window[name](...args);
 
     return new AssistantStreamRunner({
         appSettings: window._appSettings,
         conversations: window._conversations,
+        connectors: window._pluginConnectors,
         hooks: window._hooks,
         mcp: window._mcp,
         tools: window._tools,
@@ -574,6 +578,7 @@ function createTurnSubmission(window) {
         beginActiveTurn: call('_beginActiveTurn'),
         createAttachmentsForComposerReferences: call('_createAttachmentsForComposerReferences'),
         createConversationWithDefaults: call('_createConversationWithDefaults'),
+        createStreamingAssistantView: call('_createStreamingAssistantView'),
         ensureConversationProviderAvailable: call('_ensureConversationProviderAvailable'),
         ensureTurnSessionHooks: call('_ensureTurnSessionHooks'),
         finishActiveTurn: call('_finishActiveTurn'),
@@ -662,6 +667,7 @@ function createConversationSidebar(window) {
         onNewChat: () => window._createNewConversation(),
         onSettings: () => window._showSettingsDialog(),
         onShowUsage: () => window._showUsagePage(),
+        onShowPlugins: () => window._showPluginsPage(),
         onSelectConversation: (conversationId) => {
             window._showChatPage();
             window._conversationSelectionSerial += 1;
@@ -865,7 +871,45 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._composerUsage = createComposerUsageController(this);
         this._usagePage = new UsagePage({
             conversations: this._conversations,
+            onBack: () => this._showChatPage(),
             providerConfigs: this._providerConfigs,
+        });
+        this._pluginClient = new CuscoPluginClient();
+        this._gmailConnector = new GmailGoaConnector();
+        this._pluginConnectors = {
+            refreshTools: async (tools, options = {}) => {
+                let enabled = false;
+
+                try {
+                    const plugins = await this._pluginClient.listPlugins();
+                    enabled = plugins.some((plugin) => (
+                        plugin.name === 'gmail'
+                        && plugin.installed
+                        && plugin.enabled
+                    ));
+                } catch (error) {
+                    logError(error, 'Failed to determine whether the Gmail plugin is installed');
+                }
+
+                return await this._gmailConnector.refreshTools(tools, {
+                    ...options,
+                    enabled,
+                });
+            },
+        };
+        this._pluginsPage = new PluginsPage({
+            client: this._pluginClient,
+            getParentWindow: () => this,
+            gmailConnector: this._gmailConnector,
+            mcpManager: this._mcp,
+            onBack: () => this._showChatPage(),
+            onChanged: () => {
+                this._workspace.refreshInstalledSkills();
+                this._pluginsPage?.refreshSkills();
+            },
+            onManagementChanged: (change) => this._handleProviderSettingsChanged(change),
+            onToast: (message) => this._showToast(message),
+            workspaceManager: this._workspace,
         });
         this._cronConversationSync = createCronConversationSync(this);
         this._composerInput = createComposerInputController(this);
@@ -1015,6 +1059,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
             }
 
             this._usagePage.dispose();
+            this._pluginsPage.dispose();
+            this._gmailConnector.dispose();
 
             if (this._pendingConversationSendSourceId) {
                 GLib.Source.remove(this._pendingConversationSendSourceId);
@@ -1215,19 +1261,18 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._sidebar = this._conversationSidebar.widget;
         this._newChatButton = this._conversationSidebar.newChatButton;
         this._sidebarTitle = this._conversationSidebar.title;
-        this._settingsButton = this._conversationSidebar.settingsButton;
+        this._mainMenuButton = this._conversationSidebar.mainMenuButton;
         this._chatSearch = this._conversationSidebar.search;
         this._conversationListModel = this._conversationSidebar.listModel;
         this._conversationSelectionModel = this._conversationSidebar.selectionModel;
         this._conversationList = this._conversationSidebar.list;
         this._conversationListScroller = this._conversationSidebar.scroller;
-        this._usageNavigationButton = this._conversationSidebar.usageButton;
         return this._sidebar;
     }
 
     _showUsagePage() {
         this._ensureUsageSurface();
-        this._usageNavigationButton?.set_active(true);
+        this._pluginsPage?.cancelRefresh();
 
         if (this._primaryStack?.get_visible_child_name() === 'usage')
             return;
@@ -1240,10 +1285,25 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._refreshUsageDashboard();
     }
 
-    _showChatPage() {
+    _showPluginsPage() {
+        this._ensurePluginsSurface();
         this._usagePage?.cancelRefresh();
 
-        this._usageNavigationButton?.set_active(false);
+        if (this._primaryStack?.get_visible_child_name() === 'plugins')
+            return;
+
+        if (this._artifactSplitView?.get_show_sidebar())
+            this._closeArtifactWorkspace();
+
+        this._conversationSelectionModel?.unselect_all();
+        this._primaryStack?.set_visible_child_name('plugins');
+        this._refreshPlugins();
+    }
+
+    _showChatPage() {
+        this._usagePage?.cancelRefresh();
+        this._pluginsPage?.cancelRefresh();
+
         this._primaryStack?.set_visible_child_name('chat');
     }
 
@@ -1255,8 +1315,20 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._primaryStack.add_named(this._usageSurface, 'usage');
     }
 
+    _ensurePluginsSurface() {
+        if (this._pluginsSurface)
+            return;
+
+        this._pluginsSurface = this._pluginsPage.widget;
+        this._primaryStack.add_named(this._pluginsSurface, 'plugins');
+    }
+
     _refreshUsageDashboard() {
         this._usagePage.refresh();
+    }
+
+    _refreshPlugins() {
+        this._pluginsPage.refresh();
     }
 
     _applyUsageDashboard(usage, options = {}) {
@@ -3164,7 +3236,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._agentModeToggleButton.set_sensitive(!isBusy);
         this._skillsToggleButton.set_sensitive(!isBusy && this._workspace.enabledSkills.length > 0);
         this._chatOptionsMenuButton.set_sensitive(!isBusy);
-        this._settingsButton.set_sensitive(true);
+        this._mainMenuButton.set_sensitive(true);
     }
 
     _messageContentOptions(options = {}) {

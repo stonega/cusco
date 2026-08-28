@@ -234,7 +234,7 @@ if (geminiProvider.defaultModelId !== 'gemini-3.7-flash'
 const zaiProvider = providers.getProvider('zai');
 
 if (zaiProvider.defaultModelId !== 'glm-5.3'
-    || zaiProvider.models.map((model) => model.id).join(',') !== 'glm-5.3,glm-5.2,glm-5-turbo')
+    || zaiProvider.models.map((model) => model.id).join(',') !== 'glm-5.3,glm-5.3-flash,glm-5.2,glm-5-turbo')
     throw new Error('Z.ai GLM models were not configured');
 
 const grokProvider = providers.getProvider('grok');

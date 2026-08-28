@@ -186,6 +186,7 @@ function createSendHarness({
     const appendedMessages = [];
     const finishOptions = [];
     const conversation = {
+        agentModeEnabled: true,
         id: 'send-chat',
         providerId: 'test-provider',
         modelId: 'test-model',
@@ -219,6 +220,22 @@ function createSendHarness({
             return {
                 remove() {
                     calls.push('remove-provisional');
+                },
+                promote_user_message(nextMessage) {
+                    if (!nextMessage?.id)
+                        throw new Error('The provisional user row was promoted without a durable message');
+                    calls.push('promote-provisional');
+                },
+            };
+        },
+        _createStreamingAssistantView() {
+            calls.push('show-assistant-placeholder');
+            return {
+                remove() {
+                    calls.push('remove-assistant-placeholder');
+                },
+                set_status(status) {
+                    calls.push(`assistant-status:${status}`);
                 },
             };
         },
@@ -255,6 +272,8 @@ function createSendHarness({
         },
         _drainPendingUserMessages() {},
         async _streamAssistantResponse(_conversationId, options = {}) {
+            if (!options.assistantView || !Number.isFinite(options.responseStartedAt))
+                throw new Error('The prepared assistant view was not handed to the stream runner');
             calls.push('provider-request');
             options.onPresentationSettling?.(presentationFinished);
             return { presentationFinished };
@@ -491,6 +510,104 @@ if (!settledPresentation
     throw new Error('A settled presentation raced borrowed-turn cleanup or skipped its final rebuild');
 }
 
+let resolveMcpRefresh;
+let resolveConnectorRefresh;
+const mcpRefreshGate = new Promise((resolve) => {
+    resolveMcpRefresh = resolve;
+});
+const connectorRefreshGate = new Promise((resolve) => {
+    resolveConnectorRefresh = resolve;
+});
+const agentPreflightCalls = [];
+const agentPreflightConversation = {
+    id: 'agent-preflight',
+    agentModeEnabled: true,
+    messages: [],
+};
+const agentPreflightView = {
+    finish_stream: () => null,
+    finish_working() {},
+    persist() {},
+    set_artifacts() {},
+    set_run_duration() {},
+    set_status(status) {
+        agentPreflightCalls.push(`status:${status}`);
+    },
+    set_stream_text() {},
+};
+const agentPreflightRunner = new AssistantStreamRunner({
+    appSettings: { responseTimeoutSeconds: 30 },
+    connectors: {
+        async refreshTools() {
+            agentPreflightCalls.push('connector-refresh-start');
+            await connectorRefreshGate;
+        },
+    },
+    conversations: { getConversation: () => agentPreflightConversation },
+    hooks: { dispatch: async () => ({ shouldContinue: false }) },
+    mcp: {
+        async refreshTools() {
+            agentPreflightCalls.push('mcp-refresh-start');
+            await mcpRefreshGate;
+        },
+    },
+    tools: {},
+    appendHookNotice() {},
+    applyHookResult() {},
+    beginActiveTurn() {},
+    buildProviderMessages: () => [],
+    collectProviderResponseWithFallback: async () => '',
+    createStreamingAssistantView() {
+        agentPreflightCalls.push('create-assistant-view');
+        return agentPreflightView;
+    },
+    ensureTurnSessionHooks: async () => {
+        agentPreflightCalls.push('session-hooks');
+        return true;
+    },
+    finishActiveTurn() {},
+    handleQueuedUserMessageError() {},
+    injectMemoryContext() {},
+    injectSkillContext: () => [],
+    isActiveConversationId: () => true,
+    isConversationBusy: () => true,
+    materializeAssistantArtifacts: () => [],
+    maybeAutoCompactConversation: async () => null,
+    refreshConversationList() {},
+    renderActiveConversation() {},
+    runAgentModeResponse: async () => 'Agent response',
+    scheduleUsageDisplayUpdate() {},
+    scrollToBottom() {},
+    sendQueuedUserMessages: async () => false,
+    setFollowLatestMessage() {},
+    startLongResponseNotification() {},
+    stopLongResponseNotification() {},
+    turnHookContext: () => ({}),
+    updateUsageDisplay() {},
+});
+const agentPreflightPromise = agentPreflightRunner._streamAssistantResponse(
+    agentPreflightConversation.id,
+    { cancellable: new Gio.Cancellable() },
+);
+
+if (agentPreflightCalls[0] !== 'create-assistant-view'
+    || agentPreflightCalls[1] !== 'status:Agent is thinking...'
+    || agentPreflightCalls.indexOf('status:Agent is thinking...')
+        > agentPreflightCalls.indexOf('session-hooks')) {
+    throw new Error('Agent activity was not visible before response preflight work');
+}
+
+await waitForLowPriorityMainLoopTurn();
+
+if (!agentPreflightCalls.includes('mcp-refresh-start')
+    || !agentPreflightCalls.includes('connector-refresh-start')) {
+    throw new Error('Agent tool sources were refreshed sequentially instead of concurrently');
+}
+
+resolveMcpRefresh();
+resolveConnectorRefresh();
+await agentPreflightPromise;
+
 let resolveSessionHook;
 const sessionHookGate = new Promise((resolve) => {
     resolveSessionHook = resolve;
@@ -501,8 +618,13 @@ const immediateSendPromise = windowPrototype._sendMessage.call(
     'Show this immediately',
 );
 
-if (immediateSend.calls.length !== 0)
-    throw new Error('Sending performed expensive work before GTK could paint the cleared composer');
+if (immediateSend.calls[0] !== 'show-provisional'
+    || !immediateSend.calls.includes('show-assistant-placeholder')
+    || !immediateSend.calls.includes('assistant-status:Agent is thinking...')
+    || immediateSend.calls.includes('session-hooks')
+    || immediateSend.calls.includes('persist-message')) {
+    throw new Error('Sending did not stage the user row and Agent activity before deferred work');
+}
 
 await waitForLowPriorityMainLoopTurn();
 
@@ -517,13 +639,15 @@ await immediateSendPromise;
 
 const provisionalIndex = immediateSend.calls.indexOf('show-provisional');
 const persistIndex = immediateSend.calls.indexOf('persist-message');
-const replacementIndex = immediateSend.calls.indexOf('show-committed');
+const promotionIndex = immediateSend.calls.indexOf('promote-provisional');
 
 if (provisionalIndex < 0
     || persistIndex <= provisionalIndex
-    || replacementIndex <= persistIndex
+    || promotionIndex <= persistIndex
+    || immediateSend.calls.includes('remove-provisional')
+    || immediateSend.calls.includes('show-committed')
     || immediateSend.appendedMessages.length !== 1) {
-    throw new Error('An approved prompt was not promoted from provisional to durable UI state');
+    throw new Error('An approved prompt did not promote its optimistic row in place');
 }
 
 const presentationTail = new Promise(() => {});
@@ -538,6 +662,7 @@ const blockedSend = createSendHarness({ promptAllowed: false });
 await windowPrototype._sendMessage.call(blockedSend.harness, 'Block this prompt');
 
 if (!blockedSend.calls.includes('remove-provisional')
+    || !blockedSend.calls.includes('remove-assistant-placeholder')
     || !blockedSend.calls.includes('restore-draft')
     || blockedSend.calls.includes('persist-message')
     || blockedSend.appendedMessages.length !== 0) {

@@ -9,6 +9,7 @@ import {
 
 const CONVERSATION_LIST_PAGE_SIZE = 50;
 const MORE_VERTICAL_ICON_FILE = 'more-vertical-symbolic.svg';
+const PLUGINS_ICON_FILE = 'plugins-symbolic.svg';
 const USAGE_ICON_FILE = 'usage-symbolic.svg';
 
 function clearConversationListRow(container) {
@@ -33,6 +34,7 @@ export class ConversationSidebar {
         onNewChat = () => {},
         onSettings = () => {},
         onShowUsage = () => {},
+        onShowPlugins = () => {},
         onSelectConversation = () => {},
         onRenameConversation = () => {},
         onArchiveConversation = () => {},
@@ -46,6 +48,7 @@ export class ConversationSidebar {
             onNewChat,
             onSettings,
             onShowUsage,
+            onShowPlugins,
             onSelectConversation,
             onRenameConversation,
             onArchiveConversation,
@@ -81,17 +84,14 @@ export class ConversationSidebar {
             icon_name: 'list-add-symbolic',
             tooltip_text: 'New chat',
         });
+        this.newChatButton.add_css_class('flat');
         this.newChatButton.connect('clicked', this._callbacks.onNewChat);
         this.title = new Gtk.Label({ label: 'Chats', hexpand: true, xalign: 0.5 });
         this.title.add_css_class('heading');
-        this.settingsButton = new Gtk.Button({
-            icon_name: 'emblem-system-symbolic',
-            tooltip_text: 'Preferences',
-        });
-        this.settingsButton.connect('clicked', this._callbacks.onSettings);
+        this.mainMenuButton = this._createMainMenuButton();
         sidebarHeader.append(this.newChatButton);
         sidebarHeader.append(this.title);
-        sidebarHeader.append(this.settingsButton);
+        sidebarHeader.append(this.mainMenuButton);
         sidebarHandle.set_child(sidebarHeader);
         sidebar.append(sidebarHandle);
 
@@ -162,38 +162,70 @@ export class ConversationSidebar {
         adjustment.connect('value-changed', () => this.maybeLoadNextPage());
         adjustment.connect('changed', () => this.maybeLoadNextPage());
 
-        const conversationOverlay = new Gtk.Overlay({
-            hexpand: true,
-            vexpand: true,
-        });
-        conversationOverlay.set_child(this.scroller);
-
-        const usageButtonContent = new Gtk.Box({
-            orientation: Gtk.Orientation.HORIZONTAL,
-            spacing: 10,
-        });
-        usageButtonContent.append(createBundledIcon(
-            USAGE_ICON_FILE,
-            'view-list-symbolic',
-            { pixelSize: 18 },
-        ));
-        usageButtonContent.append(new Gtk.Label({ label: 'Usage', xalign: 0, hexpand: true }));
-        this.usageButton = new Gtk.ToggleButton({
-            child: usageButtonContent,
-            hexpand: true,
-            halign: Gtk.Align.FILL,
-            valign: Gtk.Align.END,
-            margin_start: 12,
-            margin_end: 12,
-            margin_bottom: 12,
-            tooltip_text: 'Usage',
-        });
-        this.usageButton.add_css_class('cusco-sidebar-destination');
-        this.usageButton.connect('clicked', this._callbacks.onShowUsage);
-        conversationOverlay.add_overlay(this.usageButton);
-        sidebarContent.append(conversationOverlay);
+        sidebarContent.append(this.scroller);
         sidebar.append(sidebarContent);
         return sidebar;
+    }
+
+    _createMainMenuButton() {
+        const menuButton = new Gtk.MenuButton({
+            icon_name: 'open-menu-symbolic',
+            tooltip_text: 'Main menu',
+        });
+        menuButton.add_css_class('flat');
+        const popover = new Gtk.Popover();
+        const menu = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 2,
+            margin_top: 6,
+            margin_bottom: 6,
+            margin_start: 6,
+            margin_end: 6,
+        });
+        const addMenuItem = (icon, label, callback) => {
+            const item = new Gtk.Button({
+                halign: Gtk.Align.FILL,
+                tooltip_text: label,
+            });
+            item.add_css_class('flat');
+            item.add_css_class('cusco-sidebar-menu-item');
+            const content = new Gtk.Box({
+                orientation: Gtk.Orientation.HORIZONTAL,
+                spacing: 8,
+                margin_top: 4,
+                margin_bottom: 4,
+                margin_start: 6,
+                margin_end: 6,
+            });
+            content.append(icon);
+            content.append(new Gtk.Label({ label, xalign: 0, hexpand: true }));
+            item.set_child(content);
+            item.connect('clicked', () => {
+                popover.popdown();
+                callback();
+            });
+            menu.append(item);
+        };
+
+        addMenuItem(
+            createBundledIcon(PLUGINS_ICON_FILE, 'application-x-addon-symbolic', { pixelSize: 18 }),
+            'Plugins',
+            this._callbacks.onShowPlugins,
+        );
+        addMenuItem(
+            createBundledIcon(USAGE_ICON_FILE, 'view-list-symbolic', { pixelSize: 18 }),
+            'Usage',
+            this._callbacks.onShowUsage,
+        );
+        addMenuItem(
+            new Gtk.Image({ icon_name: 'emblem-system-symbolic', pixel_size: 18 }),
+            'Settings',
+            this._callbacks.onSettings,
+        );
+
+        popover.set_child(menu);
+        menuButton.set_popover(popover);
+        return menuButton;
     }
 
     dispose() {

@@ -2,9 +2,12 @@ import GLib from 'gi://GLib?version=2.0';
 import Soup from 'gi://Soup?version=3.0';
 
 import {
+    authorizeMcpServer,
     createPkceChallenge,
     MemoryMcpTokenStore,
     parseWwwAuthenticate,
+    refreshMcpToken,
+    shouldRefreshMcpToken,
 } from '../src/mcp/auth.js';
 import {
     MCP_PROTOCOL_VERSION,
@@ -32,13 +35,27 @@ const parsed = parseMcpConfigFile(JSON.stringify({
     mcpServers: {
         remote: {
             url: 'https://example.test/mcp',
+            bearerTokenEnvVar: 'REMOTE_MCP_TOKEN',
             headers: {
                 Authorization: 'Bearer test',
+            },
+            headerEnv: {
+                'X-Workspace': 'MCP_WORKSPACE',
+            },
+            oauth_resource: 'https://example.test/mcp',
+            oauth: {
+                client_id: 'configured-client',
+                client_secret_env_var: 'REMOTE_MCP_CLIENT_SECRET',
+                token_endpoint_auth_method: 'client_secret_post',
+                callback_url: 'http://127.0.0.1:32123/callback',
+                callback_port: 32123,
+                scope: 'tools:read resources:read',
             },
         },
         local: {
             command: gjs,
             args: ['-m', fakeServerPath],
+            envPassthrough: ['PATH', 'HOME'],
         },
         disabled: {
             command: gjs,
@@ -53,6 +70,23 @@ if (parsed.find((server) => server.id === 'remote')?.transport !== MCP_TRANSPORT
 
 if (parsed.find((server) => server.id === 'local')?.transport !== MCP_TRANSPORT_STDIO)
     throw new Error('stdio MCP config was not normalized');
+
+if (parsed.find((server) => server.id === 'remote')?.bearerTokenEnvVar !== 'REMOTE_MCP_TOKEN'
+    || parsed.find((server) => server.id === 'remote')?.headerEnv?.['X-Workspace'] !== 'MCP_WORKSPACE'
+    || parsed.find((server) => server.id === 'local')?.envPassthrough?.length !== 2) {
+    throw new Error('Environment-backed MCP configuration was not normalized');
+}
+
+const parsedRemoteOauth = parsed.find((server) => server.id === 'remote')?.oauth;
+
+if (parsedRemoteOauth?.resource !== 'https://example.test/mcp'
+    || parsedRemoteOauth?.clientId !== 'configured-client'
+    || parsedRemoteOauth?.clientSecretEnvVar !== 'REMOTE_MCP_CLIENT_SECRET'
+    || parsedRemoteOauth?.tokenEndpointAuthMethod !== 'client_secret_post'
+    || parsedRemoteOauth?.callbackPort !== 32123
+    || parsedRemoteOauth?.scopes?.join(' ') !== 'tools:read resources:read') {
+    throw new Error('MCP OAuth configuration was not normalized');
+}
 
 if (parsed.find((server) => server.id === 'disabled')?.enabled !== false)
     throw new Error('Disabled MCP config was not normalized');
@@ -93,19 +127,31 @@ workspace.addMcpServer({
     transport: MCP_TRANSPORT_STDIO,
     command: gjs,
     args: ['-m', fakeServerPath],
+    envPassthrough: ['PATH'],
     enabled: true,
     permissionPolicy: 'allow',
 });
 
+const managerTokenStore = new MemoryMcpTokenStore();
 const manager = new McpManager({
     workspaceManager: workspace,
     configPath,
-    tokenStore: new MemoryMcpTokenStore(),
+    tokenStore: managerTokenStore,
 });
+if (manager.listServers().find((server) => server.name === 'local-mcp')?.envPassthrough?.[0] !== 'PATH')
+    throw new Error('Workspace MCP environment passthrough was not retained');
 const tools = new ToolManager();
 const httpServer = new Soup.Server();
 let httpListening = false;
+let sawEnvironmentBackedHeaders = false;
 let sawProtocolVersionHeader = false;
+let oauthRegistration = null;
+let oauthAuthorizationUrl = '';
+let oauthTokenExchange = null;
+let oauthRefreshExchange = null;
+let oauthBasicAuthorization = '';
+let oauthBasicExchange = null;
+let managerUsedRefreshedToken = false;
 
 function requestJson(message) {
     return JSON.parse(new TextDecoder().decode(message.get_request_body().flatten().get_data()));
@@ -114,6 +160,24 @@ function requestJson(message) {
 function setJsonResponse(message, body) {
     message.set_status(Soup.Status.OK, null);
     message.set_response('application/json', Soup.MemoryUse.COPY, JSON.stringify(body));
+}
+
+function requestText(message) {
+    return new TextDecoder().decode(message.get_request_body().flatten().get_data());
+}
+
+function requestForm(message) {
+    return Object.fromEntries(requestText(message).split('&').filter(Boolean).map((entry) => {
+        const [name, value = ''] = entry.split('=');
+        return [
+            GLib.uri_unescape_string(name.replace(/\+/g, '%20'), null),
+            GLib.uri_unescape_string(value.replace(/\+/g, '%20'), null),
+        ];
+    }));
+}
+
+function oauthBaseUrl() {
+    return httpServer.get_uris()[0].to_string().replace(/\/$/, '');
 }
 
 GLib.setenv('NO_PROXY', '127.0.0.1,localhost', true);
@@ -137,6 +201,13 @@ httpServer.add_handler('/mcp', (_server, message) => {
 });
 httpServer.add_handler('/versioned-mcp', (_server, message) => {
     const request = requestJson(message);
+    const environmentHeader = message.get_request_headers().get_one('X-MCP-Test') ?? '';
+    const authorizationHeader = message.get_request_headers().get_one('Authorization') ?? '';
+
+    if (environmentHeader === 'from-environment'
+        && authorizationHeader === 'Bearer environment-token') {
+        sawEnvironmentBackedHeaders = true;
+    }
 
     if (request.method !== 'initialize') {
         const protocolVersion = message.get_request_headers().get_one('MCP-Protocol-Version') ?? '';
@@ -189,6 +260,104 @@ httpServer.add_handler('/versioned-mcp', (_server, message) => {
         break;
     }
 });
+httpServer.add_handler('/.well-known/oauth-protected-resource/oauth-mcp', (_server, message) => {
+    setJsonResponse(message, {
+        resource: `${oauthBaseUrl()}/oauth-mcp`,
+        authorization_servers: [oauthBaseUrl()],
+        scopes_supported: ['mcp:connect'],
+    });
+});
+httpServer.add_handler('/.well-known/oauth-authorization-server', (_server, message) => {
+    setJsonResponse(message, {
+        issuer: oauthBaseUrl(),
+        authorization_endpoint: `${oauthBaseUrl()}/oauth/authorize`,
+        token_endpoint: `${oauthBaseUrl()}/oauth/token`,
+        registration_endpoint: `${oauthBaseUrl()}/oauth/register`,
+        grant_types_supported: ['authorization_code', 'refresh_token'],
+        response_types_supported: ['code'],
+        code_challenge_methods_supported: ['S256'],
+        token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
+        scopes_supported: ['mcp:connect'],
+    });
+});
+httpServer.add_handler('/oauth/register', (_server, message) => {
+    oauthRegistration = requestJson(message);
+    setJsonResponse(message, {
+        client_id: 'dynamic-client',
+        client_secret: 'dynamic-secret',
+        token_endpoint_auth_method: 'client_secret_post',
+    });
+});
+httpServer.add_handler('/oauth/token', (_server, message) => {
+    const form = requestForm(message);
+
+    if (form.code === 'basic-authorization-code') {
+        oauthBasicAuthorization = message.get_request_headers().get_one('Authorization') ?? '';
+        oauthBasicExchange = form;
+        setJsonResponse(message, {
+            access_token: 'basic-access-token',
+            token_type: 'Bearer',
+            expires_in: 3600,
+            scope: 'mcp:connect',
+        });
+        return;
+    }
+
+    if (form.grant_type === 'refresh_token') {
+        oauthRefreshExchange = form;
+        setJsonResponse(message, {
+            access_token: 'refreshed-access-token',
+            token_type: 'Bearer',
+            expires_in: 3600,
+            scope: 'mcp:connect',
+        });
+        return;
+    }
+
+    oauthTokenExchange = form;
+    setJsonResponse(message, {
+        access_token: 'initial-access-token',
+        refresh_token: 'refresh-token',
+        token_type: 'Bearer',
+        expires_in: 1,
+        scope: 'mcp:connect',
+    });
+});
+httpServer.add_handler('/refreshing-mcp', (_server, message) => {
+    const request = requestJson(message);
+    const authorization = message.get_request_headers().get_one('Authorization') ?? '';
+
+    if (authorization === 'Bearer refreshed-access-token')
+        managerUsedRefreshedToken = true;
+    else {
+        message.set_status(Soup.Status.UNAUTHORIZED, null);
+        message.get_response_headers().append('WWW-Authenticate', 'Bearer scope="mcp:connect"');
+        message.set_response('application/json', Soup.MemoryUse.COPY, JSON.stringify({
+            error: { message: 'Authorization required' },
+        }));
+        return;
+    }
+
+    setJsonResponse(message, {
+        jsonrpc: '2.0',
+        id: request.id,
+        result: request.method === 'initialize'
+            ? {
+                protocolVersion: MCP_PROTOCOL_VERSION,
+                capabilities: {},
+                serverInfo: { name: 'Refreshing MCP', version: '1.0.0' },
+            }
+            : request.method === 'tools/list'
+                ? { tools: [] }
+                : request.method === 'resources/list'
+                    ? { resources: [] }
+                    : request.method === 'resources/templates/list'
+                        ? { resourceTemplates: [] }
+                        : request.method === 'prompts/list'
+                            ? { prompts: [] }
+                            : {},
+    });
+});
 
 try {
     httpServer.listen_local(0, Soup.ServerListenOptions.IPV4_ONLY);
@@ -216,6 +385,141 @@ try {
         throw new Error('MCP config file server was not disabled through manager');
 
     if (httpListening) {
+        const oauthTokenStore = new MemoryMcpTokenStore();
+        const oauthServer = {
+            key: 'test:oauth-mcp',
+            id: 'oauth-mcp',
+            name: 'OAuth MCP',
+            transport: MCP_TRANSPORT_HTTP,
+            url: `${oauthBaseUrl()}/oauth-mcp`,
+            oauth: {
+                resource: `${oauthBaseUrl()}/oauth-mcp`,
+                scopes: [],
+            },
+        };
+        let callbackClosed = false;
+        const token = await authorizeMcpServer(oauthServer, {}, oauthTokenStore, {
+            timeoutSeconds: 5,
+            createCallbackListener: () => ({
+                redirectUri: 'http://127.0.0.1:32123/callback',
+                promise: Promise.resolve({ code: 'authorization-code' }),
+                close: () => {
+                    callbackClosed = true;
+                },
+            }),
+            openUri: async (url) => {
+                oauthAuthorizationUrl = url;
+            },
+        });
+
+        if (oauthRegistration?.token_endpoint_auth_method !== 'client_secret_post'
+            || !oauthRegistration?.grant_types?.includes('refresh_token')) {
+            throw new Error('MCP OAuth registration did not negotiate confidential client authentication');
+        }
+        if (oauthTokenExchange?.client_id !== 'dynamic-client'
+            || oauthTokenExchange?.client_secret !== 'dynamic-secret'
+            || oauthTokenExchange?.resource !== oauthServer.url
+            || !oauthTokenExchange?.code_verifier) {
+            throw new Error('MCP OAuth token exchange did not include client authentication, resource, and PKCE');
+        }
+        if (!oauthAuthorizationUrl.includes('code_challenge=')
+            || !oauthAuthorizationUrl.includes('scope=mcp%3Aconnect')
+            || !callbackClosed
+            || token.accessToken !== 'initial-access-token'
+            || token.refreshToken !== 'refresh-token') {
+            throw new Error('MCP OAuth authorization result was incomplete');
+        }
+        if (!shouldRefreshMcpToken(token, {
+            nowMilliseconds: Date.parse(token.expiresAt),
+            skewMilliseconds: 0,
+        })) {
+            throw new Error('Expiring MCP OAuth token was not detected');
+        }
+
+        const refreshed = await refreshMcpToken(oauthServer, token, oauthTokenStore, {
+            timeoutSeconds: 5,
+        });
+
+        if (oauthRefreshExchange?.refresh_token !== 'refresh-token'
+            || oauthRefreshExchange?.client_secret !== 'dynamic-secret'
+            || refreshed.accessToken !== 'refreshed-access-token'
+            || refreshed.refreshToken !== 'refresh-token'
+            || oauthTokenStore.lookup(oauthServer.key)?.accessToken !== 'refreshed-access-token') {
+            throw new Error('MCP OAuth refresh token flow failed');
+        }
+
+        GLib.setenv('CUSCO_MCP_BASIC_SECRET', 'configured-secret', true);
+        const basicServer = {
+            ...oauthServer,
+            key: 'test:oauth-basic',
+            name: 'OAuth Basic MCP',
+            oauth: {
+                ...oauthServer.oauth,
+                clientId: 'configured-client',
+                clientSecretEnvVar: 'CUSCO_MCP_BASIC_SECRET',
+                tokenEndpointAuthMethod: 'client_secret_basic',
+            },
+        };
+        const basicToken = await authorizeMcpServer(basicServer, {}, oauthTokenStore, {
+            timeoutSeconds: 5,
+            createCallbackListener: () => ({
+                redirectUri: 'http://127.0.0.1:32123/callback',
+                promise: Promise.resolve({ code: 'basic-authorization-code' }),
+                close: () => {},
+            }),
+            openUri: async () => {},
+        });
+        const expectedBasic = GLib.base64_encode(
+            new TextEncoder().encode('configured-client:configured-secret'),
+        );
+
+        if (oauthBasicAuthorization !== `Basic ${expectedBasic}`
+            || oauthBasicExchange?.client_secret
+            || basicToken.accessToken !== 'basic-access-token'
+            || basicToken.clientSecret
+            || basicToken.clientSecretEnvVar !== 'CUSCO_MCP_BASIC_SECRET') {
+            throw new Error('Configured MCP OAuth client_secret_basic flow failed');
+        }
+
+        workspace.addMcpServer({
+            id: 'refreshing-mcp',
+            name: 'refreshing-mcp',
+            transport: MCP_TRANSPORT_HTTP,
+            url: `${oauthBaseUrl()}/refreshing-mcp`,
+            enabled: true,
+            permissionPolicy: 'allow',
+        });
+        manager.reloadConfig();
+        const refreshingServer = manager.listServers()
+            .find((item) => item.id === 'refreshing-mcp');
+        managerTokenStore.store(refreshingServer.key, refreshingServer.name, {
+            version: 2,
+            accessToken: 'expired-access-token',
+            refreshToken: 'refresh-token',
+            tokenType: 'Bearer',
+            scope: 'mcp:connect',
+            expiresAt: new Date(Date.now() - 60_000).toISOString(),
+            resource: refreshingServer.url,
+            authorizationServer: oauthBaseUrl(),
+            tokenEndpoint: `${oauthBaseUrl()}/oauth/token`,
+            clientId: 'dynamic-client',
+            clientSecret: 'dynamic-secret',
+            clientSecretEnvVar: '',
+            tokenEndpointAuthMethod: 'client_secret_post',
+            registrationType: 'dynamic',
+        });
+        await manager.refreshServer(refreshingServer.key, { timeoutSeconds: 5 });
+
+        if (!managerUsedRefreshedToken
+            || manager.listServers().find((item) => item.key === refreshingServer.key)
+                ?.status?.state !== 'connected') {
+            throw new Error('MCP manager did not refresh an expired token before connecting');
+        }
+
+        manager.clearServerAuthorization(refreshingServer.key);
+        if (manager.listServers().find((item) => item.key === refreshingServer.key)?.authenticated)
+            throw new Error('MCP sign out did not clear stored authorization');
+
         workspace.addMcpServer({
             name: 'auth-mcp',
             transport: MCP_TRANSPORT_HTTP,
@@ -238,9 +542,15 @@ try {
             name: 'versioned-mcp',
             transport: MCP_TRANSPORT_HTTP,
             url: `${httpServer.get_uris()[0].to_string().replace(/\/$/, '')}/versioned-mcp`,
+            bearerTokenEnvVar: 'CUSCO_MCP_TEST_TOKEN',
+            headerEnv: {
+                'X-MCP-Test': 'CUSCO_MCP_TEST_HEADER',
+            },
             enabled: true,
             permissionPolicy: 'allow',
         });
+        GLib.setenv('CUSCO_MCP_TEST_TOKEN', 'environment-token', true);
+        GLib.setenv('CUSCO_MCP_TEST_HEADER', 'from-environment', true);
         manager.reloadConfig();
         const versionedServer = manager.listServers().find((item) => item.name === 'versioned-mcp');
 
@@ -248,6 +558,8 @@ try {
 
         if (!sawProtocolVersionHeader)
             throw new Error('MCP HTTP protocol version header was not sent after initialization');
+        if (!sawEnvironmentBackedHeaders)
+            throw new Error('MCP HTTP environment-backed headers were not resolved');
     }
 
     await manager.refreshTools(tools, { timeoutSeconds: 5 });

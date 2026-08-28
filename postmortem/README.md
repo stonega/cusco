@@ -7,3 +7,4 @@ Use this directory for incident notes and technical retrospectives once Cusco ha
 - [2026-08-15: Message submission stalled after Enter](2026-08-15-enter-did-not-send-composer-messages.md)
 - [2026-08-16: Streamed messages jumped to the complete response](2026-08-16-stream-revision-animation-jump.md)
 - [2026-08-19: Real provider responses jumped at completion](2026-08-19-real-stream-completion-rebuild-jump.md)
+- [2026-08-28: Message sending had two visible feedback gaps](2026-08-28-message-send-feedback-gaps.md)

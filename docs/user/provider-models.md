@@ -47,6 +47,7 @@ support keep the chat picker disabled.
 | Grok | `grok-4.6` | `grok-4.5` | `Low`, `Medium`, `High` |
 | Grok | `grok-4.6` | `grok-4.3` | `Off`, `Low`, `Medium`, `High` |
 | Z.ai | `glm-5.3` | `glm-5.3` | `Low`, `High`, `Max` |
+| Z.ai | `glm-5.3` | `glm-5.3-flash` | `Low`, `High`, `Max` |
 | Z.ai | `glm-5.3` | `glm-5.2` | `Off`, `Auto`, `High`, `Max` |
 | Z.ai | `glm-5.3` | `glm-5-turbo` | `Off`, `Auto` |
 | Custom APIs | First discovered model | Discovered or user configured | None |
@@ -91,6 +92,7 @@ from the built-in model metadata.
 | Grok | `grok-4.5` | 1M tokens |
 | Grok | `grok-4.3` | 1M tokens |
 | Z.ai | `glm-5.3` | 1M tokens |
+| Z.ai | `glm-5.3-flash` | 1M tokens |
 | Z.ai | `glm-5.2` | 1M tokens |
 | Z.ai | `glm-5-turbo` | 200K tokens |
 | Custom APIs | Discovered or user configured | Unknown |
@@ -164,12 +166,16 @@ models that use its OpenAI-compatible image generation endpoint.
   `grok-imagine-image`. `grok-4.6` exposes `Low`, `Medium`, `High`, and `XHigh`
   reasoning and defaults to `High`; `grok-4.5` supports up to `High`, and
   `grok-4.3` also supports `Off`.
-- Z.ai is intentionally limited to `glm-5.3`, `glm-5.2`, and `glm-5-turbo`.
-  `glm-5.3` uses always-on thinking, supports `Low`, `High`, and `Max`, and
-  defaults to `Max`; `glm-5.2` supports explicit `High` and `Max` reasoning
-  effort; `glm-5-turbo` supports only thinking on/off. Z.ai image
-  generation supports only `glm-image`; `cogview-4-250304` is intentionally
-  excluded.
+- Z.ai is intentionally limited to `glm-5.3`, `glm-5.3-flash`, `glm-5.2`, and
+  `glm-5-turbo`. `glm-5.3` and `glm-5.3-flash` use always-on thinking,
+  support `Low`, `High`, and `Max`, and default to `Max`.
+  `glm-5.3-flash` has a 1M-token context window, a 131,072-token maximum
+  output, accepts text and image attachments in Cusco, and streams tool calls.
+  Z.ai also documents native video and file input for the model; Cusco's chat
+  attachment surface currently sends images only. `glm-5.2` supports explicit
+  `High` and `Max` reasoning effort; `glm-5-turbo` supports only thinking
+  on/off. Z.ai image generation supports only `glm-image`;
+  `cogview-4-250304` is intentionally excluded.
 - Each entry in the Custom APIs list uses the generic OpenAI-compatible chat
   completions adapter and keeps its own endpoint, models, default selection, and
   Secret Service API key. Cusco fetches models from `GET /models` when an entry
@@ -200,6 +206,7 @@ models that use its OpenAI-compatible image generation endpoint.
 | Grok | `grok-4.5` | xAI Grok model for frontier chat, coding, and agentic work. | `Low`, `Medium`, `High` |
 | Grok | `grok-4.3` | xAI Grok text and vision model with a 1M token context window. | `Off`, `Low`, `Medium`, `High` |
 | Z.ai | `glm-5.3` | Z.ai flagship model for complex coding and long-horizon agent tasks. | `Low`, `High`, `Max` |
+| Z.ai | `glm-5.3-flash` | Z.ai cost-efficient native multimodal model for coding, agentic work, and visual understanding. | `Low`, `High`, `Max` |
 | Z.ai | `glm-5.2` | Z.ai flagship model for coding and agent applications. | `Off`, `Auto`, `High`, `Max` |
 | Z.ai | `glm-5-turbo` | Z.ai faster GLM-5 series model optimized for agent workflows. | `Off`, `Auto` |
 
@@ -232,6 +239,8 @@ models that use its OpenAI-compatible image generation endpoint.
 - xAI Grok 4.6 announcement: https://x.ai/news/grok-4-6
 - xAI image generation API: https://docs.x.ai/developers/rest-api-reference/inference/images
 - xAI model listing API: https://docs.x.ai/developers/rest-api-reference/inference/models
+- Z.ai GLM-5.3-Flash announcement: https://z.ai/blog/glm-5.3-flash
+- Z.ai GLM-5.3-Flash guide: https://docs.z.ai/guides/vlm/glm-5.3-flash
 - Z.ai GLM-Image guide: https://docs.z.ai/guides/image/glm-image
 - Z.ai image generation API: https://docs.z.ai/api-reference/image/generate-image
 - Z.ai GLM-5-Turbo guide: https://docs.z.ai/guides/llm/glm-5-turbo

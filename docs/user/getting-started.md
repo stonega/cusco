@@ -37,7 +37,31 @@ Assistant HTML and SVG documents can become durable artifacts. Compact artifacts
 
 GNOME integration includes desktop actions for New Chat and Quick Prompt, shell search over saved conversations, long-response notifications, and shortcuts: Ctrl+N for a new chat, Ctrl+, for Preferences, Ctrl+K for the command palette, and Ctrl+L to focus the composer. High contrast, reduced motion, and response timeout are available in Preferences.
 
-Workspace preferences include a prompt library, conversation folders, plugin tool descriptors, and the MCP config file entry for `~/.config/io.github.stonega.Cusco/mcp.json`. Edit MCP servers in that file using a `mcpServers` object, then reload it from Workspace preferences. Enabled MCP servers expose namespaced Agent Mode tools such as `mcp__server__tool`, plus resource and prompt helper tools when the server supports them. Cusco includes compact MCP setup guidance that is always available to the model when it is relevant. The Skills preferences page discovers installed skills from `~/.agents/skills`, where each skill folder contains `SKILL.md`. Enable skills there, then reference one from the composer with `$`. Referenced skills are sent as hidden instruction context for the response; skill files are not executed.
+Select **Plugins** beside **Usage** in the sidebar to browse every installed and
+available plugin in Cusco's configured marketplace. Search by name, description,
+developer, category, capability, or marketplace; filter to installed or
+available entries; then select **Install** or **Remove**. Removal requires a
+confirmation. Cusco reads `$REPO_ROOT/.agents/plugins/marketplace.json` itself
+and copies installed plugins into `$REPO_ROOT/plugins/`. Plugin skills are
+discovered immediately from each installed plugin's `skills/` folder and are
+available to new Cusco conversations. **Connect** normally uses the plugin's MCP
+endpoint, Cusco's native OAuth discovery, PKCE, client registration, automatic
+token refresh, and Secret Service storage; app-only
+ports ask for an MCP endpoint instead of sending their legacy connector ID to
+another host. Gmail is native: **Connect** selects a Google mail account from
+GNOME Online Accounts, verifies Gmail access, and stores only that GOA account
+ID. Its search and read tools use Gmail's secure IMAP/XOAUTH2 path, ask for
+permission on every invocation, and do not use a hosted connector intermediary.
+Remote MCP authentication also runs locally and opens the system browser only
+for authorization. Plugins → MCP exposes advanced OAuth fields for a
+pre-registered client and a **Sign out** action. Some services approve MCP
+clients at the service level, so a standards-compliant OAuth flow can still be
+rejected until the service approves Cusco. See [MCP Authorization](../implementation/mcp-authorization.md).
+Select a plugin row to inspect its provenance, status, included components,
+capabilities, connection state, and example requests. Select a skill row in the
+**Skills** tab to inspect its source, location, status, and instruction preview.
+
+Workspace preferences include the prompt library, hooks, and computer-use controls. Open the **Plugins** destination and use its **Skills** and **MCP** tabs to manage integrations. The MCP tab can add STDIO commands and Streamable HTTP endpoints, including environment-backed secrets that are resolved without storing their values. It also edits and reloads `~/.config/io.github.stonega.Cusco/mcp.json`; enabled servers expose namespaced Agent Mode tools such as `mcp__server__tool`, plus resource and prompt helper tools when supported. The Skills tab discovers skills from `~/.agents/skills`, `$REPO_ROOT/skills`, and installed plugins, and labels them as **Global** or **Cusco**. Each skill folder contains `SKILL.md`. **Add skill folder** copies the complete selected folder into `$REPO_ROOT/skills/` without changing the original. Enable skills there, then reference one from the composer with `$`. Referenced skills are sent as hidden instruction context for the response; skill files are not executed.
 
 The Hooks preferences page discovers reviewed lifecycle commands from Cusco's user configuration and an explicitly selected chat working directory. Hooks can inspect or influence prompts, local tools, permission requests, compaction, and turn completion. New or changed commands never run before they are trusted. See [Lifecycle Hooks](hooks.md) for configuration and security details.
 

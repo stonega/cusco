@@ -2,6 +2,7 @@ cusco_sources = files(
   'main.js',
   'application.js',
   'bundledIcons.js',
+  'detailDialog.js',
   'packageLoader.js',
   'searchProvider.js',
   'window.js',
@@ -36,6 +37,7 @@ chat_sources = files(
   'chat/messageView.js',
   'chat/messagePresenter.js',
   'chat/pendingMessages.js',
+  'chat/pluginsPage.js',
   'chat/presentation.js',
   'chat/providerStream.js',
   'chat/reasoningPreview.js',
@@ -96,6 +98,10 @@ computer_use_sources = files(
   'computerUse/tools.js',
 )
 
+connector_sources = files(
+  'connectors/gmailGoa.js',
+)
+
 image_editor_sources = files(
   'imageEditor/document.js',
   'imageEditor/renderer.js',
@@ -130,6 +136,10 @@ mcp_sources = files(
   'mcp/client.js',
   'mcp/config.js',
   'mcp/manager.js',
+)
+
+plugin_sources = files(
+  'plugins/client.js',
 )
 
 cron_sources = files(
@@ -230,6 +240,11 @@ install_data(
 )
 
 install_data(
+  connector_sources,
+  install_dir: pkgdatadir / 'connectors',
+)
+
+install_data(
   image_editor_sources,
   install_dir: pkgdatadir / 'imageEditor',
 )
@@ -252,6 +267,11 @@ install_data(
 install_data(
   mcp_sources,
   install_dir: pkgdatadir / 'mcp',
+)
+
+install_data(
+  plugin_sources,
+  install_dir: pkgdatadir / 'plugins',
 )
 
 install_data(

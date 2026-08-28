@@ -7,7 +7,7 @@ import { createProviderIcon, updateProviderIcon } from '../providers/icons.js';
 import { createAppInfoSettingsPage } from './appInfoSettings.js';
 import { createApplicationSettingsPage } from './appSettings.js';
 import { createMemorySettingsPage } from './memorySettings.js';
-import { createSkillsSettingsPage, createWorkspaceSettingsPage } from './workspaceSettings.js';
+import { createWorkspaceSettingsPage } from './workspaceSettings.js';
 
 function createStringList(values) {
     const list = new Gtk.StringList();
@@ -1370,15 +1370,14 @@ export function presentProviderSettingsDialog(
         dialog.add(createWorkspaceSettingsPage(
             dialog,
             workspaceManager,
-            mcpManager,
             onChanged,
+            null,
             {
                 appSettings,
                 computerUse: options.computerUse ?? null,
                 hookManager: options.hookManager ?? null,
             },
         ));
-        dialog.add(createSkillsSettingsPage(dialog, workspaceManager, onChanged));
     }
 
     const page = createProviderSettingsPage(providerConfigs, onChanged);
