@@ -1,0 +1,5 @@
+interface:
+  display_name: "GNOME Extension Developer"
+  short_description: "Build, port, debug, and package Shell extensions"
+  brand_color: "#4A86CF"
+  default_prompt: "Use $gnome-shell-extension-development to create or improve this GNOME Shell extension."

@@ -105,6 +105,7 @@ export function createStreamingAssistantView({
         );
 
         assistantMessage = storedMessage;
+        ensureView()?.set_artifacts?.(artifacts);
     };
     const updatePersistentRunDuration = (durationMilliseconds) => {
         const normalizedDuration = Math.max(
@@ -163,7 +164,8 @@ export function createStreamingAssistantView({
             },
         }),
         set_stream_preferences: (streamOptions) => view?.set_stream_preferences?.(streamOptions),
-        persist: () => conversations.persist(),
+        persist: () => conversations.persistConversationAsync?.(conversation.id)
+            ?? conversations.persist(),
         remove: () => view?.remove?.(),
         hasContent: () => currentText.length > 0 || currentReasoning.length > 0 || Boolean(currentUsage),
         hasToolResults: () => view?.has_tool_results?.() ?? false,

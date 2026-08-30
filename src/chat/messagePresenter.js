@@ -598,6 +598,7 @@ export class MessagePresenter {
             set_label: updateBodyContent,
             set_loading: showLoading,
             set_status: showLoading,
+            set_artifacts: (artifacts) => bodyContent.setArtifacts?.(artifacts),
             clear_loading: clearLoading,
             start_working: startWorking,
             set_run_duration: setRunDuration,

@@ -54,7 +54,7 @@ function applyPlan(text, cursorOffset, action, {
 const control = Gdk.ModifierType.CONTROL_MASK;
 const alt = Gdk.ModifierType.ALT_MASK;
 
-let emptyConversationStateHidden = false;
+const messageAppendEvents = [];
 let appendedMessageWidget = null;
 const batchMessageWidget = {};
 CuscoWindow.prototype._appendMessageWidget.call({
@@ -62,17 +62,19 @@ CuscoWindow.prototype._appendMessageWidget.call({
     _messageBottomSpacer: null,
     _messages: {
         append(widget) {
+            messageAppendEvents.push('append-message');
             appendedMessageWidget = widget;
         },
     },
     _hideEmptyConversationState() {
-        emptyConversationStateHidden = true;
+        messageAppendEvents.push('hide-empty-state');
     },
     _appendMessageBottomSpacer() {},
 }, batchMessageWidget);
 assert(
-    emptyConversationStateHidden && appendedMessageWidget === batchMessageWidget,
-    'Appending a message during incremental rendering did not hide the empty state',
+    appendedMessageWidget === batchMessageWidget
+        && messageAppendEvents.join(',') === 'hide-empty-state,append-message',
+    'Appending a message did not begin hiding the empty state before inserting the row',
 );
 
 assert(

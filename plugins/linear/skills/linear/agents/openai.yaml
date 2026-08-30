@@ -1,0 +1,5 @@
+interface:
+  display_name: "Linear"
+  short_description: "Plan and track work through Linear's official MCP"
+  brand_color: "#5E6AD2"
+  default_prompt: "Use $linear to search or update my Linear workspace safely."

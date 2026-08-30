@@ -53,6 +53,8 @@ function normalizeOauthConfig(server) {
             ?? '',
         ).trim(),
         clientId: String(oauth.clientId ?? oauth.client_id ?? '').trim(),
+        clientIdRequired: oauth.clientIdRequired === true
+            || oauth.client_id_required === true,
         clientSecretEnvVar: String(
             oauth.clientSecretEnvVar
             ?? oauth.client_secret_env_var

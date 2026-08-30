@@ -1,0 +1,44 @@
+{
+  "mcpServers": {
+    "slack": {
+      "name": "Slack",
+      "description": "Slack's official hosted MCP server for workspace search, conversations, files, people, messages, reactions, and canvases.",
+      "transport": "streamable-http",
+      "url": "https://mcp.slack.com/mcp",
+      "oauth": {
+        "resource": "https://mcp.slack.com/mcp",
+        "clientIdRequired": true,
+        "callbackUrl": "http://localhost:32119/callback",
+        "callbackPort": 32119,
+        "scopes": [
+          "search:read.public",
+          "search:read.private",
+          "search:read.mpim",
+          "search:read.im",
+          "search:read.files",
+          "search:read.users",
+          "files:read",
+          "emoji:read",
+          "chat:write",
+          "channels:history",
+          "groups:history",
+          "mpim:history",
+          "im:history",
+          "channels:write",
+          "groups:write",
+          "im:write",
+          "mpim:write",
+          "reactions:write",
+          "canvases:read",
+          "canvases:write",
+          "users:read",
+          "users:read.email",
+          "channels:read",
+          "groups:read",
+          "mpim:read"
+        ]
+      },
+      "permissionPolicy": "ask"
+    }
+  }
+}

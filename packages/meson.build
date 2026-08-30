@@ -95,6 +95,13 @@ gmail_goa_package_sources = files(
   'gmailGoa/README.md',
 )
 
+mail_goa_package_sources = files(
+  'mailGoa/index.js',
+  'mailGoa/goa.js',
+  'mailGoa/connector.js',
+  'mailGoa/README.md',
+)
+
 install_data(
   provider_runtime_package_sources,
   install_dir: pkgdatadir / 'packages' / 'providerRuntime',
@@ -148,4 +155,9 @@ install_data(
 install_data(
   gmail_goa_package_sources,
   install_dir: pkgdatadir / 'packages' / 'gmailGoa',
+)
+
+install_data(
+  mail_goa_package_sources,
+  install_dir: pkgdatadir / 'packages' / 'mailGoa',
 )

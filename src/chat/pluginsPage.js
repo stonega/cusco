@@ -14,6 +14,8 @@ import {
 } from '../settings/workspaceSettings.js';
 import { presentDetailDialog } from '../detailDialog.js';
 
+const BUNDLED_PLUGIN_DEVELOPER = 'Cusco';
+
 function isCancelled(error) {
     return typeof error?.matches === 'function'
         && error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED);
@@ -29,11 +31,8 @@ function pluginPartsLabel(plugin) {
 }
 
 function pluginSubtitle(plugin) {
-    const developerName = plugin.developerName.toLowerCase() === 'openai'
-        ? ''
-        : plugin.developerName;
     const identity = [
-        developerName,
+        BUNDLED_PLUGIN_DEVELOPER,
         plugin.category,
         plugin.version ? `v${plugin.version}` : '',
     ].filter(Boolean).join(' · ');
@@ -47,7 +46,7 @@ function pluginSearchText(plugin) {
         plugin.displayName,
         plugin.name,
         plugin.description,
-        plugin.developerName,
+        BUNDLED_PLUGIN_DEVELOPER,
         plugin.category,
         plugin.marketplaceName,
         ...(plugin.capabilities ?? []),
@@ -116,18 +115,30 @@ function pluginConnectionLabel(plugin) {
         return 'Online account required';
     if (connectors.some((connector) => !connector.server && connector.status === 'unconfigured'))
         return 'MCP endpoint required';
+    if (connectors.some((connector) => pluginConnectorNeedsSetup(connector)))
+        return 'OAuth client required';
+    if (connectors.some((connector) => connector.bearerTokenRequired))
+        return 'Access token required';
 
     return 'Not connected';
 }
 
-export function presentGoaAccountChooser(parent, accounts) {
+export function pluginConnectorNeedsSetup(connector) {
+    return !connector?.server
+        || (connector.server.oauth?.clientIdRequired === true
+            && !connector.server.oauth?.clientId);
+}
+
+export function presentGoaAccountChooser(parent, accounts, options = {}) {
     return new Promise((resolve) => {
-        const labels = accounts.map((account) => (
-            account.emailAddress
-            || account.presentationIdentity
-            || account.providerName
-            || 'Google account'
-        ));
+        const labels = accounts.map((account) => {
+            const identity = account.emailAddress || account.presentationIdentity || '';
+            const provider = account.providerName || '';
+
+            return identity && provider
+                ? `${identity} — ${provider}`
+                : identity || provider || 'Online account';
+        });
         const model = Gtk.StringList.new(labels);
         const selector = new Gtk.DropDown({ model, hexpand: true });
         const content = new Gtk.Box({
@@ -146,8 +157,8 @@ export function presentGoaAccountChooser(parent, accounts) {
         content.append(selector);
 
         const dialog = new Adw.AlertDialog({
-            heading: 'Choose a Google account',
-            body: 'Select the Gmail mailbox Cusco may read.',
+            heading: options.heading || 'Choose an online account',
+            body: options.body || 'Select the account Cusco may use.',
             extra_child: content,
         });
         dialog.add_response('cancel', 'Cancel');
@@ -159,6 +170,43 @@ export function presentGoaAccountChooser(parent, accounts) {
             resolve(response === 'connect'
                 ? accounts[selector.get_selected()] ?? null
                 : null);
+        });
+        dialog.present(parent);
+    });
+}
+
+export function presentBearerCredentialDialog(parent, plugin, connector) {
+    return new Promise((resolve) => {
+        const tokenRow = new Adw.PasswordEntryRow({
+            title: 'Access token',
+            text: '',
+        });
+        const group = new Adw.PreferencesGroup({
+            description: [
+                'Cusco stores this token in Secret Service and never writes it to plugin settings.',
+                connector?.bearerTokenEnvVar
+                    ? `Environment alternative: ${connector.bearerTokenEnvVar}.`
+                    : '',
+            ].filter(Boolean).join(' '),
+        });
+        group.add(tokenRow);
+
+        const dialog = new Adw.AlertDialog({
+            heading: `Connect ${plugin.displayName}`,
+            body: 'Enter a bearer token accepted by this plugin’s MCP server.',
+            extra_child: group,
+        });
+        dialog.add_response('cancel', 'Cancel');
+        dialog.add_response('connect', 'Connect');
+        dialog.set_default_response('connect');
+        dialog.set_close_response('cancel');
+        dialog.set_response_appearance('connect', Adw.ResponseAppearance.SUGGESTED);
+        dialog.set_response_enabled('connect', false);
+        tokenRow.connect('changed', () => {
+            dialog.set_response_enabled('connect', Boolean(tokenRow.get_text().trim()));
+        });
+        dialog.connect('response', (_dialog, response) => {
+            resolve(response === 'connect' ? tokenRow.get_text().trim() : null);
         });
         dialog.present(parent);
     });
@@ -194,15 +242,7 @@ export function presentPluginDetailsDialog(parent, plugin) {
         max_width_chars: 62,
     });
     description.add_css_class('cusco-detail-description');
-    const provenance = new Gtk.Label({
-        label: 'Ported from OpenAI and adapted for Cusco.',
-        xalign: 0,
-        wrap: true,
-    });
-    provenance.add_css_class('caption');
-    provenance.add_css_class('cusco-detail-provenance');
     heroCopy.append(description);
-    heroCopy.append(provenance);
     hero.append(avatar);
     hero.append(heroCopy);
     hero.add_css_class('cusco-detail-hero');
@@ -218,8 +258,7 @@ export function presentPluginDetailsDialog(parent, plugin) {
         details.add(detailValueRow('Category', plugin.category));
     if (plugin.version)
         details.add(detailValueRow('Version', plugin.version));
-    if (plugin.developerName)
-        details.add(detailValueRow('Developer', plugin.developerName));
+    details.add(detailValueRow('Developer', BUNDLED_PLUGIN_DEVELOPER));
 
     const parts = pluginPartsLabel(plugin);
     if (parts)
@@ -267,24 +306,32 @@ export class PluginsPage {
         client,
         getParentWindow = () => null,
         gmailConnector = null,
+        goaConnectors = null,
         mcpManager = null,
         onBack = () => {},
         onChanged = () => {},
         onManagementChanged = () => {},
         onToast = () => {},
         presentPluginDetails = presentPluginDetailsDialog,
+        presentBearerCredential = presentBearerCredentialDialog,
         presentSkillDetails = presentSkillDetailsDialog,
         workspaceManager = null,
     }) {
         this._client = client;
         this._getParentWindow = getParentWindow;
         this._gmailConnector = gmailConnector;
+        this._goaConnectors = goaConnectors instanceof Map
+            ? new Map(goaConnectors)
+            : new Map(Object.entries(goaConnectors ?? {}));
+        if (gmailConnector && !this._goaConnectors.has('gmail-goa'))
+            this._goaConnectors.set('gmail-goa', gmailConnector);
         this._mcpManager = mcpManager;
         this._onBack = onBack;
         this._onChanged = onChanged;
         this._onManagementChanged = onManagementChanged;
         this._onToast = onToast;
         this._presentPluginDetails = presentPluginDetails;
+        this._presentBearerCredential = presentBearerCredential;
         this._presentSkillDetails = presentSkillDetails;
         this._workspaceManager = workspaceManager;
         this._plugins = [];
@@ -330,12 +377,7 @@ export class PluginsPage {
 
             this._plugins = plugins;
 
-            try {
-                await this._gmailConnector?.refreshAccounts?.({ cancellable });
-            } catch (error) {
-                if (!isCancelled(error) && !cancellable.is_cancelled())
-                    logError(error, 'Failed to refresh GNOME Online Accounts');
-            }
+            await this._refreshGoaAccounts(cancellable);
 
             this._syncConnectorStates();
             this._render();
@@ -383,16 +425,6 @@ export class PluginsPage {
             margin_start: 12,
             margin_end: 12,
         });
-        this._sourceNotice = new Gtk.Label({
-            label: 'Current catalog plugins are ported from OpenAI and adapted for Cusco.',
-            xalign: 0,
-            wrap: true,
-            margin_start: 2,
-            margin_end: 2,
-        });
-        this._sourceNotice.add_css_class('caption');
-        this._sourceNotice.add_css_class('dim-label');
-
         const controls = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 12,
@@ -436,7 +468,6 @@ export class PluginsPage {
 
         controls.append(filters);
         pageBox.append(controls);
-        pageBox.append(this._sourceNotice);
 
         this._pluginList = new Adw.PreferencesGroup();
 
@@ -631,6 +662,39 @@ export class PluginsPage {
         this._skillsManagement?.refresh();
     }
 
+    _goaConnectorFor(plugin, connector) {
+        if (connector?.type !== 'gnome-online-accounts')
+            return null;
+
+        const runtime = String(connector.runtime ?? '').trim();
+
+        if (runtime && this._goaConnectors.has(runtime))
+            return this._goaConnectors.get(runtime);
+        if (this._goaConnectors.has(plugin?.name))
+            return this._goaConnectors.get(plugin.name);
+        if (connector.provider === 'google' && connector.service === 'mail')
+            return this._gmailConnector ?? this._goaConnectors.get('gmail-goa') ?? null;
+
+        return null;
+    }
+
+    async _refreshGoaAccounts(cancellable) {
+        const connectors = [...new Set(this._plugins.flatMap((plugin) => (
+            (plugin.connectors ?? [])
+                .map((connector) => this._goaConnectorFor(plugin, connector))
+                .filter(Boolean)
+        )))];
+
+        await Promise.all(connectors.map(async (connector) => {
+            try {
+                await connector.refreshAccounts?.({ cancellable });
+            } catch (error) {
+                if (!isCancelled(error) && !cancellable.is_cancelled())
+                    logError(error, 'Failed to refresh GNOME Online Accounts');
+            }
+        }));
+    }
+
     _syncConnectorStates() {
         const serversById = new Map(
             (this._mcpManager?.listServers?.() ?? []).map((server) => [server.id, server]),
@@ -639,9 +703,10 @@ export class PluginsPage {
         for (const plugin of this._plugins) {
             for (const connector of plugin.connectors ?? []) {
                 if (connector.type === 'gnome-online-accounts') {
-                    const state = this._gmailConnector?.getStatus?.() ?? {
+                    const state = this._goaConnectorFor(plugin, connector)?.getStatus?.() ?? {
                         connected: false,
                         status: 'unconfigured',
+                        message: 'This native online-account connector is unavailable.',
                     };
                     connector.connected = state.connected;
                     connector.status = state.status;
@@ -655,6 +720,11 @@ export class PluginsPage {
                 connector.connected = server?.status?.state === 'connected';
                 connector.status = server?.status?.state ?? (connector.server ? 'ready' : 'unconfigured');
                 connector.serverKey = server?.key ?? '';
+                connector.bearerTokenRequired = Boolean(
+                    server?.bearerTokenEnvVar
+                    && !server?.bearerTokenAvailable
+                    && !server?.authenticated,
+                );
             }
         }
     }
@@ -745,7 +815,7 @@ export class PluginsPage {
                 label: connected && hasGoaConnector ? 'Change account' : connected ? 'Connected' : 'Connect',
                 tooltip_text: connected
                     ? hasGoaConnector
-                        ? `Change the Google account used by ${plugin.displayName}`
+                        ? `Change the online account used by ${plugin.displayName}`
                         : `${plugin.displayName} is connected`
                     : `Connect ${plugin.displayName}`,
                 valign: Gtk.Align.CENTER,
@@ -807,7 +877,7 @@ export class PluginsPage {
                 throw new Error(`${plugin.displayName} does not declare a connector.`);
 
             if (connector.type === 'gnome-online-accounts') {
-                await this._connectGoaPlugin(plugin);
+                await this._connectGoaPlugin(plugin, connector);
                 return;
             }
 
@@ -822,7 +892,7 @@ export class PluginsPage {
             let server = this._mcpManager.listServers()
                 .find((candidate) => candidate.id === connector.id);
 
-            if (!server && !connector.server) {
+            if (!server && pluginConnectorNeedsSetup(connector)) {
                 this._presentConnectorSetup(plugin, connector);
                 return;
             }
@@ -832,6 +902,11 @@ export class PluginsPage {
                 server = this._mcpManager.listServers()
                     .find((candidate) => candidate.id === added.id);
             }
+
+            server = await this._ensureMcpBearerCredential(plugin, connector, server);
+
+            if (!server)
+                return;
 
             await this._connectMcpServer(plugin, server);
         } catch (error) {
@@ -847,49 +922,66 @@ export class PluginsPage {
         }
     }
 
-    async _connectGoaPlugin(plugin) {
-        if (!this._gmailConnector)
+    async _connectGoaPlugin(plugin, connector) {
+        const goaConnector = this._goaConnectorFor(plugin, connector);
+
+        if (!goaConnector)
             throw new Error('GNOME Online Accounts support is not available.');
 
-        const accounts = await this._gmailConnector.refreshAccounts();
+        const accounts = await goaConnector.refreshAccounts();
 
         if (accounts.length === 0) {
-            const error = new Error('No Google mail account is available.');
-            error.userMessage = 'Add a Google account and enable Mail in Settings → Online Accounts first.';
+            if (typeof goaConnector.noAccountsError === 'function')
+                throw goaConnector.noAccountsError();
+
+            const error = new Error(`No compatible account is available for ${plugin.displayName}.`);
+            error.userMessage = `Add a compatible account in Settings → Online Accounts first.`;
             throw error;
         }
 
         const account = accounts.length === 1
             ? accounts[0]
-            : await presentGoaAccountChooser(this._getParentWindow(), accounts);
+            : await presentGoaAccountChooser(this._getParentWindow(), accounts, {
+                heading: `Choose an account for ${plugin.displayName}`,
+                body: `Select the account ${plugin.displayName} may read.`,
+            });
 
         if (!account)
             return;
 
-        const connected = await this._gmailConnector.connect(account.id);
+        const connected = await goaConnector.connect(account.id);
         this._syncConnectorStates();
         const identity = connected.gmailAddress
+            || connected.mailAddress
             || connected.account?.emailAddress
             || connected.account?.presentationIdentity;
         this._onToast(`${plugin.displayName} connected${identity ? ` as ${identity}` : ''}`);
     }
 
     _presentConnectorSetup(plugin, connector) {
+        const requiresClientId = connector.server?.oauth?.clientIdRequired === true;
+
         presentAddMcpServerDialog(
             this._getParentWindow(),
             this._mcpManager,
             (added) => this._connectAddedPluginServer(plugin, added.id),
             {
                 heading: `Connect ${plugin.displayName}`,
-                body: 'Add the connector’s MCP endpoint. Cusco will handle authentication and store OAuth tokens in Secret Service.',
+                body: requiresClientId
+                    ? `${plugin.displayName} requires a registered OAuth client. Enter its Client ID and, for a confidential client, the environment variable containing its client secret.`
+                    : 'Add the connector’s MCP endpoint. Cusco will handle authentication and store OAuth tokens in Secret Service.',
+                requireOauthClientId: requiresClientId,
                 defaults: {
+                    ...(connector.server ?? {}),
                     id: connector.id,
                     name: connector.name || plugin.displayName,
-                    transport: 'streamable-http',
+                    transport: connector.server?.transport || 'streamable-http',
                 },
             },
         );
-        this._onToast(`Enter the MCP endpoint for ${plugin.displayName}`);
+        this._onToast(requiresClientId
+            ? `Enter the registered OAuth Client ID for ${plugin.displayName}`
+            : `Enter the MCP endpoint for ${plugin.displayName}`);
     }
 
     async _connectAddedPluginServer(plugin, serverId) {
@@ -915,6 +1007,33 @@ export class PluginsPage {
             this._syncConnectorStates();
             this._renderList();
         }
+    }
+
+    async _ensureMcpBearerCredential(plugin, connector, server) {
+        if (!server?.bearerTokenEnvVar
+            || server.bearerTokenAvailable
+            || server.authenticated) {
+            return server;
+        }
+
+        if (typeof this._mcpManager?.storeServerBearerToken !== 'function')
+            throw new Error('Secure bearer-token storage is not available.');
+
+        const accessToken = await this._presentBearerCredential(
+            this._getParentWindow(),
+            plugin,
+            {
+                ...connector,
+                bearerTokenEnvVar: server.bearerTokenEnvVar,
+            },
+        );
+
+        if (!accessToken)
+            return null;
+
+        this._mcpManager.storeServerBearerToken(server.key, accessToken);
+        return this._mcpManager.listServers()
+            .find((candidate) => candidate.key === server.key) ?? server;
     }
 
     async _connectMcpServer(plugin, server) {
@@ -948,7 +1067,7 @@ export class PluginsPage {
     _confirmUninstall(plugin) {
         const dialog = new Adw.AlertDialog({
             heading: `Remove ${plugin.displayName}?`,
-            body: 'Cusco will remove this plugin from the repository plugins folder.',
+            body: 'Cusco will remove this plugin and any Cusco-managed connector credentials.',
         });
         dialog.add_response('cancel', 'Cancel');
         dialog.add_response('remove', 'Remove');
@@ -973,10 +1092,17 @@ export class PluginsPage {
                 await this._client.install(plugin.pluginId);
             else {
                 await this._client.uninstall(plugin.pluginId);
-                if (plugin.connectors?.some((connector) => (
-                    connector.type === 'gnome-online-accounts'
-                ))) {
-                    this._gmailConnector?.disconnect?.();
+                for (const connector of plugin.connectors ?? []) {
+                    if (connector.type === 'gnome-online-accounts') {
+                        this._goaConnectorFor(plugin, connector)?.disconnect?.();
+                        continue;
+                    }
+
+                    const server = this._mcpManager?.listServers?.()
+                        .find((candidate) => candidate.id === connector.id);
+
+                    if (server?.source === 'workspace')
+                        this._mcpManager.deleteServer(server.key);
                 }
             }
 

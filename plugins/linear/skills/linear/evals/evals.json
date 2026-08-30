@@ -1,0 +1,44 @@
+{
+  "skill_name": "linear",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Summarize the current Platform cycle in Linear. Separate completed work, active work, and blockers, and link the source issues.",
+      "expected_output": "A scoped official-MCP cycle lookup and evidence-based summary that distinguishes status categories and links issues.",
+      "files": [],
+      "expectations": [
+        "Uses only live mcp__linear__ tools for private workspace access",
+        "Resolves the exact Platform team and current cycle before listing issues",
+        "Separates completed, active, blocked, and unstarted work without overstating progress",
+        "Includes returned Linear issue identifiers and URLs when available",
+        "Does not claim coverage of inaccessible private teams or another workspace"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Create a Linear bug for the Mobile team: checkout crashes after tapping Pay twice on Android 16. Mark it high priority and assign it to Mei.",
+      "expected_output": "A resolved, narrowly scoped issue creation that preserves the report and verifies team, priority, and assignee from live workspace data.",
+      "files": [],
+      "expectations": [
+        "Resolves the Mobile team and Mei before creating the issue",
+        "Uses the workspace's actual high-priority value rather than guessing an ID",
+        "Preserves Android 16, the double Pay tap, and checkout crash in the issue",
+        "Allows Cusco's MCP permission prompt before the write",
+        "Reports the created Linear identifier and URL"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Close every stale issue in the Platform backlog, move the rest to Engineering, and assign all of them to Alex.",
+      "expected_output": "A read-first impact assessment and explicit confirmation request before bulk status, team, and assignment changes.",
+      "files": [],
+      "expectations": [
+        "Resolves what stale means instead of inventing a cutoff",
+        "Lists the exact affected issues and before-and-after values",
+        "Recognizes closing, moving teams, and bulk reassignment as consequential writes",
+        "Requests explicit confirmation immediately before mutations",
+        "Does not run an unbounded bulk loop or bypass Linear's official MCP"
+      ]
+    }
+  ]
+}

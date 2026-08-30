@@ -129,7 +129,7 @@ export class AssistantStreamRunner {
         let presentationFinished = null;
 
         if (conversation.agentModeEnabled && typeof assistantView?.set_status === 'function')
-            assistantView.set_status('Agent is thinking...');
+            assistantView.set_status('Waiting for agent response...');
         else
             assistantView?.set_loading?.();
 
@@ -371,14 +371,15 @@ export class AssistantStreamRunner {
 
             presentationFinished?.then(() => {
                 // A borrowed turn is released by TurnSubmission after this
-                // async method returns. Rebuild on the next main-loop turn so
-                // even an already-settled presentation cannot race that
-                // cleanup and replace a still-revealing message with its
-                // canonical transcript row.
+                // async method returns. Finalize on the next main-loop turn so
+                // an already-settled presentation cannot race that cleanup.
                 GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
                     if (this._isActiveConversationId(conversation.id)
                         && !this._isConversationBusy(conversation.id)) {
-                        this._renderActiveConversation({ forceRebuild: true });
+                        this._renderActiveConversation({
+                            finalizeCurrentView: true,
+                            incremental: true,
+                        });
                         this._setFollowLatestMessage(false);
                     }
 

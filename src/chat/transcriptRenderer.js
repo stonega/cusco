@@ -172,6 +172,25 @@ export class TranscriptRenderer {
         entry.referenceContents = current.referenceContents;
     }
 
+    finalizeCurrentConversationView(conversation) {
+        if (!conversation?.id || conversation.id !== this.renderedConversationId)
+            return false;
+
+        const current = this._getCurrentViewState();
+        const entry = this.viewCache.get(conversation.id);
+
+        if (!entry || entry.messages !== current.messages)
+            return false;
+
+        this.captureCurrentConversationView();
+        entry.fingerprint = this.conversationViewFingerprint(conversation);
+        this.touchConversationView(entry);
+        this._syncEmptyConversationState(conversation);
+        this._updateUsageDisplay(conversation);
+        this._scrollToBottom();
+        return true;
+    }
+
     activateConversationView(entry, { reveal = true } = {}) {
         this._setCurrentViewState({
             messages: entry.messages,
@@ -333,6 +352,10 @@ export class TranscriptRenderer {
 
         this._prepareConversation(conversation);
         this._setComposerBusy(this._isConversationBusy(conversation?.id));
+
+        if (options.finalizeCurrentView && this.finalizeCurrentConversationView(conversation))
+            return;
+
         const cachedEntry = options.forceRebuild
             ? null
             : this.getCachedConversationView(conversation);

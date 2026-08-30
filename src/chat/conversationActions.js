@@ -9,6 +9,19 @@ function isCancellableCancelled(cancellable) {
     return Boolean(cancellable?.is_cancelled?.());
 }
 
+function hasVisibleChat(conversations) {
+    if (typeof conversations?.searchConversations === 'function') {
+        return conversations.searchConversations('', {
+            conversationType: 'chat',
+            limit: 1,
+        }).length > 0;
+    }
+
+    return (conversations?.conversations ?? []).some((conversation) => (
+        conversation?.conversationType !== 'cron'
+    ));
+}
+
 export class ConversationActions {
     constructor({
         conversations,
@@ -60,8 +73,9 @@ export class ConversationActions {
 
         this._conversations.archiveConversation(conversationId);
 
-        if (this._conversations.conversations.length === 0)
+        if (!hasVisibleChat(this._conversations)) {
             this._createConversationWithDefaults();
+        }
 
         this._refreshConversationList();
         this._renderActiveConversation();
@@ -202,8 +216,9 @@ export class ConversationActions {
             this._composerDraftsByConversation.delete(conversationId);
             this._pendingArtifactPresentationsByConversation.delete(conversationId);
 
-            if (this._conversations.conversations.length === 0)
+            if (!hasVisibleChat(this._conversations)) {
                 this._createConversationWithDefaults();
+            }
 
             if (wasActive) {
                 this._setFollowLatestMessage(false);
@@ -227,7 +242,7 @@ export class ConversationActions {
             return;
 
         const dialog = new Adw.AlertDialog({
-            heading: 'Delete Cron Job?',
+            heading: 'Delete Automation?',
             body: conversation.title,
         });
         dialog.add_response('cancel', 'Cancel');
@@ -242,7 +257,7 @@ export class ConversationActions {
             this._cron.deleteJob(conversation.cronJobId).then(() => {
                 this._deleteCronConversation(conversation.cronJobId);
             }).catch((error) => {
-                logError(error, 'Failed to delete cron job from chat');
+                logError(error, 'Failed to delete automation');
                 this._appendSystemError(error.userMessage ?? error.message);
             });
         });

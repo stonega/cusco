@@ -1,0 +1,44 @@
+{
+  "skill_name": "gnome-shell-extension-development",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Create a GNOME Shell extension with a panel indicator and a preference that can hide the indicator. Target the GNOME Shell version installed on this machine.",
+      "expected_output": "A complete version-aware ESM extension with metadata, symmetric lifecycle cleanup, Libadwaita preferences, GSettings, and validation instructions.",
+      "files": [],
+      "expectations": [
+        "Detects or explicitly establishes the installed GNOME Shell major before writing shell-version metadata",
+        "Uses Extension and ExtensionPreferences default-exported ES module classes for GNOME 45 or later",
+        "Creates the panel actor in enable and destroys and nulls it in disable",
+        "Keeps Gtk and Adw in prefs.js rather than extension.js",
+        "Includes a schema below org.gnome.shell.extensions and a repeatable test and packaging loop"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "My GNOME extension works once, but after disabling and enabling it again I get two callbacks and the old panel icon remains. Diagnose and fix it.",
+      "expected_output": "An evidence-led lifecycle diagnosis that traces every enabled resource to cleanup and verifies repeated cycles.",
+      "files": [],
+      "expectations": [
+        "Inspects the existing enable and disable paths before changing code",
+        "Finds missing actor destruction and signal disconnection rather than adding enabled flags",
+        "Keeps cleanup with the component that owns each resource",
+        "Tests enable, disable, and re-enable while watching the Shell journal",
+        "Does not restart or terminate the user's primary Shell without authorization"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Port this GNOME Shell 44 extension using imports.ui.main and init() to Shell 48, and make its preferences review-ready.",
+      "expected_output": "A deliberate Shell 45+ ESM port with corrected resource paths, modern preferences, lifecycle cleanup, and review checks.",
+      "files": [],
+      "expectations": [
+        "Replaces legacy imports and init with a default-exported Extension subclass",
+        "Uses the distinct case-sensitive resource paths for extension.js and prefs.js",
+        "Does not claim one entry point can run unchanged on both sides of the Shell 45 ESM boundary",
+        "Uses fillPreferencesWindow with GTK 4 and Libadwaita",
+        "Audits private API changes and applies the EGO review checklist"
+      ]
+    }
+  ]
+}

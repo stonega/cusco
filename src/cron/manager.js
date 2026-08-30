@@ -50,10 +50,10 @@ function normalizeSchedule(value) {
     const fields = normalized ? normalized.split(' ') : [];
 
     if (fields.length !== 5)
-        throw userVisibleError('Cron schedule must have exactly 5 fields.');
+        throw userVisibleError('Schedule must have exactly 5 fields.');
 
     if (fields.some((field) => !field || /[\r\n]/.test(field)))
-        throw userVisibleError('Cron schedule fields cannot be empty or multiline.');
+        throw userVisibleError('Schedule fields cannot be empty or multiline.');
 
     return normalized;
 }
@@ -73,6 +73,10 @@ function normalizeCommand(value) {
     return command;
 }
 
+function normalizePrompt(value) {
+    return String(value ?? '').trim();
+}
+
 function normalizeOptionalString(value) {
     return String(value ?? '').trim();
 }
@@ -87,6 +91,42 @@ function defaultCronLogDirectory() {
 
 function shellQuote(value) {
     return `'${String(value ?? '').replace(/'/g, `'\"'\"'`)}'`;
+}
+
+export function buildAutomationCommand(jobId, options = {}) {
+    const id = String(jobId ?? '').trim();
+
+    if (!id)
+        throw userVisibleError('Automation ID cannot be empty.');
+
+    const executable = String(
+        options.executablePath
+        ?? GLib.find_program_in_path('cusco')
+        ?? 'cusco',
+    ).trim();
+
+    const invocation = `${shellQuote(executable)} --run-automation ${shellQuote(id)}`;
+    const systemdRun = String(
+        options.systemdRunPath
+        ?? GLib.find_program_in_path('systemd-run')
+        ?? '',
+    ).trim();
+    const runtimeDirectory = String(
+        options.runtimeDirectory
+        ?? GLib.get_user_runtime_dir()
+        ?? '',
+    ).trim();
+
+    if (!systemdRun || !runtimeDirectory)
+        return invocation;
+
+    return [
+        `XDG_RUNTIME_DIR=${shellQuote(runtimeDirectory)}`,
+        `DBUS_SESSION_BUS_ADDRESS=${shellQuote(`unix:path=${runtimeDirectory}/bus`)}`,
+        shellQuote(systemdRun),
+        '--user --collect --quiet',
+        invocation,
+    ].join(' ');
 }
 
 function cronLogPath(jobId, logDirectory = defaultCronLogDirectory()) {
@@ -141,15 +181,20 @@ function splitCronLine(line) {
 }
 
 function normalizeJobInput(input = {}, existing = null) {
-    const command = normalizeCommand(input.command ?? existing?.command);
-    const schedule = normalizeSchedule(input.schedule ?? existing?.schedule);
     const id = (existing?.id ?? String(input.id ?? '').trim()) || GLib.uuid_string_random();
+    const schedule = normalizeSchedule(input.schedule ?? existing?.schedule);
+    const prompt = normalizePrompt(input.prompt ?? existing?.prompt);
+    const command = prompt
+        ? buildAutomationCommand(id, { executablePath: input.executablePath })
+        : normalizeCommand(input.command ?? existing?.command);
 
     return {
         id,
-        title: normalizeTitle(input.title ?? existing?.title, command),
+        title: normalizeTitle(input.title ?? existing?.title, prompt || command),
         schedule,
         command,
+        prompt,
+        kind: prompt ? 'automation' : 'command',
         enabled: input.enabled === undefined ? existing?.enabled !== false : Boolean(input.enabled),
         conversationId: normalizeOptionalString(input.conversationId ?? existing?.conversationId),
         createdAt: existing?.createdAt ?? input.createdAt ?? now(),
@@ -208,6 +253,7 @@ function parseBlock(lines) {
         title: meta.title,
         schedule,
         command,
+        prompt: meta.prompt,
         enabled,
         conversationId: meta.conversationId,
         createdAt: meta.createdAt,
@@ -215,19 +261,32 @@ function parseBlock(lines) {
     });
 }
 
-export function parseCronCreateInput(input) {
+function parseJobInputObject(input, subject = 'Cron job') {
     let parsed;
 
     try {
         parsed = JSON.parse(String(input ?? '').trim());
     } catch (error) {
-        throw userVisibleError(`Cron job input must be JSON: ${error.message}`);
+        throw userVisibleError(`${subject} input must be JSON: ${error.message}`);
     }
 
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
-        throw userVisibleError('Cron job input must be a JSON object.');
+        throw userVisibleError(`${subject} input must be a JSON object.`);
 
-    return normalizeJobInput(parsed);
+    return parsed;
+}
+
+export function parseCronCreateInput(input) {
+    return normalizeJobInput(parseJobInputObject(input));
+}
+
+export function parseAutomationCreateInput(input) {
+    const inputObject = parseJobInputObject(input, 'Automation');
+
+    if (!normalizePrompt(inputObject.prompt))
+        throw userVisibleError('Automation prompt cannot be empty.');
+
+    return normalizeJobInput(inputObject);
 }
 
 export function normalizeCronJobInput(input) {
@@ -298,6 +357,8 @@ export function serializeCronJob(job, options = {}) {
         title: normalized.title,
         schedule: normalized.schedule,
         command: normalized.command,
+        prompt: normalized.prompt,
+        kind: normalized.kind,
         enabled: normalized.enabled,
         conversationId: normalized.conversationId,
         createdAt: normalized.createdAt,
@@ -549,7 +610,7 @@ export class CronJobManager {
         const segment = parsed.segments.find((item) => item.type === 'job' && item.job.id === jobId);
 
         if (!segment)
-            throw userVisibleError(`Cron job does not exist: ${jobId}`);
+            throw userVisibleError(`Scheduled task does not exist: ${jobId}`);
 
         const job = normalizeJobInput({
             ...segment.job,
@@ -594,7 +655,7 @@ export class CronJobManager {
         const index = parsed.segments.findIndex((item) => item.type === 'job' && item.job.id === jobId);
 
         if (index < 0)
-            throw userVisibleError(`Cron job does not exist: ${jobId}`);
+            throw userVisibleError(`Scheduled task does not exist: ${jobId}`);
 
         const [segment] = parsed.segments.splice(index, 1);
         await this._save(parsed.segments);
@@ -613,6 +674,35 @@ export function formatCronJobForTranscript(job) {
         job.command,
         '```',
     ].join('\n');
+}
+
+export function formatAutomationForTranscript(job) {
+    return [
+        'Automation created',
+        `Title: ${job.title}`,
+        `Schedule: ${job.schedule}`,
+        `Status: ${job.enabled ? 'Active' : 'Paused'}`,
+        'Prompt:',
+        job.prompt,
+    ].join('\n');
+}
+
+export function createAutomationCreateTool(cronManager, options = {}) {
+    return {
+        name: 'automation_create',
+        label: 'Automation',
+        description: 'Create a scheduled AI task managed by Cusco. Each run sends the prompt to AI and stores the answer in the automation conversation.',
+        inputDescription: 'JSON object: {"title":"Daily briefing","schedule":"0 9 * * *","prompt":"Summarize today’s priorities","enabled":true}',
+        permissionPolicy: TOOL_PERMISSION_ASK,
+        requiresPermission: true,
+        concurrencySafe: false,
+        run: async (input) => {
+            const parsedInput = parseAutomationCreateInput(input);
+            const job = await cronManager.createJob(parsedInput);
+            await options.onJobCreated?.(job);
+            return formatAutomationForTranscript(job);
+        },
+    };
 }
 
 export function createCronCreateTool(cronManager, options = {}) {

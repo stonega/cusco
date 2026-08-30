@@ -1,0 +1,38 @@
+{
+  "name": "gnome-shell-extension-development",
+  "version": "1.0.0",
+  "description": "Create, debug, port, test, and package GNOME Shell extensions with current GJS practices.",
+  "author": {
+    "name": "Cusco contributors"
+  },
+  "homepage": "https://gjs.guide/extensions/",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "gnome",
+    "gnome-shell",
+    "extension",
+    "gjs",
+    "javascript",
+    "libadwaita"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "GNOME Extension Developer",
+    "shortDescription": "Build and debug GNOME Shell extensions",
+    "longDescription": "Develop maintainable GNOME Shell extensions with modern GJS modules, symmetric enable/disable cleanup, GTK 4 and Libadwaita preferences, version-aware porting, nested-session testing, packaging, and extensions.gnome.org review preparation.",
+    "developerName": "Cusco",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Code generation",
+      "Code review",
+      "Debugging",
+      "Testing"
+    ],
+    "websiteURL": "https://gjs.guide/extensions/",
+    "defaultPrompt": [
+      "Create or improve a GNOME Shell extension"
+    ],
+    "brandColor": "#4A86CF",
+    "screenshots": []
+  }
+}

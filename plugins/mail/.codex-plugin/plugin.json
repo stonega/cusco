@@ -1,0 +1,53 @@
+{
+  "name": "mail",
+  "version": "0.1.0",
+  "description": "Read non-Google mail through an account configured in GNOME Online Accounts.",
+  "author": {
+    "name": "Cusco",
+    "url": "https://github.com/stonega/cusco"
+  },
+  "homepage": "https://github.com/stonega/cusco",
+  "repository": "https://github.com/stonega/cusco",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "email",
+    "imap",
+    "microsoft",
+    "exchange",
+    "gnome-online-accounts"
+  ],
+  "skills": "./skills/",
+  "apps": "./.app.json",
+  "cusco": {
+    "connectors": [
+      {
+        "id": "mail",
+        "name": "mail",
+        "type": "gnome-online-accounts",
+        "runtime": "mail-goa",
+        "provider": "any-non-google",
+        "service": "mail"
+      }
+    ]
+  },
+  "interface": {
+    "displayName": "Mail",
+    "shortDescription": "Read mail with your GNOME account",
+    "longDescription": "Search and read Microsoft, Microsoft 365, Exchange, and compatible IMAP mail locally through GNOME Online Accounts. Cusco stores only the selected account ID, never its password or access token.",
+    "developerName": "Cusco",
+    "category": "Communication",
+    "capabilities": [
+      "Interactive",
+      "Read"
+    ],
+    "websiteURL": "https://gnome.pages.gitlab.gnome.org/gnome-online-accounts/",
+    "defaultPrompt": [
+      "Summarize recent mail and identify action items",
+      "Find messages that still need a reply"
+    ],
+    "brandColor": "#3584E4",
+    "composerIcon": "./assets/mail-small.svg",
+    "logo": "./assets/mail.svg",
+    "screenshots": []
+  }
+}

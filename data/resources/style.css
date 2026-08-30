@@ -8,12 +8,18 @@
 }
 
 .cusco-shell-paned > separator {
+    min-width: 1px;
     background-color: shade(@window_bg_color, 0.96);
+}
+
+.cusco-model-picker-list > row {
+    margin: 0;
+    padding: 0;
 }
 
 .cusco-conversation-list {
     background-color: transparent;
-    padding: 6px 6px 66px;
+    padding: 6px;
 }
 
 .cusco-conversation-list-scroller,
@@ -63,11 +69,6 @@
     margin-right: 2px;
 }
 
-.cusco-detail-provenance {
-    color: @accent_color;
-    font-weight: 600;
-}
-
 .cusco-detail-skill-content {
     padding: 14px 16px;
     border: 1px solid alpha(@window_fg_color, 0.12);
@@ -98,8 +99,19 @@
     font-feature-settings: "tnum";
 }
 
+.cusco-automation-icon,
 .cusco-cron-chat-icon {
     color: alpha(@accent_color, 0.86);
+}
+
+.cusco-sidebar-mode-switcher button {
+    min-height: 34px;
+}
+
+.cusco-automation-prompt {
+    border: 1px solid alpha(@window_fg_color, 0.14);
+    border-radius: 10px;
+    background-color: alpha(@window_fg_color, 0.025);
 }
 
 .cusco-conversation-active-dot {
@@ -200,21 +212,33 @@
     color: @window_fg_color;
 }
 
-.cusco-floating-composer .cusco-composer-meta .cusco-selector-picker:disabled,
-.cusco-floating-composer .cusco-composer-meta .cusco-selector-picker:disabled * {
-    opacity: 1;
+.cusco-floating-composer .cusco-composer-meta button:disabled,
+.cusco-floating-composer .cusco-composer-meta button:disabled *,
+.cusco-floating-composer .cusco-composer-meta menubutton:disabled,
+.cusco-floating-composer .cusco-composer-meta menubutton:disabled *,
+.cusco-floating-composer .cusco-composer-meta combobox:disabled,
+.cusco-floating-composer .cusco-composer-meta combobox:disabled * {
+    filter: none;
 }
 
-.cusco-floating-composer .cusco-composer-meta .cusco-selector-picker:disabled button {
-    color: mix(@view_bg_color, @window_fg_color, 0.5);
-    background-color: @view_bg_color;
+.cusco-floating-composer .cusco-composer-meta button:disabled,
+.cusco-floating-composer .cusco-composer-meta menubutton:disabled button,
+.cusco-floating-composer .cusco-composer-meta combobox:disabled button {
+    color: mix(@view_bg_color, @window_fg_color, 0.52);
+    background-color: mix(@view_bg_color, @window_fg_color, 0.08);
     background-image: none;
-    box-shadow: none;
+    box-shadow: inset 0 0 0 1px mix(@view_bg_color, @window_fg_color, 0.16);
 }
 
-.cusco-floating-composer .cusco-composer-meta .cusco-selector-picker:disabled button label,
-.cusco-floating-composer .cusco-composer-meta .cusco-selector-picker:disabled button image {
-    color: mix(@view_bg_color, @window_fg_color, 0.5);
+.cusco-floating-composer .cusco-composer-meta button:disabled label,
+.cusco-floating-composer .cusco-composer-meta button:disabled image,
+.cusco-floating-composer .cusco-composer-meta menubutton:disabled button,
+.cusco-floating-composer .cusco-composer-meta menubutton:disabled label,
+.cusco-floating-composer .cusco-composer-meta menubutton:disabled image,
+.cusco-floating-composer .cusco-composer-meta combobox:disabled,
+.cusco-floating-composer .cusco-composer-meta combobox:disabled button,
+.cusco-floating-composer .cusco-composer-meta combobox:disabled cellview {
+    color: mix(@view_bg_color, @window_fg_color, 0.52);
 }
 
 .cusco-floating-composer .cusco-composer-meta button.cusco-scroll-to-bottom-button image {

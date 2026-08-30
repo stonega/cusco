@@ -71,8 +71,10 @@ import {
 import { ComposerSuggestions } from './composer/suggestions.js';
 import { ComposerInputController } from './composer/inputController.js';
 import { GmailGoaConnector } from './connectors/gmailGoa.js';
+import { MailGoaConnector } from './connectors/mailGoa.js';
 import { ComposerMenus } from './composer/menus.js';
-import { createCronCreateTool, CronJobManager } from './cron/manager.js';
+import { presentAutomationDialog } from './cron/dialog.js';
+import { createAutomationCreateTool, CronJobManager } from './cron/manager.js';
 import { CronConversationSync } from './cron/conversationSync.js';
 import { ComputerUseService } from './computerUse/service.js';
 import { createComputerUseTools } from './computerUse/tools.js';
@@ -126,6 +128,12 @@ function isGioError(error, code) {
 
 function isCancellableCancelled(cancellable) {
     return Boolean(cancellable?.is_cancelled?.());
+}
+
+function automationError(message) {
+    const error = new Error(message);
+    error.userMessage = message;
+    return error;
 }
 
 function getProviderErrorMessage(error) {
@@ -664,7 +672,9 @@ function createConversationSidebar(window) {
     const sidebar = new ConversationSidebar({
         conversations: window._conversations,
         isConversationBusy: (conversationId) => window._isConversationBusy(conversationId),
+        getAutomationJob: (jobId) => window._cronConversationSync?.getJob(jobId),
         onNewChat: () => window._createNewConversation(),
+        onNewAutomation: () => window._presentNewAutomationDialog(),
         onSettings: () => window._showSettingsDialog(),
         onShowUsage: () => window._showUsagePage(),
         onShowPlugins: () => window._showPluginsPage(),
@@ -681,6 +691,32 @@ function createConversationSidebar(window) {
         onDeleteCronConversation: (conversationId) => (
             window._confirmDeleteCronJobConversation(conversationId)
         ),
+        onEditAutomation: (conversationId) => (
+            window._presentEditAutomationDialog(conversationId)
+        ),
+        onRunAutomation: (conversationId) => window._runAutomationConversation(conversationId),
+        onToggleAutomation: (conversationId) => (
+            window._toggleAutomationConversation(conversationId)
+        ),
+        onModeChanged: (mode) => {
+            if (mode === 'chats') {
+                const hasChat = window._conversations.searchConversations('', {
+                    conversationType: 'chat',
+                    limit: 1,
+                }).length > 0;
+
+                if (!hasChat) {
+                    window._createConversationWithDefaults();
+                    window._refreshConversationList({ resetPage: true });
+                    window._renderActiveConversation();
+                }
+                return;
+            }
+
+            window._syncCronJobsWithConversations({ refreshUi: true }).catch((error) => {
+                logError(error, 'Failed to refresh automations');
+            });
+        },
     });
 
     return sidebar;
@@ -876,31 +912,42 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
         this._pluginClient = new CuscoPluginClient();
         this._gmailConnector = new GmailGoaConnector();
+        this._mailConnector = new MailGoaConnector();
+        this._goaConnectors = new Map([
+            ['gmail-goa', this._gmailConnector],
+            ['mail-goa', this._mailConnector],
+        ]);
         this._pluginConnectors = {
             refreshTools: async (tools, options = {}) => {
-                let enabled = false;
+                const enabledPlugins = new Set();
 
                 try {
                     const plugins = await this._pluginClient.listPlugins();
-                    enabled = plugins.some((plugin) => (
-                        plugin.name === 'gmail'
-                        && plugin.installed
-                        && plugin.enabled
-                    ));
+                    for (const plugin of plugins) {
+                        if (plugin.installed && plugin.enabled)
+                            enabledPlugins.add(plugin.name);
+                    }
                 } catch (error) {
-                    logError(error, 'Failed to determine whether the Gmail plugin is installed');
+                    logError(error, 'Failed to determine which native plugins are installed');
                 }
 
-                return await this._gmailConnector.refreshTools(tools, {
-                    ...options,
-                    enabled,
-                });
+                return await Promise.all([
+                    this._gmailConnector.refreshTools(tools, {
+                        ...options,
+                        enabled: enabledPlugins.has('gmail'),
+                    }),
+                    this._mailConnector.refreshTools(tools, {
+                        ...options,
+                        enabled: enabledPlugins.has('mail'),
+                    }),
+                ]);
             },
         };
         this._pluginsPage = new PluginsPage({
             client: this._pluginClient,
             getParentWindow: () => this,
             gmailConnector: this._gmailConnector,
+            goaConnectors: this._goaConnectors,
             mcpManager: this._mcp,
             onBack: () => this._showChatPage(),
             onChanged: () => {
@@ -977,7 +1024,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._tools.registerTool(createAskUserTool(
             (questions, options) => this._requestAgentQuestions(questions, options),
         ));
-        this._tools.registerTool(createCronCreateTool(this._cron, {
+        this._tools.registerTool(createAutomationCreateTool(this._cron, {
             onJobCreated: async (job) => this._handleCronJobChanged(job),
         }));
         for (const tool of createArtifactTools(this._artifacts, {
@@ -1032,9 +1079,24 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 () => this._refreshStreamPresentationPreferences(),
             );
         }
+        this._closePersistencePromise = null;
+        this._canCloseAfterPersistence = false;
         this.connect('close-request', () => {
+            if (!this._canCloseAfterPersistence) {
+                if (!this._closePersistencePromise) {
+                    this._stopAllConversations();
+                    this._closePersistencePromise = Promise.resolve(
+                        this._conversations.persistAsync?.() ?? this._conversations.persist(),
+                    ).finally(() => {
+                        this._canCloseAfterPersistence = true;
+                        this.close();
+                    });
+                }
+
+                return true;
+            }
+
             this._stopAllConversations();
-            this._conversations.persist();
             this._cronConversationSync.dispose();
             this._composerSuggestions.dispose();
             this._conversationSidebar?.dispose();
@@ -1061,6 +1123,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this._usagePage.dispose();
             this._pluginsPage.dispose();
             this._gmailConnector.dispose();
+            this._mailConnector.dispose();
 
             if (this._pendingConversationSendSourceId) {
                 GLib.Source.remove(this._pendingConversationSendSourceId);
@@ -1109,7 +1172,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this.focusComposer();
 
         this._syncCronJobsWithConversations({ refreshUi: true }).catch((error) => {
-            logError(error, 'Failed to sync cron job chats');
+            logError(error, 'Failed to sync automations');
         });
         this._startCronLogSync();
     }
@@ -1267,6 +1330,15 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._conversationSelectionModel = this._conversationSidebar.selectionModel;
         this._conversationList = this._conversationSidebar.list;
         this._conversationListScroller = this._conversationSidebar.scroller;
+        this._conversationSidebar.setMode(
+            this._isCronConversation(this._conversations.activeConversation)
+                ? 'automations'
+                : 'chats',
+            {
+                preserveSelection: true,
+                selectConversation: false,
+            },
+        );
         return this._sidebar;
     }
 
@@ -1349,6 +1421,10 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _createNewConversation() {
         this._showChatPage();
+        this._conversationSidebar?.setMode('chats', {
+            preserveSelection: true,
+            selectConversation: false,
+        });
         const activeConversation = this._conversations.activeConversation;
         const transientConversation = this._conversations.allConversations.find((conversation) => (
             !conversation.archived
@@ -1875,6 +1951,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return;
 
         this._showChatPage();
+        this._conversationSidebar?.setMode(
+            this._isCronConversation(conversation) ? 'automations' : 'chats',
+            {
+                preserveSelection: true,
+                selectConversation: false,
+            },
+        );
         this._conversationSelectionSerial += 1;
         this._selectConversation(conversationId);
         this._refreshConversationList();
@@ -2086,9 +2169,179 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
     }
 
+    _automationRecordForConversation(conversationId) {
+        const conversation = this._conversations.getConversation(conversationId);
+
+        if (!conversation || !this._isCronConversation(conversation))
+            return null;
+
+        const job = this._cronConversationSync?.getJob(conversation.cronJobId) ?? null;
+        return job ? { conversation, job } : null;
+    }
+
+    _selectAutomationConversation(jobId) {
+        const conversation = this._findCronConversation(jobId);
+
+        if (!conversation)
+            return false;
+
+        this._showChatPage();
+        this._conversationSidebar?.setMode('automations', {
+            preserveSelection: true,
+            selectConversation: false,
+        });
+        this._conversationSelectionSerial += 1;
+        this._selectConversation(conversation.id);
+        this._refreshConversationList({ resetPage: true });
+        this._renderActiveConversation({ deferIfUncached: true });
+        return true;
+    }
+
+    _presentNewAutomationDialog() {
+        presentAutomationDialog(this, {
+            onSave: async (input) => {
+                const job = await this._cron.createJob(input);
+                await this._handleCronJobChanged(job);
+                this._selectAutomationConversation(job.id);
+                this._showToast('Automation created');
+            },
+        });
+    }
+
+    _presentEditAutomationDialog(conversationId) {
+        const record = this._automationRecordForConversation(conversationId);
+
+        if (!record?.job?.prompt) {
+            this._showToast('This legacy command job cannot be edited as an automation.');
+            return;
+        }
+
+        presentAutomationDialog(this, {
+            job: record.job,
+            onSave: async (input) => {
+                const job = await this._cron.updateJob(record.job.id, input);
+                await this._handleCronJobChanged(job);
+                this._selectAutomationConversation(job.id);
+                this._showToast('Automation updated');
+            },
+        });
+    }
+
+    _toggleAutomationConversation(conversationId) {
+        const record = this._automationRecordForConversation(conversationId);
+
+        if (!record)
+            return;
+
+        this._cron.setJobEnabled(record.job.id, !record.job.enabled).then(async (job) => {
+            await this._handleCronJobChanged(job);
+            this._showToast(job.enabled ? 'Automation resumed' : 'Automation paused');
+        }).catch((error) => {
+            logError(error, 'Failed to change automation status');
+            this._appendSystemError(error.userMessage ?? error.message, conversationId);
+        });
+    }
+
+    _runAutomationConversation(conversationId) {
+        const record = this._automationRecordForConversation(conversationId);
+
+        if (!record)
+            return;
+
+        this._showToast('Automation started');
+        this._executeAutomation(record.job.id, {
+            allowPaused: true,
+            waitForQueued: false,
+        }).then((result) => {
+            if (result.queued)
+                this._showToast('Automation queued');
+            else
+                this._showToast('Automation finished');
+        }).catch((error) => {
+            logError(error, 'Failed to run automation');
+            this._showToast(error.userMessage ?? error.message);
+        });
+    }
+
+    _waitForAutomationMessage(conversationId, messageId) {
+        return new Promise((resolve) => {
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, () => {
+                const stillQueued = this._getPendingUserMessages(conversationId)
+                    .some((message) => message.id === messageId);
+
+                if (stillQueued || this._isConversationBusy(conversationId))
+                    return GLib.SOURCE_CONTINUE;
+
+                resolve();
+                return GLib.SOURCE_REMOVE;
+            });
+        });
+    }
+
+    async _executeAutomation(jobId, options = {}) {
+        this._cronConversationSync ??= createCronConversationSync(this);
+        const status = await this._cronConversationSync.sync({ refreshUi: true });
+
+        if (!status.available)
+            throw automationError(status.error || 'Automations are unavailable.');
+
+        const job = status.jobs.find((item) => item.id === jobId);
+
+        if (!job)
+            throw automationError(`Automation does not exist: ${jobId}`);
+        if (!job.prompt)
+            throw automationError('This scheduled job does not contain an AI prompt.');
+        if (!job.enabled && !options.allowPaused)
+            throw automationError(`Automation is paused: ${job.title}`);
+
+        const { conversation } = this._cronConversationSync.ensureConversation(job);
+        const pendingMessage = this._enqueuePendingUserMessage(job.prompt, [], conversation.id);
+
+        if (!pendingMessage)
+            throw automationError('The automation prompt could not be queued.');
+
+        if (this._isConversationBusy(conversation.id)) {
+            this._schedulePendingConversationSend();
+
+            if (options.waitForQueued !== false)
+                await this._waitForAutomationMessage(conversation.id, pendingMessage.id);
+
+            return { conversationId: conversation.id, queued: true };
+        }
+
+        try {
+            const sent = await this._sendQueuedUserMessages(conversation.id);
+
+            if (!sent)
+                throw automationError('The automation could not start with the selected provider.');
+
+            return { conversationId: conversation.id, queued: false };
+        } catch (error) {
+            const pending = this._getPendingUserMessages(conversation.id)
+                .filter((message) => message.id !== pendingMessage.id);
+
+            if (pending.length > 0)
+                this._pendingUserMessagesByConversation.set(conversation.id, pending);
+            else
+                this._pendingUserMessagesByConversation.delete(conversation.id);
+
+            this._renderPendingUserMessages();
+            this._appendSystemError(
+                `Automation failed: ${error.userMessage ?? error.message}`,
+                conversation.id,
+            );
+            throw error;
+        }
+    }
+
+    async runAutomation(jobId) {
+        return await this._executeAutomation(String(jobId ?? '').trim());
+    }
+
     async _handleCronJobChanged(_job) {
         this._cronConversationSync ??= createCronConversationSync(this);
         await this._cronConversationSync.sync({ refreshUi: true });
+        this._refreshConversationList();
     }
 
     _startCronLogSync() {
@@ -2119,6 +2372,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
     _deleteCronConversation(jobId) {
         this._cronConversationSync ??= createCronConversationSync(this);
         this._cronConversationSync.deleteConversation(jobId);
+
+        if (this._conversationSidebar?.mode === 'automations')
+            this._conversationSidebar.setMode('automations');
     }
 
     _appendCronRunLogs(job, conversation) {

@@ -270,6 +270,15 @@ export class ChatSurfaceBuilder {
             valign: Gtk.Align.CENTER,
             visible: false,
         });
+        const thinkingLevelScrollController = new Gtk.EventControllerScroll({
+            flags: Gtk.EventControllerScrollFlags.VERTICAL,
+        });
+        thinkingLevelScrollController.set_propagation_phase(Gtk.PropagationPhase.CAPTURE);
+        thinkingLevelScrollController.connect('scroll', (controller, _dx, dy) => {
+            this._scrollController?.scrollBy?.(dy, controller.get_unit());
+            return true;
+        });
+        this._thinkingLevelPicker.add_controller(thinkingLevelScrollController);
         this._populateProviderPicker();
         this._providerPicker.connect('changed', () => this._handleProviderChanged());
         this._modelPicker.connect('changed', () => this._handleModelChanged());
@@ -311,13 +320,24 @@ export class ChatSurfaceBuilder {
             hexpand: true,
             vexpand: true,
         });
+        const transcriptScrollController = new Gtk.EventControllerScroll({
+            flags: Gtk.EventControllerScrollFlags.VERTICAL,
+        });
+        transcriptScrollController.set_propagation_phase(Gtk.PropagationPhase.CAPTURE);
+        transcriptScrollController.connect('scroll', (_controller, _dx, dy) => {
+            this._scrollController?.handleUserScroll?.(dy);
+            return false;
+        });
+        this._scroller.add_controller(transcriptScrollController);
         this._scroller.get_vadjustment().connect('changed', () => {
             if (this._scrollController.followLatest)
                 this._scrollController.pinToBottom();
 
             this._syncScrollToBottomButton();
         });
-        this._scroller.get_vadjustment().connect('value-changed', () => this._syncScrollToBottomButton());
+        this._scroller.get_vadjustment().connect('value-changed', () => (
+            this._scrollController.handleAdjustmentValueChanged()
+        ));
 
         this._emptyConversationState = this._createEmptyConversationState();
         main.connect('get-child-position', (overlay, child, allocation) => {

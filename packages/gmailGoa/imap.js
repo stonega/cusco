@@ -134,6 +134,7 @@ function parseTaggedStatus(line, tag) {
 class GioImapTransport {
     constructor(account, options = {}) {
         this._account = account;
+        this._serviceName = String(options.serviceName ?? 'Gmail');
         this._cancellable = options.cancellable ?? null;
         this._timeoutSeconds = Math.max(
             1,
@@ -145,16 +146,16 @@ class GioImapTransport {
     }
 
     async connect() {
-        if (!this._account.imapUseSsl) {
+        if (!this._account.imapUseSsl && !this._account.imapUseTls) {
             throw userVisibleError(
-                'The selected GOA account does not expose an SSL IMAP endpoint.',
-                'Gmail did not provide the secure IMAP configuration expected by Cusco.',
+                'The selected GOA account does not expose a secure IMAP endpoint.',
+                `${this._serviceName} did not provide the secure IMAP configuration expected by Cusco.`,
             );
         }
 
         const client = new Gio.SocketClient({
             timeout: this._timeoutSeconds,
-            tls: true,
+            tls: Boolean(this._account.imapUseSsl),
         });
 
         try {
@@ -166,23 +167,62 @@ class GioImapTransport {
             );
         } catch (error) {
             throw userVisibleError(
-                `Could not connect to Gmail IMAP: ${error.message}`,
-                'Cusco could not reach Gmail’s secure IMAP server.',
+                `Could not connect to ${this._serviceName} IMAP: ${error.message}`,
+                `Cusco could not reach ${this._serviceName}’s secure IMAP server.`,
             );
         }
 
+        this._setStreams(this._connection);
+    }
+
+    _setStreams(connection) {
         this._input = new Gio.DataInputStream({
-            base_stream: this._connection.get_input_stream(),
+            base_stream: connection.get_input_stream(),
             newline_type: Gio.DataStreamNewlineType.CR_LF,
         });
-        this._output = this._connection.get_output_stream();
+        this._output = connection.get_output_stream();
+    }
+
+    async startTls() {
+        const defaultPort = 143;
+        const serverIdentity = Gio.NetworkAddress.parse(
+            String(this._account.imapHost ?? ''),
+            defaultPort,
+        );
+        let tlsConnection;
+
+        try {
+            tlsConnection = Gio.TlsClientConnection.new(this._connection, serverIdentity);
+            await new Promise((resolve, reject) => {
+                tlsConnection.handshake_async(
+                    GLib.PRIORITY_DEFAULT,
+                    this._cancellable,
+                    (source, result) => {
+                        try {
+                            source.handshake_finish(result);
+                            resolve();
+                        } catch (error) {
+                            reject(error);
+                        }
+                    },
+                );
+            });
+        } catch (error) {
+            throw userVisibleError(
+                `Could not start TLS for ${this._serviceName} IMAP: ${error.message}`,
+                `Cusco could not establish a secure connection to ${this._serviceName}.`,
+            );
+        }
+
+        this._connection = tlsConnection;
+        this._setStreams(tlsConnection);
     }
 
     async _readExact(count) {
         if (count > MAX_LITERAL_BYTES) {
             throw userVisibleError(
-                `Gmail returned an oversized IMAP literal (${count} bytes).`,
-                'Gmail returned more message data than Cusco’s safety limit allows.',
+                `${this._serviceName} returned an oversized IMAP literal (${count} bytes).`,
+                `${this._serviceName} returned more message data than Cusco’s safety limit allows.`,
             );
         }
 
@@ -194,7 +234,7 @@ class GioImapTransport {
             const chunk = bytes.get_data();
 
             if (!chunk?.length)
-                throw userVisibleError('Gmail closed the IMAP connection during a message body.');
+                throw userVisibleError(`${this._serviceName} closed the IMAP connection during a message body.`);
 
             chunks.push(chunk);
             total += chunk.length;
@@ -207,7 +247,7 @@ class GioImapTransport {
         const line = await readLine(this._input, this._cancellable);
 
         if (line === null)
-            throw userVisibleError('Gmail closed the IMAP connection unexpectedly.');
+            throw userVisibleError(`${this._serviceName} closed the IMAP connection unexpectedly.`);
 
         const literalMatch = line.match(/\{(\d+)\}\s*$/);
         const literal = literalMatch
@@ -323,6 +363,13 @@ export class ImapSession {
     }
 
     async connect() {
+        if (!this._account.imapUseSsl) {
+            throw userVisibleError(
+                'The selected Google account does not expose an SSL IMAP endpoint.',
+                'Gmail did not provide the secure IMAP configuration expected by Cusco.',
+            );
+        }
+
         await this._transport.connect();
         const greeting = await this._transport.readRecord();
 
@@ -700,7 +747,7 @@ export function parseImapFetchRecords(records, { requestedBytes = SEARCH_PREVIEW
             : body;
 
         return {
-            id: messageId,
+            id: messageId || uid,
             thread_id: threadId,
             imap_uid: uid,
             from: decodeEncodedWords(firstHeader(headers, 'from')),
@@ -724,6 +771,311 @@ function searchQueryWithTags(input) {
     const tags = stringList(input.tags ?? input.label_ids ?? input.labelIds)
         .map((tag) => `label:${tag}`);
     return [query, ...tags].filter(Boolean).join(' ');
+}
+
+const IMAP_MONTHS = Object.freeze([
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+]);
+
+function imapDate(value, fieldName) {
+    const text = String(value ?? '').trim();
+
+    if (!text)
+        return '';
+
+    const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+    if (!match)
+        throw userVisibleError(`${fieldName} must use YYYY-MM-DD format.`);
+
+    const year = Number.parseInt(match[1], 10);
+    const month = Number.parseInt(match[2], 10);
+    const day = Number.parseInt(match[3], 10);
+    const date = new Date(Date.UTC(year, month - 1, day));
+
+    if (date.getUTCFullYear() !== year
+        || date.getUTCMonth() !== month - 1
+        || date.getUTCDate() !== day) {
+        throw userVisibleError(`${fieldName} is not a valid date.`);
+    }
+
+    return `${day}-${IMAP_MONTHS[month - 1]}-${year}`;
+}
+
+function standardSearchCriteria(input = {}, beforeUid = 0) {
+    const criteria = [];
+
+    if (beforeUid > 1)
+        criteria.push(`UID 1:${beforeUid - 1}`);
+
+    const query = String(input.query ?? input.q ?? '').trim();
+    const from = String(input.from ?? '').trim();
+    const to = String(input.to ?? '').trim();
+    const subject = String(input.subject ?? '').trim();
+    const since = imapDate(input.since, 'since');
+    const before = imapDate(input.before, 'before');
+
+    if (query)
+        criteria.push(`TEXT ${imapQuoted(query)}`);
+    if (from)
+        criteria.push(`FROM ${imapQuoted(from)}`);
+    if (to)
+        criteria.push(`TO ${imapQuoted(to)}`);
+    if (subject)
+        criteria.push(`SUBJECT ${imapQuoted(subject)}`);
+    if (since)
+        criteria.push(`SINCE ${since}`);
+    if (before)
+        criteria.push(`BEFORE ${before}`);
+    if (input.unread === true)
+        criteria.push('UNSEEN');
+    if (input.flagged === true)
+        criteria.push('FLAGGED');
+
+    return criteria.length > 0 ? criteria : ['ALL'];
+}
+
+export class StandardImapSession extends ImapSession {
+    constructor(account, credential, options = {}) {
+        const normalizedCredential = credential && typeof credential === 'object'
+            ? credential
+            : { type: 'oauth2', secret: credential };
+        super(account, normalizedCredential.secret, {
+            ...options,
+            serviceName: String(account?.providerName ?? 'Mail'),
+        });
+        this._credentialType = normalizedCredential.type === 'password'
+            ? 'password'
+            : 'oauth2';
+        this._serviceName = String(account?.providerName ?? 'Mail');
+    }
+
+    async _readTagged(tag, action, { authentication = false } = {}) {
+        const records = [];
+
+        for (let count = 0; count < 100000; count += 1) {
+            const record = await this._transport.readRecord();
+            records.push(record);
+
+            if (/^\*\s+BYE\b/i.test(record.line))
+                throw userVisibleError(`${this._serviceName} ended the IMAP session while ${action}.`);
+
+            if (authentication && /^\+/.test(record.line)) {
+                await this._transport.writeLine('');
+                continue;
+            }
+
+            const status = parseTaggedStatus(record.line, tag);
+
+            if (!status)
+                continue;
+
+            if (status !== 'OK') {
+                const userMessage = authentication
+                    ? `${this._serviceName} rejected the GNOME Online Accounts credential. Reconnect the account in GNOME Settings.`
+                    : `${this._serviceName} could not finish ${action}.`;
+                throw userVisibleError(
+                    `${this._serviceName} IMAP returned ${status} while ${action}: ${record.line}`,
+                    userMessage,
+                );
+            }
+
+            return records;
+        }
+
+        throw userVisibleError(`${this._serviceName} returned too many IMAP records while ${action}.`);
+    }
+
+    _recordCapabilities(records) {
+        for (const record of records) {
+            const match = record.line.match(/^\*\s+CAPABILITY\s+(.+)$/i);
+
+            if (match) {
+                for (const capability of match[1].split(/\s+/))
+                    this._capabilities.add(capability.toUpperCase());
+            }
+        }
+    }
+
+    async connect() {
+        await this._transport.connect();
+        const greeting = await this._transport.readRecord();
+
+        if (!/^\*\s+(?:OK|PREAUTH)\b/i.test(greeting.line))
+            throw userVisibleError(`${this._serviceName} IMAP did not return a valid greeting.`);
+
+        this._recordCapabilities(await this.command('CAPABILITY', 'checking capabilities'));
+
+        if (this._account.imapUseTls && !this._account.imapUseSsl) {
+            if (!this._capabilities.has('STARTTLS')) {
+                throw userVisibleError(
+                    `${this._serviceName} IMAP did not advertise STARTTLS.`,
+                    `${this._serviceName} did not offer the secure connection required by Cusco.`,
+                );
+            }
+
+            await this.command('STARTTLS', 'starting TLS');
+            await this._transport.startTls();
+            this._capabilities.clear();
+            this._recordCapabilities(await this.command('CAPABILITY', 'checking secure capabilities'));
+        }
+
+        const userName = this._account.imapUserName
+            || this._account.emailAddress
+            || this._account.presentationIdentity;
+
+        if (!userName)
+            throw userVisibleError('The selected online account did not provide an IMAP user name.');
+
+        if (this._credentialType === 'password') {
+            await this.command(
+                `LOGIN ${imapQuoted(userName)} ${imapQuoted(this._accessToken)}`,
+                'authenticating',
+            );
+        } else {
+            if (!this._capabilities.has('AUTH=XOAUTH2')) {
+                throw userVisibleError(
+                    `${this._serviceName} IMAP did not advertise XOAUTH2 authentication.`,
+                    `${this._serviceName} does not support the GNOME Online Accounts authentication method.`,
+                );
+            }
+
+            const authText = `user=${userName}\x01auth=Bearer ${this._accessToken}\x01\x01`;
+            const authPayload = GLib.base64_encode(new TextEncoder().encode(authText));
+            const authTag = this._tag();
+            await this._transport.writeLine(`${authTag} AUTHENTICATE XOAUTH2 ${authPayload}`);
+            await this._readTagged(authTag, 'authenticating', { authentication: true });
+        }
+
+        await this.command('EXAMINE "INBOX"', 'opening the inbox read-only');
+    }
+
+    async search(input = {}, beforeUid = 0) {
+        return searchUids(await this.command(
+            `UID SEARCH ${standardSearchCriteria(input, beforeUid).join(' ')}`,
+            'searching mail',
+        ));
+    }
+
+    async fetch(uids, byteLimit = SEARCH_PREVIEW_BYTES) {
+        const normalizedUids = uids
+            .map((uid) => Number.parseInt(uid, 10))
+            .filter((uid) => Number.isFinite(uid) && uid > 0);
+
+        if (normalizedUids.length === 0)
+            return [];
+
+        const bodyFetch = byteLimit > 0
+            ? ` BODY.PEEK[]<0.${Math.min(READ_PREVIEW_BYTES, byteLimit)}>`
+            : '';
+        const records = await this.command([
+            `UID FETCH ${normalizedUids.join(',')}`,
+            `(UID FLAGS INTERNALDATE${bodyFetch})`,
+        ].join(' '), 'reading mail messages');
+        return parseImapFetchRecords(records, { requestedBytes: byteLimit });
+    }
+}
+
+export class StandardImapClient {
+    constructor(options = {}) {
+        this._sessionFactory = options.sessionFactory ?? ((account, credential, sessionOptions) => (
+            new StandardImapSession(account, credential, sessionOptions)
+        ));
+    }
+
+    async _withSession(account, credential, options, operation) {
+        const session = this._sessionFactory(account, credential, options);
+
+        try {
+            await session.connect();
+            return await operation(session);
+        } finally {
+            session.close();
+        }
+    }
+
+    async verify(account, credential, options = {}) {
+        return await this._withSession(account, credential, options, async () => true);
+    }
+
+    async _searchPage(session, input) {
+        const maxResults = boundedInteger(
+            input.max_results ?? input.maxResults,
+            DEFAULT_SEARCH_RESULTS,
+            MAX_SEARCH_RESULTS,
+        );
+        const beforeUid = Number.parseInt(input.next_page_token ?? input.pageToken ?? 0, 10);
+        const matching = await session.search(input, Number.isFinite(beforeUid) ? beforeUid : 0);
+        const descending = [...new Set(matching)].sort((left, right) => right - left);
+        const selected = descending.slice(0, maxResults);
+
+        return {
+            selected,
+            nextPageToken: descending.length > maxResults
+                ? String(selected[selected.length - 1])
+                : '',
+            resultSizeEstimate: descending.length,
+        };
+    }
+
+    async searchEmailIds(account, credential, input = {}, options = {}) {
+        return await this._withSession(account, credential, options, async (session) => {
+            const page = await this._searchPage(session, input);
+            return {
+                message_ids: page.selected.map(String),
+                next_page_token: page.nextPageToken,
+                result_size_estimate: page.resultSizeEstimate,
+            };
+        });
+    }
+
+    async searchEmails(account, credential, input = {}, options = {}) {
+        return await this._withSession(account, credential, options, async (session) => {
+            const page = await this._searchPage(session, input);
+            const fetched = await session.fetch(page.selected, SEARCH_PREVIEW_BYTES);
+            const byUid = new Map(fetched.map((message) => [Number(message.imap_uid), message]));
+            const messages = page.selected.map((uid) => byUid.get(uid)).filter(Boolean).map((message) => {
+                const { body: _body, attachments: _attachments, ...summary } = message;
+                return summary;
+            });
+            return {
+                messages,
+                message_ids: messages.map((message) => message.id),
+                next_page_token: page.nextPageToken,
+                result_size_estimate: page.resultSizeEstimate,
+            };
+        });
+    }
+
+    async readLatestEmail(account, credential, input = {}, options = {}) {
+        return await this._withSession(account, credential, options, async (session) => {
+            const page = await this._searchPage(session, { ...input, max_results: 1 });
+            const messages = await session.fetch(page.selected, READ_PREVIEW_BYTES);
+            const byUid = new Map(messages.map((message) => [Number(message.imap_uid), message]));
+            return {
+                message: page.selected.length > 0
+                    ? byUid.get(page.selected[0]) ?? null
+                    : null,
+                result_size_estimate: page.resultSizeEstimate,
+            };
+        });
+    }
+
+    async batchReadEmail(account, credential, input = {}, options = {}) {
+        const rawIds = input.message_ids ?? input.email_ids ?? input.ids ?? [];
+        const ids = stringList(Array.isArray(rawIds) ? rawIds : [rawIds])
+            .slice(0, MAX_BATCH_MESSAGES);
+
+        if (ids.length === 0)
+            throw userVisibleError('batch_read_mail requires at least one message ID.');
+        if (ids.some((id) => !/^\d+$/.test(id)))
+            throw userVisibleError('Mail message IDs must be numeric IMAP UIDs.');
+
+        return await this._withSession(account, credential, options, async (session) => ({
+            messages: await session.fetch(ids.map(Number), READ_PREVIEW_BYTES),
+        }));
+    }
 }
 
 export class GmailImapClient {

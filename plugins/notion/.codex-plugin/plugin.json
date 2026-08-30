@@ -1,0 +1,42 @@
+{
+  "name": "notion",
+  "version": "1.0.0",
+  "description": "Search, read, create, and update Notion content through Notion's official hosted MCP server.",
+  "author": {
+    "name": "Cusco contributors"
+  },
+  "homepage": "https://developers.notion.com/guides/mcp/overview",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "notion",
+    "notes",
+    "knowledge-base",
+    "documentation",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Notion",
+    "shortDescription": "Work with Notion through its official MCP",
+    "longDescription": "Connect Cusco directly to Notion's official hosted MCP server with OAuth. Search and read workspace content, create pages and databases, and make reviewed updates while respecting the permissions of the authorized Notion account.",
+    "developerName": "Cusco",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://developers.notion.com/guides/mcp/overview",
+    "defaultPrompt": [
+      "Search my Notion workspace and summarize what you find",
+      "Create a Notion page from these notes",
+      "Update a Notion project page after reviewing it"
+    ],
+    "composerIcon": "./assets/notion.svg",
+    "logo": "./assets/notion.svg",
+    "logoDark": "./assets/notion.svg",
+    "brandColor": "#000000",
+    "screenshots": []
+  }
+}

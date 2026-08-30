@@ -11,6 +11,17 @@ import { installSearchProvider } from './searchProvider.js';
 
 export { APP_ID };
 
+export function automationIdFromArguments(args = []) {
+    const values = Array.from(args, (value) => String(value ?? ''));
+    const inline = values.find((value) => value.startsWith('--run-automation='));
+
+    if (inline)
+        return inline.slice('--run-automation='.length).trim();
+
+    const index = values.indexOf('--run-automation');
+    return index >= 0 ? String(values[index + 1] ?? '').trim() : '';
+}
+
 let applicationStylesInstalled = false;
 
 function installApplicationStyles() {
@@ -76,13 +87,58 @@ class CuscoApplication extends Adw.Application {
         if (!window)
             window = new CuscoWindow(this);
 
+        if (this._headlessAutomationWindow === window) {
+            this._headlessAutomationWindow = null;
+
+            if (this._automationHoldActive) {
+                this._automationHoldActive = false;
+                this.release();
+            }
+        }
+
         window.present();
     }
 
     vfunc_command_line(commandLine) {
+        const args = commandLine.get_arguments();
+        const automationId = automationIdFromArguments(args);
+
+        if (automationId) {
+            installApplicationStyles();
+            let window = this.active_window;
+
+            if (!window) {
+                window = new CuscoWindow(this);
+                this._headlessAutomationWindow = window;
+                this._automationHoldActive = true;
+                this.hold();
+            }
+
+            this._automationRunCount = (this._automationRunCount ?? 0) + 1;
+
+            window.runAutomation(automationId).catch((error) => {
+                logError(error, `Failed to run automation ${automationId}`);
+            }).finally(() => {
+                this._automationRunCount = Math.max(0, (this._automationRunCount ?? 1) - 1);
+
+                if (this._automationRunCount > 0 || this._headlessAutomationWindow !== window)
+                    return;
+
+                this._headlessAutomationWindow = null;
+                window.close();
+
+                if (this._automationHoldActive) {
+                    this._automationHoldActive = false;
+                    this.release();
+                }
+
+                this.quit();
+            });
+            return 0;
+        }
+
         this.activate();
 
-        const args = commandLine.get_arguments();
         const window = this.active_window;
 
         if (args.includes('--new-chat'))

@@ -5,7 +5,11 @@ import {
     APP_VERSION,
 } from '../src/appInfo.js';
 import GLib from 'gi://GLib';
-import { APP_ID as APPLICATION_APP_ID, CuscoApplication } from '../src/application.js';
+import {
+    APP_ID as APPLICATION_APP_ID,
+    automationIdFromArguments,
+    CuscoApplication,
+} from '../src/application.js';
 import { ArtifactManager } from '../src/artifacts/manager.js';
 import { createDefaultArtifactRendererRegistry } from '../src/artifacts/renderers/registry.js';
 import { createArtifactWorkspace } from '../src/artifacts/views/workspace.js';
@@ -26,10 +30,16 @@ import {
     WELCOME_CONVERSATION_TITLE,
     WELCOME_MESSAGE_CONTENT,
 } from '../src/chat/welcome.js';
-import { createCronCreateTool, CronJobManager } from '../src/cron/manager.js';
+import { presentAutomationDialog } from '../src/cron/dialog.js';
+import {
+    createAutomationCreateTool,
+    createCronCreateTool,
+    CronJobManager,
+} from '../src/cron/manager.js';
 import { ComputerUseService } from '../src/computerUse/service.js';
 import { createComputerUseTools } from '../src/computerUse/tools.js';
 import { GmailGoaConnector } from '../src/connectors/gmailGoa.js';
+import { MailGoaConnector } from '../src/connectors/mailGoa.js';
 import {
     canonicalHookToolName,
     discoverHookSources,
@@ -127,6 +137,9 @@ if (typeof ProviderAuthManager !== 'function')
 
 if (typeof GmailGoaConnector !== 'function')
     throw new Error('Gmail GNOME Online Accounts connector did not import correctly');
+
+if (typeof MailGoaConnector !== 'function')
+    throw new Error('Mail GNOME Online Accounts connector did not import correctly');
 
 const connectorMarker = { refreshTools() {} };
 const assistantStreamRunner = createAssistantStreamRunner({
@@ -503,8 +516,17 @@ if (typeof ArtifactManager !== 'function'
     throw new Error('Full artifact support modules did not import');
 }
 
-if (typeof CronJobManager !== 'function' || typeof createCronCreateTool !== 'function')
+if (typeof CronJobManager !== 'function'
+    || typeof createAutomationCreateTool !== 'function'
+    || typeof createCronCreateTool !== 'function'
+    || typeof presentAutomationDialog !== 'function') {
     throw new Error('Cron manager helpers did not import');
+}
+
+if (automationIdFromArguments(['cusco', '--run-automation', 'job-123']) !== 'job-123'
+    || automationIdFromArguments(['cusco', '--run-automation=job-456']) !== 'job-456') {
+    throw new Error('Automation command-line arguments were not parsed');
+}
 
 if (typeof parseMarkdownBlocks !== 'function' || typeof markdownToPangoMarkup !== 'function')
     throw new Error('Markdown helpers did not import as functions');

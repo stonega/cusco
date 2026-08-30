@@ -100,6 +100,7 @@ computer_use_sources = files(
 
 connector_sources = files(
   'connectors/gmailGoa.js',
+  'connectors/mailGoa.js',
 )
 
 image_editor_sources = files(
@@ -144,6 +145,7 @@ plugin_sources = files(
 
 cron_sources = files(
   'cron/conversationSync.js',
+  'cron/dialog.js',
   'cron/manager.js',
 )
 

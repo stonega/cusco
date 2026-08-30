@@ -1,3 +1,4 @@
+import Gdk from 'gi://Gdk?version=4.0';
 import GLib from 'gi://GLib?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
 
@@ -19,11 +20,30 @@ export class TranscriptScrollController {
         this._scrollSourceId = 0;
         this._scrollPasses = 0;
         this._animationSourceId = 0;
+        this._pausedByUser = false;
     }
 
     setFollowLatest(enabled) {
-        this.followLatest = Boolean(enabled);
-        this.scrollToBottom({ passes: enabled ? 3 : 2 });
+        const nextFollowLatest = Boolean(enabled);
+        const wasFollowing = this.followLatest;
+        const wasPausedByUser = this._pausedByUser;
+
+        this.followLatest = nextFollowLatest;
+        this._pausedByUser = false;
+
+        if (nextFollowLatest) {
+            this.scrollToBottom({ passes: 3 });
+            return;
+        }
+
+        if (wasFollowing && !wasPausedByUser) {
+            this.scrollToBottom({ passes: 2 });
+            return;
+        }
+
+        this.stopAnimation();
+        this._cancelBottomPasses();
+        this.syncButton();
     }
 
     stopAnimation() {
@@ -110,6 +130,74 @@ export class TranscriptScrollController {
         adjustment.set_value(Math.max(
             0,
             adjustment.get_upper() - adjustment.get_page_size(),
+        ));
+        this.syncButton();
+        return true;
+    }
+
+    handleUserScroll(delta) {
+        const scroller = this._getScroller();
+
+        if (!this.followLatest || !scroller || !Number.isFinite(delta) || delta >= 0)
+            return false;
+
+        const adjustment = scroller.get_vadjustment();
+        const lower = adjustment.get_lower?.() ?? 0;
+
+        if (adjustment.get_value() <= lower + 0.5)
+            return false;
+
+        this.followLatest = false;
+        this._pausedByUser = true;
+        this.stopAnimation();
+        this._cancelBottomPasses();
+        this.syncButton();
+        return true;
+    }
+
+    handleAdjustmentValueChanged() {
+        this.syncButton();
+
+        if (!this._pausedByUser)
+            return false;
+
+        const scroller = this._getScroller();
+        const adjustment = scroller?.get_vadjustment?.();
+
+        if (!adjustment || this.getBottomValue() - adjustment.get_value() > 1)
+            return false;
+
+        this.followLatest = true;
+        this._pausedByUser = false;
+        this.syncButton();
+        return true;
+    }
+
+    scrollBy(delta, unit = Gdk.ScrollUnit.WHEEL) {
+        const scroller = this._getScroller();
+
+        if (!scroller || !Number.isFinite(delta) || delta === 0)
+            return false;
+
+        const adjustment = scroller.get_vadjustment();
+        const lower = adjustment.get_lower?.() ?? 0;
+        const pageSize = adjustment.get_page_size();
+        const upper = Math.max(lower, adjustment.get_upper() - pageSize);
+        const fallbackWheelStep = Math.min(72, Math.max(36, pageSize * 0.12));
+        const wheelStep = Math.max(
+            adjustment.get_step_increment?.() ?? 0,
+            fallbackWheelStep,
+        );
+        const distance = unit === Gdk.ScrollUnit.SURFACE
+            ? delta
+            : delta * wheelStep;
+
+        this.handleUserScroll(delta);
+        this.stopAnimation();
+        this._cancelBottomPasses();
+        adjustment.set_value(Math.min(
+            upper,
+            Math.max(lower, adjustment.get_value() + distance),
         ));
         this.syncButton();
         return true;
@@ -217,7 +305,10 @@ export class TranscriptScrollController {
         const pageSize = adjustment.get_page_size();
         const maxValue = Math.max(0, adjustment.get_upper() - pageSize);
         const distanceToBottom = Math.max(0, maxValue - adjustment.get_value());
-        const shouldShow = !this.followLatest && pageSize > 0 && distanceToBottom > pageSize;
+        const revealDistance = this._pausedByUser ? 1 : pageSize;
+        const shouldShow = !this.followLatest
+            && pageSize > 0
+            && distanceToBottom > revealDistance;
 
         button.set_visible(shouldShow);
     }

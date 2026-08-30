@@ -1,0 +1,5 @@
+interface:
+  display_name: "Slack"
+  short_description: "Search and communicate through Slack's official MCP"
+  brand_color: "#4A154B"
+  default_prompt: "Use $slack to search or update my Slack workspace safely."

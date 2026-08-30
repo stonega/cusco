@@ -22,6 +22,7 @@ export class CronConversationSync {
         this._refreshConversationList = refreshConversationList;
         this._renderActiveConversation = renderActiveConversation;
         this._jobIndex = new Map();
+        this._observedAutomationRunIds = new Set();
         this._logSyncTimeoutId = 0;
     }
 
@@ -48,6 +49,7 @@ export class CronConversationSync {
     dispose() {
         this.stop();
         this._jobIndex.clear();
+        this._observedAutomationRunIds.clear();
     }
 
     async sync({ refreshUi = false } = {}) {
@@ -122,6 +124,11 @@ export class CronConversationSync {
             changed = true;
         }
 
+        if (conversation.title !== job.title) {
+            this._conversations.renameConversation(conversation.id, job.title);
+            changed = true;
+        }
+
         return { conversation, changed };
     }
 
@@ -129,6 +136,10 @@ export class CronConversationSync {
         return this._conversations.allConversations.find((conversation) => (
             conversation.conversationType === 'cron' && conversation.cronJobId === jobId
         )) ?? null;
+    }
+
+    getJob(jobId) {
+        return this._jobIndex.get(jobId) ?? null;
     }
 
     deleteConversation(jobId) {
@@ -154,8 +165,15 @@ export class CronConversationSync {
         let appended = false;
 
         for (const run of logs) {
-            if (existingRunIds.has(run.runId))
+            const runKey = `${job.id}:${run.runId}`;
+
+            if (existingRunIds.has(run.runId) || this._observedAutomationRunIds.has(runKey))
                 continue;
+
+            if (job.prompt && run.exitStatus === 0) {
+                this._observedAutomationRunIds.add(runKey);
+                continue;
+            }
 
             this._conversations.appendMessage(conversation.id, createMessage(
                 'system',
@@ -171,6 +189,7 @@ export class CronConversationSync {
                 },
             ));
             existingRunIds.add(run.runId);
+            this._observedAutomationRunIds.add(runKey);
             appended = true;
         }
 
@@ -178,6 +197,17 @@ export class CronConversationSync {
     }
 
     formatJobCreatedMessage(job) {
+        if (job.prompt) {
+            return [
+                `Automation: ${job.title}`,
+                `Schedule: ${job.schedule}`,
+                `Status: ${job.enabled ? 'Active' : 'Paused'}`,
+                '',
+                'Prompt:',
+                job.prompt,
+            ].join('\n');
+        }
+
         return [
             `Cron job: ${job.title}`,
             `Schedule: ${job.schedule}`,
@@ -191,6 +221,18 @@ export class CronConversationSync {
     }
 
     formatRunMessage(job, run) {
+        if (job.prompt) {
+            return [
+                `Automation launch failed: ${job.title}`,
+                `Schedule: ${job.schedule}`,
+                `Started: ${run.startedAt || 'unknown'}`,
+                `Finished: ${run.finishedAt || 'unknown'}`,
+                `Exit status: ${Number.isFinite(run.exitStatus) ? run.exitStatus : 'unknown'}`,
+                '',
+                run.stderr || run.stdout || 'Cusco could not be started for this automation.',
+            ].join('\n');
+        }
+
         return [
             `Cron job run: ${job.title}`,
             `Schedule: ${job.schedule}`,

@@ -1,6 +1,8 @@
 import {
-    createCronCreateTool,
+    buildAutomationCommand,
+    createAutomationCreateTool,
     CronJobManager,
+    parseAutomationCreateInput,
     parseCronCreateInput,
     parseCronRunLog,
     parseCuscoCrontab,
@@ -67,6 +69,26 @@ const logDirectory = GLib.build_filenamev([
     `cusco-cron-logs-${GLib.uuid_string_random()}`,
 ]);
 const manager = new CronJobManager({ backend, logDirectory });
+
+const automationCommand = buildAutomationCommand('automation-123', {
+    executablePath: '/usr/bin/cusco',
+    systemdRunPath: '',
+});
+
+if (automationCommand !== "'/usr/bin/cusco' --run-automation 'automation-123'")
+    throw new Error('Automation command did not target the Cusco automation entry point');
+
+const sessionAutomationCommand = buildAutomationCommand('automation-456', {
+    executablePath: '/usr/bin/cusco',
+    systemdRunPath: '/usr/bin/systemd-run',
+    runtimeDirectory: '/run/user/1000',
+});
+
+if (!sessionAutomationCommand.includes("XDG_RUNTIME_DIR='/run/user/1000'")
+    || !sessionAutomationCommand.includes("DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/1000/bus'")
+    || !sessionAutomationCommand.includes("'/usr/bin/systemd-run' --user --collect --quiet")) {
+    throw new Error('Automation command did not enter the GNOME user session');
+}
 
 const firstJob = await manager.createJob({
     title: 'Daily sync',
@@ -168,42 +190,49 @@ if (wrapperLogs.length !== 1
     throw new Error('Cron wrapper did not write stdout/stderr to the run log');
 }
 
-const cronTool = createCronCreateTool(manager);
-const toolResult = await cronTool.run(JSON.stringify({
-    title: 'Tool job',
+const automationTool = createAutomationCreateTool(manager);
+const toolResult = await automationTool.run(JSON.stringify({
+    title: 'Daily briefing',
     schedule: '30 10 * * 1',
-    command: '/usr/bin/true',
+    prompt: 'Summarize my priorities for today.',
 }));
 
-if (!toolResult.includes('Cron job created') || !toolResult.includes('Tool job'))
-    throw new Error('Cron create tool did not return a transcript result');
+if (!toolResult.includes('Automation created') || !toolResult.includes('Daily briefing'))
+    throw new Error('Automation create tool did not return a transcript result');
 
 jobs = await manager.listJobs();
 
-if (jobs.length !== 2 || !jobs.find((job) => job.title === 'Tool job'))
-    throw new Error('Cron create tool did not install a job');
+const briefingJob = jobs.find((job) => job.title === 'Daily briefing');
+
+if (jobs.length !== 2
+    || !briefingJob
+    || briefingJob.prompt !== 'Summarize my priorities for today.'
+    || briefingJob.kind !== 'automation'
+    || !briefingJob.command.includes('--run-automation')) {
+    throw new Error('Automation create tool did not install a prompt-backed job');
+}
 
 const toolManager = new ToolManager();
-toolManager.registerTool(createCronCreateTool(manager));
-const parsedToolRequest = toolManager.parseRequest('/cron_create {"title":"Slash job","schedule":"45 8 * * *","command":"/usr/bin/false"}');
+toolManager.registerTool(createAutomationCreateTool(manager));
+const parsedToolRequest = toolManager.parseRequest('/automation_create {"title":"Weekly plan","schedule":"45 8 * * 1","prompt":"Plan the week ahead"}');
 
-if (!parsedToolRequest || parsedToolRequest.name !== 'cron_create' || !parsedToolRequest.requiresPermission)
-    throw new Error('Cron create slash command was not parsed as a permissioned registered tool');
+if (!parsedToolRequest || parsedToolRequest.name !== 'automation_create' || !parsedToolRequest.requiresPermission)
+    throw new Error('Automation slash command was not parsed as a permissioned registered tool');
 
 const slashToolResult = await toolManager.runRequest(parsedToolRequest);
 
-if (!slashToolResult.output.includes('Slash job'))
-    throw new Error('Cron create slash command did not install a job through ToolManager');
+if (!slashToolResult.output.includes('Weekly plan'))
+    throw new Error('Automation slash command did not install a job through ToolManager');
 
 jobs = await manager.listJobs();
 
-if (jobs.length !== 3 || !jobs.find((job) => job.title === 'Slash job'))
-    throw new Error('Cron create slash command did not persist a job');
+if (jobs.length !== 3 || !jobs.find((job) => job.title === 'Weekly plan'))
+    throw new Error('Automation slash command did not persist a job');
 
 await manager.deleteJob(firstJob.id);
 jobs = await manager.listJobs();
 
-if (jobs.length !== 2 || !jobs.find((job) => job.title === 'Tool job'))
+if (jobs.length !== 2 || !jobs.find((job) => job.title === 'Daily briefing'))
     throw new Error('Cron job delete did not remove the requested job');
 
 if (!backend.contents.includes('MAILTO=stone@example.com') || !backend.contents.includes('15 4 * * * echo external'))
@@ -223,6 +252,22 @@ for (const badInput of [
 
     if (!failed)
         throw new Error(`Invalid cron input was accepted: ${JSON.stringify(badInput)}`);
+}
+
+for (const badInput of [
+    { title: 'Missing prompt', schedule: '0 9 * * *' },
+    { title: 'Bad schedule', schedule: '@daily', prompt: 'Run this' },
+]) {
+    let failed = false;
+
+    try {
+        parseAutomationCreateInput(JSON.stringify(badInput));
+    } catch (error) {
+        failed = Boolean(error.userMessage);
+    }
+
+    if (!failed)
+        throw new Error(`Invalid automation input was accepted: ${JSON.stringify(badInput)}`);
 }
 
 const failingBackend = new FakeCrontabBackend();

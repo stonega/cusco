@@ -159,7 +159,7 @@ export class TurnSubmission {
                 },
             );
 
-            this._conversations.appendMessage(conversation.id, userMessage);
+            this._conversations.appendMessage(conversation.id, userMessage, { persist: 'async' });
             this._addMessageIfActiveConversation(conversation.id, userMessage);
             this._promptMemoryProposal(userMessage, conversation);
             messages.push(userMessage);
@@ -398,7 +398,7 @@ export class TurnSubmission {
         let assistantViewHandedOff = false;
         const showPreparedAssistant = () => {
             if (conversation.agentModeEnabled)
-                preparedAssistantView?.set_status?.('Agent is thinking...');
+                preparedAssistantView?.set_status?.('Waiting for agent response...');
             else
                 preparedAssistantView?.set_loading?.();
         };
@@ -453,7 +453,7 @@ export class TurnSubmission {
                     },
                 },
             );
-            this._conversations.appendMessage(conversation.id, userMessage);
+            this._conversations.appendMessage(conversation.id, userMessage, { persist: 'async' });
             userMessageCommitted = true;
 
             if (typeof provisionalView?.promote_user_message === 'function') {

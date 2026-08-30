@@ -281,6 +281,16 @@ if (reloadedCron.conversationType !== 'cron'
     throw new Error('Cron conversation metadata was not persisted');
 }
 
+const chatOnlyPage = reloaded.conversationPage('', { conversationType: 'chat', limit: 50 });
+const automationOnlyPage = reloaded.conversationPage('', { conversationType: 'cron', limit: 50 });
+
+if (chatOnlyPage.conversations.some((conversation) => conversation.conversationType === 'cron')
+    || automationOnlyPage.conversations.length !== 1
+    || automationOnlyPage.conversations[0].id !== cronChat.id
+    || reloaded.conversationPosition(cronChat.id, { conversationType: 'cron' }) !== 0) {
+    throw new Error('Conversation paging did not separate chats from automations');
+}
+
 reloaded.deleteConversation(cronChat.id);
 reloaded.deleteConversation(reloadedChat.id);
 
@@ -502,6 +512,59 @@ const afterPendingDelete = new ConversationFileStore({ path: migrationDatabasePa
 if (afterPendingDelete.conversations.some((conversation) => conversation.id === migrationSecondId)
     || recoveredStore.hasPendingIndexUpdates()) {
     throw new Error('Deleting a conversation resurrected a pending index update');
+}
+
+const asyncDatabasePath = GLib.build_filenamev([
+    GLib.get_tmp_dir(),
+    `cusco-async-conversation-${GLib.uuid_string_random()}`,
+    'conversations.json',
+]);
+const asyncStore = new ConversationFileStore({ path: asyncDatabasePath });
+const asyncConversations = new ConversationManager({
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
+    store: asyncStore,
+});
+const asyncChat = asyncConversations.createConversation();
+
+asyncConversations.appendMessage(
+    asyncChat.id,
+    createMessage('user', 'Persist without blocking the send frame'),
+    { persist: false },
+);
+const asyncPersistence = asyncConversations.persistConversationAsync(asyncChat.id);
+
+if (GLib.file_test(asyncDatabasePath, GLib.FileTest.EXISTS))
+    throw new Error('Asynchronous conversation persistence ran before yielding to the main loop');
+
+if (!await asyncPersistence)
+    throw new Error('Asynchronous conversation persistence reported a write failure');
+
+const asyncReload = new ConversationManager({
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
+    store: asyncStore,
+});
+
+if (asyncReload.activeConversation?.messages[0]?.content
+    !== 'Persist without blocking the send frame') {
+    throw new Error('Asynchronous conversation persistence did not save the transcript');
+}
+
+asyncConversations.appendMessage(
+    asyncChat.id,
+    createMessage('assistant', 'This write will be followed by deletion'),
+    { persist: 'async' },
+);
+asyncConversations.deleteConversation(asyncChat.id);
+await asyncConversations.persistAsync();
+
+if (new ConversationManager({
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
+    store: asyncStore,
+}).allConversations.length !== 0) {
+    throw new Error('An ordered asynchronous write resurrected a deleted conversation');
 }
 
 print('Cusco conversation store smoke passed');

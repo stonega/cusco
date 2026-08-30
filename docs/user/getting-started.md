@@ -48,7 +48,14 @@ available to new Cusco conversations. **Connect** normally uses the plugin's MCP
 endpoint, Cusco's native OAuth discovery, PKCE, client registration, automatic
 token refresh, and Secret Service storage; app-only
 ports ask for an MCP endpoint instead of sending their legacy connector ID to
-another host. Gmail is native: **Connect** selects a Google mail account from
+another host. Compatible plugin packages may provide a root `.mcp.json` without
+referencing it from the main manifest; Cusco discovers that endpoint
+automatically. When an endpoint declares a bearer-token environment variable,
+**Connect** accepts the token in a masked native dialog and stores it in Secret
+Service instead of workspace settings. The bundled GitHub plugin uses this path
+to expose permission-gated repository, pull request, issue, and Actions tools;
+use a GitHub token limited to the repositories and permissions you need.
+Gmail is native: **Connect** selects a Google mail account from
 GNOME Online Accounts, verifies Gmail access, and stores only that GOA account
 ID. Its search and read tools use Gmail's secure IMAP/XOAUTH2 path, ask for
 permission on every invocation, and do not use a hosted connector intermediary.
@@ -60,6 +67,9 @@ rejected until the service approves Cusco. See [MCP Authorization](../implementa
 Select a plugin row to inspect its provenance, status, included components,
 capabilities, connection state, and example requests. Select a skill row in the
 **Skills** tab to inspect its source, location, status, and instruction preview.
+Removing a plugin also removes any workspace MCP connector and stored bearer
+credential that Cusco created for it; independently managed `mcp.json` servers
+remain in place.
 
 Workspace preferences include the prompt library, hooks, and computer-use controls. Open the **Plugins** destination and use its **Skills** and **MCP** tabs to manage integrations. The MCP tab can add STDIO commands and Streamable HTTP endpoints, including environment-backed secrets that are resolved without storing their values. It also edits and reloads `~/.config/io.github.stonega.Cusco/mcp.json`; enabled servers expose namespaced Agent Mode tools such as `mcp__server__tool`, plus resource and prompt helper tools when supported. The Skills tab discovers skills from `~/.agents/skills`, `$REPO_ROOT/skills`, and installed plugins, and labels them as **Global** or **Cusco**. Each skill folder contains `SKILL.md`. **Add skill folder** copies the complete selected folder into `$REPO_ROOT/skills/` without changing the original. Enable skills there, then reference one from the composer with `$`. Referenced skills are sent as hidden instruction context for the response; skill files are not executed.
 

@@ -1,6 +1,9 @@
+import GLib from 'gi://GLib?version=2.0';
+
 import {
     defaultMcpConfigFilePath,
     loadMcpConfigFile,
+    MCP_TRANSPORT_HTTP,
     normalizeMcpServerConfig,
     sanitizeMcpName,
     setMcpConfigFileServerEnabled,
@@ -320,10 +323,14 @@ export class McpManager {
     listServers() {
         return this._servers.map((server) => {
             const token = this._tokenStore?.lookup?.(server.key);
+            const environmentToken = server.bearerTokenEnvVar
+                ? String(GLib.getenv(server.bearerTokenEnvVar) ?? '').trim()
+                : '';
 
             return {
                 ...cloneServer(server),
                 authenticated: Boolean(token?.accessToken),
+                bearerTokenAvailable: Boolean(token?.accessToken || environmentToken),
                 status: this._status.get(server.key) ?? {
                     state: server.enabled ? 'idle' : 'disabled',
                     message: server.enabled ? 'Not connected.' : 'Disabled.',
@@ -345,6 +352,44 @@ export class McpManager {
         const added = this._workspaceManager.addMcpServer(server);
         this.reloadConfig();
         return added;
+    }
+
+    storeServerBearerToken(key, value) {
+        const server = this._servers.find((item) => item.key === key);
+        const accessToken = String(value ?? '').trim();
+
+        if (!server)
+            throw createUserVisibleError(`Unknown MCP server: ${key}`);
+        if (server.transport !== MCP_TRANSPORT_HTTP)
+            throw createUserVisibleError('Bearer credentials are only supported for remote MCP servers.');
+        if (!accessToken)
+            throw createUserVisibleError('Bearer token cannot be empty.');
+        if (!this._tokenStore?.store)
+            throw createUserVisibleError('Secure credential storage is not available.');
+
+        this.disconnectServer(key);
+        const stored = this._tokenStore.store(key, server.name, {
+            version: 2,
+            accessToken,
+            refreshToken: '',
+            tokenType: 'Bearer',
+            scope: '',
+            expiresAt: '',
+            resource: server.url,
+            authorizationServer: '',
+            tokenEndpoint: '',
+            clientId: '',
+            clientSecret: '',
+            clientSecretEnvVar: '',
+            tokenEndpointAuthMethod: 'none',
+            registrationType: 'manual',
+        });
+
+        if (stored === false)
+            throw createUserVisibleError(`Cusco could not store the credential for ${server.name}.`);
+
+        this._setStatus(key, 'idle', 'Credential saved securely.');
+        return this.listServers().find((item) => item.key === key) ?? null;
     }
 
     setServerEnabled(key, enabled) {

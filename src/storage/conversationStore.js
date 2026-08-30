@@ -266,18 +266,23 @@ function normalizeSummaryDatabase(value) {
     };
 }
 
+function prepareAtomicWrite(path) {
+    const directory = GLib.path_get_dirname(path);
+
+    if (GLib.mkdir_with_parents(directory, 0o700) !== 0)
+        throw new Error(`Could not create conversation data directory: ${directory}`);
+    if (GLib.chmod(directory, 0o700) !== 0)
+        throw new Error(`Could not secure conversation data directory: ${directory}`);
+}
+
 function writeFileAtomically(path, contents) {
+    prepareAtomicWrite(path);
     const directory = GLib.path_get_dirname(path);
     const basename = GLib.path_get_basename(path);
     const tempPath = GLib.build_filenamev([
         directory,
         `.${basename}.${GLib.uuid_string_random()}.tmp`,
     ]);
-
-    if (GLib.mkdir_with_parents(directory, 0o700) !== 0)
-        throw new Error(`Could not create conversation data directory: ${directory}`);
-    if (GLib.chmod(directory, 0o700) !== 0)
-        throw new Error(`Could not secure conversation data directory: ${directory}`);
 
     GLib.file_set_contents(tempPath, contents);
 
@@ -298,6 +303,34 @@ function writeFileAtomically(path, contents) {
         if (GLib.file_test(tempPath, GLib.FileTest.EXISTS))
             GLib.unlink(tempPath);
     }
+}
+
+function writeFileAtomicallyAsync(path, contents, cancellable = null) {
+    prepareAtomicWrite(path);
+    const file = Gio.File.new_for_path(path);
+    const bytes = new TextEncoder().encode(contents);
+
+    return new Promise((resolve, reject) => {
+        file.replace_contents_async(
+            bytes,
+            null,
+            false,
+            Gio.FileCreateFlags.PRIVATE | Gio.FileCreateFlags.REPLACE_DESTINATION,
+            cancellable,
+            (source, result) => {
+                try {
+                    source.replace_contents_finish(result);
+
+                    if (GLib.chmod(path, 0o600) !== 0)
+                        throw new Error(`Could not secure conversation data: ${path}`);
+
+                    resolve();
+                } catch (error) {
+                    reject(error);
+                }
+            },
+        );
+    });
 }
 
 function readJsonFile(path) {
@@ -424,10 +457,60 @@ export class ConversationFileStore {
         return summary;
     }
 
+    async saveConversationAsync(conversation, {
+        messagesLoaded = true,
+        cancellable = null,
+    } = {}) {
+        const id = String(conversation?.id ?? '').trim();
+
+        if (!id)
+            throw new Error('Conversation ID is required.');
+
+        const messages = messagesLoaded
+            ? (Array.isArray(conversation.messages) ? conversation.messages : [])
+            : this.loadConversation(id).messages;
+        const normalized = {
+            ...normalizeConversationFields(conversation),
+            messages: messages.map(normalizeMessage),
+        };
+        const payload = JSON.stringify({
+            version: CONVERSATION_RECORD_VERSION,
+            conversation: normalized,
+        });
+        const summary = normalizeConversationSummary(normalized, { messages: normalized.messages });
+
+        await this._markIndexUpdatePendingAsync(id, cancellable);
+        await writeFileAtomicallyAsync(
+            this._conversationRecordPath(id),
+            `${payload}\n`,
+            cancellable,
+        );
+        this._pendingSummaries.set(id, summary);
+        return summary;
+    }
+
     saveIndex(database) {
         const normalized = normalizeSummaryDatabase(database);
         const reconciliation = this._reconcilePendingIndex(normalized);
         this._writeIndex(reconciliation.database);
+        this._writePendingConversationIds(reconciliation.unresolvedIds);
+
+        for (const conversationId of this._pendingSummaries.keys()) {
+            if (!reconciliation.unresolvedIds.includes(conversationId))
+                this._pendingSummaries.delete(conversationId);
+        }
+    }
+
+    async saveIndexAsync(database, { cancellable = null } = {}) {
+        const normalized = normalizeSummaryDatabase(database);
+        const reconciliation = this._reconcilePendingIndex(normalized);
+        const payload = JSON.stringify({
+            version: DATABASE_VERSION,
+            activeConversationId: reconciliation.database.activeConversationId,
+            conversations: reconciliation.database.conversations,
+        });
+
+        await writeFileAtomicallyAsync(this.path, `${payload}\n`, cancellable);
         this._writePendingConversationIds(reconciliation.unresolvedIds);
 
         for (const conversationId of this._pendingSummaries.keys()) {
@@ -537,6 +620,15 @@ export class ConversationFileStore {
         writeFileAtomically(this.selectionPath, `${payload}\n`);
     }
 
+    async saveActiveConversationIdAsync(activeConversationId, { cancellable = null } = {}) {
+        const payload = JSON.stringify({
+            version: SELECTION_STATE_VERSION,
+            activeConversationId: normalizeString(activeConversationId, null),
+        });
+
+        await writeFileAtomicallyAsync(this.selectionPath, `${payload}\n`, cancellable);
+    }
+
     _loadActiveConversationId() {
         if (!GLib.file_test(this.selectionPath, GLib.FileTest.EXISTS))
             return null;
@@ -567,6 +659,15 @@ export class ConversationFileStore {
             version: 1,
             conversationId: id,
         })}\n`);
+    }
+
+    _markIndexUpdatePendingAsync(conversationId, cancellable = null) {
+        const id = String(conversationId);
+
+        return writeFileAtomicallyAsync(this._pendingMarkerPath(id), `${JSON.stringify({
+            version: 1,
+            conversationId: id,
+        })}\n`, cancellable);
     }
 
     _loadPendingConversationIds() {

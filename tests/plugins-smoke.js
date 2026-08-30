@@ -49,7 +49,6 @@ writeJson(GLib.build_filenamev([manifestDirectory, 'plugin.json']), {
     description: 'Fallback plugin description',
     skills: './skills/',
     apps: './.app.json',
-    mcpServers: './.mcp.json',
     author: { name: 'Cusco Labs' },
     interface: {
         displayName: 'Design Tools',
@@ -68,6 +67,7 @@ writeJson(GLib.build_filenamev([fixtureRoot, '.mcp.json']), {
         design: {
             type: 'http',
             url: 'https://mcp.example.test/mcp',
+            bearer_token_env_var: 'DESIGN_MCP_TOKEN',
             oauth_resource: 'https://mcp.example.test/mcp',
         },
     },
@@ -129,6 +129,10 @@ assert(
     'Plugin connector did not use its native MCP endpoint',
 );
 assert(
+    parsed[0].connectors[0].server?.bearerTokenEnvVar === 'DESIGN_MCP_TOKEN',
+    'Plugin connector did not retain its bearer-token environment hint',
+);
+assert(
     parsed[0].connectors[0].server?.oauth?.resource === 'https://mcp.example.test/mcp',
     'Plugin connector did not retain its MCP OAuth resource',
 );
@@ -139,7 +143,7 @@ assert(
 assert(parsed[1].displayName === 'Notes', 'Fallback plugin display name was not generated');
 const appOnlyPlugin = normalizePluginEntry({
     name: 'mail',
-    source: { path: fixtureRoot },
+    source: { path: GLib.build_filenamev([fixtureRoot, 'manifest-only']) },
 }, {
     name: 'mail',
     apps: {
@@ -155,7 +159,7 @@ assert(
 );
 const goaGmailPlugin = normalizePluginEntry({
     name: 'gmail',
-    source: { path: fixtureRoot },
+    source: { path: GLib.build_filenamev([fixtureRoot, 'manifest-only']) },
 }, {
     name: 'gmail',
     apps: {
@@ -168,6 +172,7 @@ const goaGmailPlugin = normalizePluginEntry({
             id: 'gmail',
             name: 'gmail',
             type: 'gnome-online-accounts',
+            runtime: 'gmail-goa',
             provider: 'google',
             service: 'mail',
         }],
@@ -175,10 +180,34 @@ const goaGmailPlugin = normalizePluginEntry({
 });
 assert(
     goaGmailPlugin.connectors[0]?.type === 'gnome-online-accounts'
+    && goaGmailPlugin.connectors[0]?.runtime === 'gmail-goa'
     && goaGmailPlugin.connectors[0]?.provider === 'google'
     && goaGmailPlugin.connectors[0]?.service === 'mail'
     && goaGmailPlugin.connectors[0]?.server === null,
     'Plugin-native GNOME Online Accounts metadata was not preserved',
+);
+
+const bundledCatalog = await new CuscoPluginClient({
+    repositoryRoot: GLib.get_current_dir(),
+}).listPlugins();
+const bundledMail = bundledCatalog.find((plugin) => plugin.name === 'mail');
+const bundledGithub = bundledCatalog.find((plugin) => plugin.name === 'github');
+assert(
+    bundledMail
+    && bundledMail.connectors[0]?.runtime === 'mail-goa'
+    && bundledMail.connectors[0]?.provider === 'any-non-google'
+    && bundledMail.hasSkills
+    && bundledMail.hasApps,
+    'Bundled Mail plugin was not discoverable with its native GOA runtime',
+);
+assert(
+    bundledGithub
+    && bundledGithub.hasApps
+    && bundledGithub.hasMcpServers
+    && bundledGithub.connectors.length === 1
+    && bundledGithub.connectors[0]?.server?.url === 'https://api.githubcopilot.com/mcp/'
+    && bundledGithub.connectors[0]?.server?.bearerTokenEnvVar === 'GITHUB_PAT_TOKEN',
+    'Bundled GitHub plugin was not discoverable with its MCP bearer-token connector',
 );
 
 const repositoryRoot = GLib.build_filenamev([
@@ -249,6 +278,9 @@ if (Gtk.init_check()) {
     let shownPluginId = '';
     let shownSkillId = '';
     let shownSkillContent = '';
+    let storedBearerToken = '';
+    let presentedBearerEnvironment = '';
+    const mailConnectorMarker = {};
     const toasts = [];
     const servers = [];
     const mcpManager = {
@@ -274,6 +306,13 @@ if (Gtk.init_check()) {
             server.status = { state: 'connected', message: 'Connected.' };
             return { ...server, status: { ...server.status } };
         },
+        storeServerBearerToken(key, token) {
+            const server = servers.find((candidate) => candidate.key === key);
+            storedBearerToken = token;
+            server.authenticated = true;
+            server.bearerTokenAvailable = true;
+            return { ...server, status: { ...server.status } };
+        },
         async refreshServers() {
             mcpRefreshCount += 1;
         },
@@ -286,9 +325,14 @@ if (Gtk.init_check()) {
                 return parsed;
             },
         },
+        goaConnectors: new Map([['mail-goa', mailConnectorMarker]]),
         mcpManager,
         onBack: () => backCount += 1,
         onToast: (message) => toasts.push(message),
+        presentBearerCredential: async (_parent, _plugin, connector) => {
+            presentedBearerEnvironment = connector.bearerTokenEnvVar;
+            return 'stored-design-token';
+        },
         presentPluginDetails: (_parent, plugin) => shownPluginId = plugin.pluginId,
         presentSkillDetails: (_parent, skill) => {
             shownSkillId = skill.id;
@@ -323,6 +367,10 @@ if (Gtk.init_check()) {
             },
         },
     });
+    assert(
+        page._goaConnectorFor(bundledMail, bundledMail.connectors[0]) === mailConnectorMarker,
+        'Plugins page did not route Mail to its declared native GOA runtime',
+    );
     assert(page.widget, 'Plugins page widget was not created');
     await page.refresh();
     const [, pluginListNaturalHeight] = page._pluginList.measure(
@@ -355,11 +403,14 @@ if (Gtk.init_check()) {
     );
     let pluginDetailHeaderBar = null;
     let pluginDetailCloseButton = null;
+    const pluginDetailLabels = [];
     walkWidgets(pluginDetailsDialog.get_child(), (widget) => {
         if (widget instanceof Adw.HeaderBar)
             pluginDetailHeaderBar = widget;
         if (widget instanceof Gtk.Button && widget.get_tooltip_text() === 'Close')
             pluginDetailCloseButton = widget;
+        if (widget instanceof Gtk.Label)
+            pluginDetailLabels.push(widget.get_label());
     });
     assert(
         pluginDetailHeaderBar
@@ -368,6 +419,15 @@ if (Gtk.init_check()) {
         && pluginDetailCloseButton
         && pluginDetailsDialog.get_focus() === pluginDetailCloseButton,
         'Plugin details did not focus the top-right close control',
+    );
+    assert(
+        !pluginDetailLabels.some((label) => label.includes('Ported from OpenAI')),
+        'Plugin details still showed the removed OpenAI porting notice',
+    );
+    assert(
+        pluginDetailLabels.includes('Developer')
+        && pluginDetailLabels.includes('Cusco'),
+        'Plugin details did not identify Cusco as the developer',
     );
     pluginDetailsDialog.close();
     const skillDetailsDialog = presentSkillDetailsDialog(page.widget, {
@@ -518,9 +578,18 @@ if (Gtk.init_check()) {
     await page._refreshActiveSection();
     assert(mcpRefreshCount === 1, 'MCP tab did not refresh configured servers');
     page._sectionStack.set_visible_child_name('plugins');
+    const catalogLabels = [];
+    walkWidgets(page.widget, (widget) => {
+        if (widget instanceof Gtk.Label)
+            catalogLabels.push(widget.get_label());
+    });
     assert(
-        page._sourceNotice.get_label().includes('ported from OpenAI'),
-        'Plugins page did not declare the origin of the current catalog',
+        !catalogLabels.some((label) => label.includes('ported from OpenAI')),
+        'Plugins page still showed the removed OpenAI porting notice',
+    );
+    assert(
+        catalogLabels.some((label) => label.includes('Cusco · Creativity')),
+        'Plugin catalog rows did not identify Cusco as the developer',
     );
     page._backButton.emit('clicked');
     assert(backCount === 1, 'Plugins page back button did not return to chat');
@@ -570,9 +639,11 @@ if (Gtk.init_check()) {
     await page._connectPlugin(installedConnector);
     assert(
         servers[0]?.url === 'https://mcp.example.test/mcp'
+        && storedBearerToken === 'stored-design-token'
+        && presentedBearerEnvironment === 'DESIGN_MCP_TOKEN'
         && connectorConnectCount === 1
         && toasts.at(-1) === 'Design Tools connected',
-        'Plugin Connect did not create and verify a native Cusco MCP connection',
+        'Plugin Connect did not securely configure and verify a native Cusco MCP connection',
     );
     assert(
         installedConnector.connectors[0].connected,

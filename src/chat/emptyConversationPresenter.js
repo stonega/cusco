@@ -6,7 +6,7 @@ import { getBundledImagePath } from '../bundledIcons.js';
 
 const EMPTY_STATE_IMAGE_DARK = 'machupicchu_dark.png';
 const EMPTY_STATE_IMAGE_LIGHT = 'machupicchu_light.png';
-const EMPTY_STATE_FADE_DURATION_MS = 220;
+const EMPTY_STATE_FADE_DURATION_MS = 200;
 
 export class EmptyConversationPresenter {
     constructor({

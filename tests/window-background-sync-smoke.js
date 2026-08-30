@@ -450,6 +450,7 @@ if (deferredFinishHarness._activeTurnsByConversation.size !== 0
 let borrowedTurnBusy = true;
 let settledPresentation = null;
 let settledPresentationRenders = 0;
+let settledPresentationOptions = null;
 const settledConversation = { id: 'settled-presentation', agentModeEnabled: false };
 const settledAssistantView = {
     set_loading() {},
@@ -481,8 +482,9 @@ const settledRunner = new AssistantStreamRunner({
     materializeAssistantArtifacts: () => [],
     maybeAutoCompactConversation: async () => null,
     refreshConversationList() {},
-    renderActiveConversation() {
+    renderActiveConversation(options) {
         settledPresentationRenders += 1;
+        settledPresentationOptions = options;
     },
     runAgentModeResponse() {},
     scheduleUsageDisplayUpdate() {},
@@ -506,8 +508,11 @@ await waitForLowPriorityMainLoopTurn();
 
 if (!settledPresentation
     || settledResult.presentationFinished !== settledPresentation
-    || settledPresentationRenders !== 1) {
-    throw new Error('A settled presentation raced borrowed-turn cleanup or skipped its final rebuild');
+    || settledPresentationRenders !== 1
+    || settledPresentationOptions?.finalizeCurrentView !== true
+    || settledPresentationOptions?.incremental !== true
+    || settledPresentationOptions?.forceRebuild) {
+    throw new Error('A settled presentation did not finalize its live transcript view in place');
 }
 
 let resolveMcpRefresh;
@@ -591,8 +596,8 @@ const agentPreflightPromise = agentPreflightRunner._streamAssistantResponse(
 );
 
 if (agentPreflightCalls[0] !== 'create-assistant-view'
-    || agentPreflightCalls[1] !== 'status:Agent is thinking...'
-    || agentPreflightCalls.indexOf('status:Agent is thinking...')
+    || agentPreflightCalls[1] !== 'status:Waiting for agent response...'
+    || agentPreflightCalls.indexOf('status:Waiting for agent response...')
         > agentPreflightCalls.indexOf('session-hooks')) {
     throw new Error('Agent activity was not visible before response preflight work');
 }
@@ -620,7 +625,7 @@ const immediateSendPromise = windowPrototype._sendMessage.call(
 
 if (immediateSend.calls[0] !== 'show-provisional'
     || !immediateSend.calls.includes('show-assistant-placeholder')
-    || !immediateSend.calls.includes('assistant-status:Agent is thinking...')
+    || !immediateSend.calls.includes('assistant-status:Waiting for agent response...')
     || immediateSend.calls.includes('session-hooks')
     || immediateSend.calls.includes('persist-message')) {
     throw new Error('Sending did not stage the user row and Agent activity before deferred work');
@@ -983,6 +988,11 @@ if (Gtk.init_check()) {
             streamAnimationStyle: () => presenterStreamStyle,
         }),
     });
+    const emptyConversationState = messagePresenter._createEmptyConversationState();
+
+    if (emptyConversationState.get_transition_duration() !== 200)
+        throw new Error('The empty conversation artwork did not use a 200 ms transition');
+
     const completedMessageView = messagePresenter._addMessage(
         'Final answer',
         'assistant',
@@ -1013,6 +1023,34 @@ if (Gtk.init_check()) {
     }
 
     completedMessageView.remove();
+
+    presenterStreamStyle = 'slideUp';
+    presenterMotionEnabled = true;
+    const inPlaceFinalizedView = messagePresenter._addMessage('', 'assistant');
+
+    inPlaceFinalizedView.set_label('A **complete** streamed answer');
+    inPlaceFinalizedView.set_stream_preferences({
+        streamAnimationStyle: () => 'none',
+        motionEnabled: () => false,
+    });
+    const inPlaceWrapper = renderedMessages.get_first_child();
+    let inPlaceBubble = inPlaceWrapper?.get_first_child();
+
+    while (inPlaceBubble && !inPlaceBubble.has_css_class('cusco-message-bubble'))
+        inPlaceBubble = inPlaceBubble.get_next_sibling();
+
+    const inPlaceBodyContent = inPlaceBubble?.get_first_child();
+    const inPlaceMarkdownWidget = inPlaceBodyContent?.get_first_child();
+
+    await inPlaceFinalizedView.finish_stream({ flush: true });
+
+    if (!inPlaceMarkdownWidget
+        || inPlaceBodyContent.get_first_child() !== inPlaceMarkdownWidget
+        || inPlaceMarkdownWidget.get_selectable?.() !== true) {
+        throw new Error('A complete streamed message rebuilt its Markdown widgets while finalizing');
+    }
+
+    inPlaceFinalizedView.remove();
 
     presenterStreamStyle = 'slideUp';
     presenterMotionEnabled = true;

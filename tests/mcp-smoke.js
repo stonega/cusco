@@ -144,6 +144,7 @@ const tools = new ToolManager();
 const httpServer = new Soup.Server();
 let httpListening = false;
 let sawEnvironmentBackedHeaders = false;
+let sawStoredBearerToken = false;
 let sawProtocolVersionHeader = false;
 let oauthRegistration = null;
 let oauthAuthorizationUrl = '';
@@ -208,6 +209,8 @@ httpServer.add_handler('/versioned-mcp', (_server, message) => {
         && authorizationHeader === 'Bearer environment-token') {
         sawEnvironmentBackedHeaders = true;
     }
+    if (authorizationHeader === 'Bearer stored-bearer-token')
+        sawStoredBearerToken = true;
 
     if (request.method !== 'initialize') {
         const protocolVersion = message.get_request_headers().get_one('MCP-Protocol-Version') ?? '';
@@ -539,6 +542,29 @@ try {
         }
 
         workspace.addMcpServer({
+            name: 'stored-token-mcp',
+            transport: MCP_TRANSPORT_HTTP,
+            url: `${httpServer.get_uris()[0].to_string().replace(/\/$/, '')}/versioned-mcp`,
+            bearerTokenEnvVar: 'UNSET_STORED_TOKEN_HINT',
+            enabled: true,
+            permissionPolicy: 'allow',
+        });
+        manager.reloadConfig();
+        let storedTokenServer = manager.listServers()
+            .find((item) => item.name === 'stored-token-mcp');
+        manager.storeServerBearerToken(storedTokenServer.key, 'stored-bearer-token');
+        storedTokenServer = manager.listServers()
+            .find((item) => item.key === storedTokenServer.key);
+
+        if (!storedTokenServer.authenticated || !storedTokenServer.bearerTokenAvailable)
+            throw new Error('Stored MCP bearer token was not reported as available');
+
+        await manager.refreshServer(storedTokenServer.key, { timeoutSeconds: 5 });
+
+        if (!sawStoredBearerToken)
+            throw new Error('Secret Service-backed MCP bearer token was not sent');
+
+        workspace.addMcpServer({
             name: 'versioned-mcp',
             transport: MCP_TRANSPORT_HTTP,
             url: `${httpServer.get_uris()[0].to_string().replace(/\/$/, '')}/versioned-mcp`,
@@ -553,6 +579,9 @@ try {
         GLib.setenv('CUSCO_MCP_TEST_HEADER', 'from-environment', true);
         manager.reloadConfig();
         const versionedServer = manager.listServers().find((item) => item.name === 'versioned-mcp');
+
+        if (!versionedServer.bearerTokenAvailable)
+            throw new Error('Environment-backed MCP bearer token was not reported as available');
 
         await manager.refreshServer(versionedServer.key, { timeoutSeconds: 5 });
 

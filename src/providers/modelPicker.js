@@ -22,6 +22,7 @@ export const ModelPicker = GObject.registerClass({
             selection_mode: Gtk.SelectionMode.SINGLE,
         });
         this._modelList.add_css_class('navigation-sidebar');
+        this._modelList.add_css_class('cusco-model-picker-list');
         this._modelList.connect('row-activated', (_list, row) => {
             this.set_active_id(row._modelId);
             this._modelPopover.popdown();

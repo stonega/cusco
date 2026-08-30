@@ -1,3 +1,4 @@
+import Gdk from 'gi://Gdk?version=4.0';
 import GLib from 'gi://GLib?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
 
@@ -32,6 +33,12 @@ const adjustment = {
     },
     get_page_size() {
         return this.pageSize;
+    },
+    get_lower() {
+        return 0;
+    },
+    get_step_increment() {
+        return 40;
     },
     get_value() {
         return this.value;
@@ -103,6 +110,41 @@ batchRendering = false;
 assert(controller.pinToBottom(), 'Bottom pin did not resume after batch rendering');
 assert(adjustment.value === 600, 'Resumed bottom pin used stale adjustment geometry');
 assert(scrollButton.visible === false, 'Pinned transcript left the scroll-to-bottom button visible');
+
+controller.followLatest = true;
+assert(controller.handleUserScroll(-1), 'Upward user input did not pause transcript following');
+adjustment.value = 520;
+assert(!controller.handleAdjustmentValueChanged(), 'Transcript following resumed before reaching the bottom');
+assert(
+    !controller.followLatest && controller._pausedByUser && scrollButton.visible,
+    'Paused transcript following did not preserve the viewport or reveal its return control',
+);
+adjustment.value = 600;
+assert(controller.handleAdjustmentValueChanged(), 'Returning to the bottom did not resume following');
+assert(controller.followLatest && !controller._pausedByUser, 'Resumed following retained its pause state');
+
+adjustment.value = 500;
+assert(controller.handleUserScroll(-1), 'A second upward scroll did not pause following');
+controller.setFollowLatest(false);
+assert(
+    adjustment.value === 500 && controller._scrollSourceId === 0,
+    'Response completion pulled a user-paused transcript back to the bottom',
+);
+
+adjustment.upper = 1000;
+adjustment.pageSize = 200;
+adjustment.value = 100;
+assert(controller.scrollBy(2), 'Wheel input was not routed to the transcript');
+assert(adjustment.value === 180, `Wheel input used the wrong scroll distance: ${adjustment.value}`);
+assert(controller.scrollBy(12.5, Gdk.ScrollUnit.SURFACE), 'Touchpad input was not routed');
+assert(adjustment.value === 192.5, `Touchpad input lost its smooth delta: ${adjustment.value}`);
+controller.followLatest = true;
+assert(controller.scrollBy(-1), 'Upward selector scrolling was not routed');
+assert(!controller.followLatest && controller._pausedByUser, 'Routed upward scrolling did not pause following');
+controller.scrollBy(-100);
+assert(adjustment.value === 0, 'Routed scrolling moved above the transcript');
+controller.scrollBy(100);
+assert(adjustment.value === 800, 'Routed scrolling moved below the transcript');
 
 controller.dispose();
 

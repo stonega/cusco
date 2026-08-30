@@ -7,6 +7,33 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Add a Linear plugin backed by Linear's official hosted MCP server, with OAuth 2.1 dynamic registration, Secret Service credentials, permission-gated planning tools, and consequential-write safeguards.
+- Add a Slack plugin backed by Slack's official hosted MCP server, with registered-app OAuth setup, PKCE, Secret Service tokens, permission-gated workspace tools, and messaging privacy safeguards.
+- Add a Notion plugin backed by Notion's official hosted MCP server, with OAuth/PKCE connection, Secret Service credentials, permission-gated workspace tools, and read-first write safeguards.
+- Add a GNOME Extension Developer plugin with version-aware GJS scaffolding, lifecycle and review guidance, preferences templates, debugging workflows, packaging checks, and evaluation cases.
+- Add a GitHub plugin for repository, pull request, issue, and Actions workflows, with automatic OpenAI-style `.mcp.json` discovery and bearer tokens stored in Secret Service.
+- Add a native Mail plugin for Microsoft, Microsoft 365, Exchange, and generic IMAP/SMTP accounts from GNOME Online Accounts, with permission-gated inbox search and bounded message reads over OAuth2 or password authentication.
+- Add scheduled AI automations with a bottom `Chat | Automations` sidebar switch, native create/edit/pause/run/delete controls, per-task conversations, and assistant output stored as normal messages.
+
+### Changed
+
+- Clarify the agent-mode waiting status as “Waiting for agent response...” while a response is pending.
+- Show clear bundled brand icons for the GitHub, Notion, Slack, and Linear plugins in the plugin catalog.
+- Identify bundled plugins as developed by Cusco and remove OpenAI porting notices from the catalog and plugin details.
+- Use a compact icon and text treatment for empty sidebar states.
+- Route native GNOME Online Accounts plugins through independent runtimes so Gmail and other mail accounts can be connected, refreshed, changed, and removed without sharing connector state.
+- Replace the exposed cron-command creation tool with a permission-gated automation tool that schedules an AI prompt while preserving existing command jobs for compatibility.
+
+### Fixed
+
+- Pause transcript auto-follow when the user scrolls upward during a streamed response, and resume it after they return to the bottom.
+- Route mouse-wheel input over the closed thinking-level selector to the message transcript instead of changing the selected level.
+- Give disabled chat selectors and options an explicit muted color treatment instead of fading the controls.
+- Fade the empty-chat illustration out immediately over 200 ms when the first user message enters the transcript.
+- Keep chat submission and response completion responsive by finalizing streamed messages in place, incrementally refreshing sidebar rows, and moving transcript writes to an ordered asynchronous persistence queue.
+
 ## [0.5.41] - 2026-08-28
 
 ### Added

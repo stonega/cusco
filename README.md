@@ -9,6 +9,7 @@ Cusco is a native GNOME AI chat application built with GJS, GTK 4, and libadwait
 ## Features
 
 - Native GTK/libadwaita chat shell with a persistent conversation sidebar.
+- Scheduled AI automations with dedicated message histories, native task controls, and background execution through the GNOME user session.
 - Markdown transcript rendering with highlighted code blocks and copy actions.
 - Durable, revisioned artifacts with inline previews, a native side workspace, typed data/chart views, and sandboxed HTML applications.
 - Message edit, retry, regenerate, branch, archive, delete, search, and export workflows.

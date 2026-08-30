@@ -11,6 +11,15 @@ function now() {
     return new Date().toISOString();
 }
 
+function waitForPersistenceTurn() {
+    return new Promise((resolve) => {
+        GLib.idle_add(GLib.PRIORITY_LOW, () => {
+            resolve();
+            return GLib.SOURCE_REMOVE;
+        });
+    });
+}
+
 function createTitleFromMessage(content) {
     const normalized = content.replace(/\s+/g, ' ').trim();
 
@@ -90,6 +99,13 @@ function normalizeConversationType(value) {
     return value === 'cron' ? 'cron' : 'chat';
 }
 
+function conversationMatchesType(conversation, conversationType) {
+    if (conversationType !== 'chat' && conversationType !== 'cron')
+        return true;
+
+    return normalizeConversationType(conversation?.conversationType) === conversationType;
+}
+
 function hasUserInput(conversation) {
     return conversation.messages.some((message) => (
         message.role === 'user'
@@ -109,7 +125,19 @@ export class ConversationManager {
         this._hydratedConversationIds = new Set();
         this._conversationLoadErrors = new Map();
         this._dirtyConversationIds = new Set();
+        this._conversationPersistenceVersions = new Map();
         this._transientConversationIds = new Set();
+        this._pendingDeletedConversationIds = new Set();
+        this._asyncPersistencePending = false;
+        this._asyncPersistenceAllHydrated = false;
+        this._asyncPersistenceWaiters = [];
+        this._asyncPersistencePump = null;
+        this._supportsAsyncPersistence = Boolean(
+            this._usesLazyStore
+            && typeof store?.saveConversationAsync === 'function'
+            && typeof store?.saveIndexAsync === 'function'
+            && typeof store?.saveActiveConversationIdAsync === 'function',
+        );
         this._storeLoadError = null;
         const stored = this._loadStoredConversations();
 
@@ -349,7 +377,11 @@ export class ConversationManager {
         return conversation;
     }
 
-    searchConversations(query, { includeArchived = false, limit = Number.MAX_SAFE_INTEGER } = {}) {
+    searchConversations(query, {
+        conversationType = null,
+        includeArchived = false,
+        limit = Number.MAX_SAFE_INTEGER,
+    } = {}) {
         const normalizedQuery = String(query ?? '').trim().toLowerCase();
         const safeLimit = Math.max(0, Number(limit) || 0);
 
@@ -362,6 +394,8 @@ export class ConversationManager {
             for (const conversation of this._conversations) {
                 if (!includeArchived && conversation.archived)
                     continue;
+                if (!conversationMatchesType(conversation, conversationType))
+                    continue;
 
                 results.push(conversation);
 
@@ -372,7 +406,8 @@ export class ConversationManager {
             return results;
         }
 
-        const conversations = includeArchived ? this._conversations : this.conversations;
+        const conversations = (includeArchived ? this._conversations : this.conversations)
+            .filter((conversation) => conversationMatchesType(conversation, conversationType));
 
         if (this._usesLazyStore
             && !this._storeLoadError
@@ -423,6 +458,7 @@ export class ConversationManager {
         const offset = Math.max(0, Number(options.offset) || 0);
         const limit = Math.max(1, Number(options.limit) || 50);
         const candidates = this.searchConversations(query, {
+            conversationType: options.conversationType,
             includeArchived: Boolean(options.includeArchived),
             limit: offset + limit + 1,
         });
@@ -433,11 +469,13 @@ export class ConversationManager {
         };
     }
 
-    conversationPosition(conversationId, { includeArchived = false } = {}) {
+    conversationPosition(conversationId, { conversationType = null, includeArchived = false } = {}) {
         let position = 0;
 
         for (const conversation of this._conversations) {
             if (!includeArchived && conversation.archived)
+                continue;
+            if (!conversationMatchesType(conversation, conversationType))
                 continue;
 
             if (conversation.id === conversationId)
@@ -628,6 +666,19 @@ export class ConversationManager {
         this._persist(null, { allHydrated: true });
     }
 
+    persistAsync() {
+        return this._queueAsyncPersistence(null, { allHydrated: true });
+    }
+
+    persistConversationAsync(conversationId) {
+        const conversation = this.getConversation(conversationId);
+
+        if (!conversation)
+            return Promise.resolve(false);
+
+        return this._queueAsyncPersistence(conversation);
+    }
+
     isConversationHydrated(conversationId) {
         return this._hydratedConversationIds.has(conversationId);
     }
@@ -756,6 +807,11 @@ export class ConversationManager {
         if (!this._store || this._storeLoadError)
             return;
 
+        if (this._asyncPersistencePump && this._supportsAsyncPersistence) {
+            this._queueAsyncPersistence(conversation, { allHydrated });
+            return;
+        }
+
         try {
             const materializedConversationIds = this._materializeTransientConversations(conversation);
 
@@ -820,17 +876,165 @@ export class ConversationManager {
         if (options.persist === false) {
             if (this._usesLazyStore
                 && (!this.isConversationTransient(conversation.id) || hasUserInput(conversation))) {
-                this._dirtyConversationIds.add(conversation.id);
+                this._markConversationDirty(conversation.id);
             }
+            return;
+        }
+
+        if (options.persist === 'async' || this._asyncPersistencePump) {
+            this._queueAsyncPersistence(conversation);
             return;
         }
 
         this._persist(conversation);
     }
 
+    _markConversationDirty(conversationId) {
+        this._dirtyConversationIds.add(conversationId);
+        this._conversationPersistenceVersions.set(
+            conversationId,
+            (this._conversationPersistenceVersions.get(conversationId) ?? 0) + 1,
+        );
+    }
+
+    _queueAsyncPersistence(conversation = null, { allHydrated = false } = {}) {
+        if (!this._store || this._storeLoadError)
+            return Promise.resolve(false);
+
+        if (!this._supportsAsyncPersistence) {
+            this._persist(conversation, { allHydrated });
+            return Promise.resolve(true);
+        }
+
+        this._materializeTransientConversations(conversation);
+
+        if (conversation && this.isConversationTransient(conversation.id))
+            return Promise.resolve(true);
+
+        if (conversation)
+            this._markConversationDirty(conversation.id);
+
+        this._asyncPersistenceAllHydrated ||= allHydrated;
+        this._asyncPersistencePending = true;
+        const completion = new Promise((resolve) => {
+            this._asyncPersistenceWaiters.push(resolve);
+        });
+
+        this._ensureAsyncPersistencePump();
+
+        return completion;
+    }
+
+    _ensureAsyncPersistencePump() {
+        if (this._asyncPersistencePump || !this._asyncPersistencePending)
+            return;
+
+        const pump = this._drainAsyncPersistence().finally(() => {
+            if (this._asyncPersistencePump === pump)
+                this._asyncPersistencePump = null;
+
+            this._ensureAsyncPersistencePump();
+        });
+
+        this._asyncPersistencePump = pump;
+    }
+
+    async _drainAsyncPersistence() {
+        while (this._asyncPersistencePending) {
+            this._asyncPersistencePending = false;
+            const waiters = this._asyncPersistenceWaiters.splice(0);
+
+            await waitForPersistenceTurn();
+
+            try {
+                await this._persistAsyncBatch();
+                for (const resolve of waiters)
+                    resolve(true);
+            } catch (error) {
+                logError(error, 'Failed to save local conversation database asynchronously');
+                for (const resolve of waiters)
+                    resolve(false);
+            }
+        }
+    }
+
+    async _persistAsyncBatch() {
+        const allHydrated = this._asyncPersistenceAllHydrated;
+        const deletedConversationIds = new Set(this._pendingDeletedConversationIds);
+        const conversationIds = new Set(this._dirtyConversationIds);
+
+        this._asyncPersistenceAllHydrated = false;
+        this._pendingDeletedConversationIds.clear();
+
+        if (allHydrated) {
+            for (const conversationId of this._hydratedConversationIds) {
+                if (!this.isConversationTransient(conversationId))
+                    conversationIds.add(conversationId);
+            }
+        }
+
+        const persistedVersions = new Map();
+
+        try {
+            for (const conversationId of conversationIds) {
+                if (deletedConversationIds.has(conversationId)
+                    || this.isConversationTransient(conversationId)) {
+                    continue;
+                }
+
+                const storedConversation = this._conversations.find((item) => (
+                    item.id === conversationId
+                ));
+
+                if (!storedConversation)
+                    continue;
+
+                const version = this._conversationPersistenceVersions.get(conversationId) ?? 0;
+                const summary = await this._store.saveConversationAsync(storedConversation, {
+                    messagesLoaded: this._hydratedConversationIds.has(conversationId),
+                });
+
+                persistedVersions.set(conversationId, version);
+                this._applyPersistedSummary(storedConversation, summary);
+            }
+
+            await this._store.saveIndexAsync({
+                conversations: this._persistedConversations(),
+                activeConversationId: this._persistedActiveConversationId(),
+            });
+
+            for (const conversationId of deletedConversationIds) {
+                this._store.discardPendingConversation?.(conversationId);
+                this._store.deleteConversation(conversationId);
+            }
+
+            await this._store.saveActiveConversationIdAsync(
+                this._persistedActiveConversationId(),
+            );
+
+            for (const [conversationId, version] of persistedVersions) {
+                if ((this._conversationPersistenceVersions.get(conversationId) ?? 0) === version)
+                    this._dirtyConversationIds.delete(conversationId);
+            }
+        } catch (error) {
+            for (const conversationId of deletedConversationIds)
+                this._pendingDeletedConversationIds.add(conversationId);
+            throw error;
+        }
+    }
+
     _persistDeletion(conversationId) {
         if (this._storeLoadError)
             return;
+
+        if (this._asyncPersistencePump && this._supportsAsyncPersistence) {
+            this._dirtyConversationIds.delete(conversationId);
+            this._hydratedConversationIds.delete(conversationId);
+            this._conversationLoadErrors.delete(conversationId);
+            this._pendingDeletedConversationIds.add(conversationId);
+            this._queueAsyncPersistence();
+            return;
+        }
 
         if (!this._usesLazyStore) {
             this._persist();
@@ -899,6 +1103,11 @@ export class ConversationManager {
     _persistActiveConversationId() {
         if (!this._store || this._storeLoadError)
             return;
+
+        if (this._asyncPersistencePump && this._supportsAsyncPersistence) {
+            this._queueAsyncPersistence();
+            return;
+        }
 
         try {
             const activeConversationId = this._persistedActiveConversationId();

@@ -10,6 +10,7 @@ import {
 
 export const PLUGIN_MANIFEST_PATH = '.cusco-plugin/plugin.json';
 const PORTED_PLUGIN_MANIFEST_PATH = '.codex-plugin/plugin.json';
+const PORTED_PLUGIN_MCP_PATH = '.mcp.json';
 
 const moduleDirectory = Gio.File.new_for_uri(import.meta.url).get_parent();
 const configuredRepositoryRoot = String(GLib.getenv('CUSCO_REPOSITORY_ROOT') ?? '').trim();
@@ -192,11 +193,20 @@ function resolveManifestAsset(pluginPath, assetPath) {
         : '';
 }
 
-function pluginParts(manifest) {
+function pluginMcpDeclaration(pluginPath, manifest) {
+    if (manifest?.mcpServers !== undefined)
+        return manifest.mcpServers;
+
+    return resolveManifestAsset(pluginPath, PORTED_PLUGIN_MCP_PATH)
+        ? `./${PORTED_PLUGIN_MCP_PATH}`
+        : null;
+}
+
+function pluginParts(pluginPath, manifest) {
     return {
         hasSkills: Boolean(manifest?.skills),
         hasApps: Boolean(manifest?.apps),
-        hasMcpServers: Boolean(manifest?.mcpServers),
+        hasMcpServers: Boolean(pluginMcpDeclaration(pluginPath, manifest)),
         hasHooks: Boolean(manifest?.hooks),
     };
 }
@@ -231,7 +241,7 @@ function pluginMcpServers(pluginPath, value) {
     }
 }
 
-function pluginAppNames(pluginPath, value) {
+function pluginAppDeclarations(pluginPath, value) {
     if (!value)
         return [];
 
@@ -242,7 +252,10 @@ function pluginAppNames(pluginPath, value) {
             return [];
 
         const apps = isRecord(manifest.apps) ? manifest.apps : manifest;
-        return Object.keys(apps).map(normalizeText).filter(Boolean);
+        return Object.entries(apps).map(([name, declaration]) => ({
+            name: normalizeText(name),
+            required: !isRecord(declaration) || declaration.required !== false,
+        })).filter((declaration) => declaration.name);
     } catch (error) {
         logError(error, `Failed to load plugin connector declarations from ${pluginPath}`);
         return [];
@@ -250,7 +263,10 @@ function pluginAppNames(pluginPath, value) {
 }
 
 function pluginConnectors(pluginPath, pluginName, manifest) {
-    const servers = pluginMcpServers(pluginPath, manifest?.mcpServers);
+    const servers = pluginMcpServers(
+        pluginPath,
+        pluginMcpDeclaration(pluginPath, manifest),
+    );
     const serversByName = new Map(servers.map((server) => [
         sanitizeMcpName(server.name || server.id),
         server,
@@ -262,13 +278,22 @@ function pluginConnectors(pluginPath, pluginName, manifest) {
         const name = normalizeText(connector.name || connector.id || connector.provider);
         return [sanitizeMcpName(name), connector];
     }));
+    const appDeclarations = pluginAppDeclarations(pluginPath, manifest?.apps);
     const names = new Set([
-        ...pluginAppNames(pluginPath, manifest?.apps),
         ...servers.map((server) => server.name || server.id),
         ...nativeDeclarations.map((connector) => (
             connector.name || connector.id || connector.provider
         )),
     ]);
+    const hasCuscoBackends = names.size > 0;
+
+    for (const declaration of appDeclarations) {
+        const backedByCusco = serversByName.has(sanitizeMcpName(declaration.name))
+            || nativeByName.has(sanitizeMcpName(declaration.name));
+
+        if (backedByCusco || declaration.required || !hasCuscoBackends)
+            names.add(declaration.name);
+    }
 
     return [...names].map((name) => {
         const normalizedName = sanitizeMcpName(name);
@@ -280,6 +305,7 @@ function pluginConnectors(pluginPath, pluginName, manifest) {
             id,
             name: titleCasePluginName(name) || titleCasePluginName(pluginName) || 'Connector',
             type: normalizeText(native?.type) || 'mcp',
+            runtime: normalizeText(native?.runtime),
             provider: normalizeText(native?.provider),
             service: normalizeText(native?.service),
             connected: false,
@@ -380,7 +406,7 @@ export function normalizePluginEntry(entry, manifest = null) {
             : null,
         manifest: pluginManifest,
         connectors,
-        ...pluginParts(pluginManifest),
+        ...pluginParts(sourcePath, pluginManifest),
     };
 }
 

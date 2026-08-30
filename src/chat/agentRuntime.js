@@ -190,7 +190,7 @@ export class AgentRuntime {
                 resetAssistantViewAfterPendingMessages();
 
             if (ordinaryIterations === 1 || addedUserMessages.length > 0)
-                setAssistantStatus('Agent is thinking...');
+                setAssistantStatus('Waiting for agent response...');
             else
                 clearAssistantStatus();
 

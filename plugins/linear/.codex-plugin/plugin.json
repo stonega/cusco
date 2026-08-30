@@ -1,0 +1,44 @@
+{
+  "name": "linear",
+  "version": "1.0.0",
+  "description": "Find, create, and update Linear issues, projects, comments, and planning objects through Linear's official hosted MCP server.",
+  "author": {
+    "name": "Cusco contributors"
+  },
+  "homepage": "https://linear.app/docs/mcp",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "linear",
+    "issues",
+    "projects",
+    "planning",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Linear",
+    "shortDescription": "Work with Linear through its official MCP",
+    "longDescription": "Connect Cusco directly to Linear's official hosted MCP server with OAuth. Search and review workspace data, create and update issues, projects, comments, initiatives, milestones, and project updates while preserving team workflow and requiring review for consequential changes.",
+    "developerName": "Cusco",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://linear.app/docs/mcp",
+    "privacyPolicyURL": "https://linear.app/privacy",
+    "termsOfServiceURL": "https://linear.app/terms",
+    "defaultPrompt": [
+      "Find a Linear issue and summarize its current status",
+      "Create a reviewed Linear issue from these notes",
+      "Summarize a Linear project and its open risks"
+    ],
+    "composerIcon": "./assets/linear.svg",
+    "logo": "./assets/linear.svg",
+    "logoDark": "./assets/linear.svg",
+    "brandColor": "#5E6AD2",
+    "screenshots": []
+  }
+}

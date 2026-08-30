@@ -48,8 +48,14 @@ gjs -m tests/stream-replay-window-smoke.js
 gjs -m tests/scroll-controller-smoke.js
 gjs -m tests/usage-smoke.js
 gjs -m tests/usage-page-smoke.js
+gjs -m tests/plugin-branding-smoke.js
 gjs -m tests/plugins-smoke.js
 gjs -m tests/gmail-goa-smoke.js
+gjs -m tests/mail-goa-smoke.js
+gjs -m tests/gnome-extension-plugin-smoke.js
+gjs -m tests/notion-plugin-smoke.js
+gjs -m tests/slack-plugin-smoke.js
+gjs -m tests/linear-plugin-smoke.js
 gjs -m tests/compaction-smoke.js
 gjs -m tests/composer-readline-smoke.js
 gjs -m tests/hooks-smoke.js
@@ -60,6 +66,7 @@ gjs -m tests/image-editor-smoke.js
 gjs -m tests/image-editor-window-smoke.js
 gjs -m tests/tools-smoke.js
 gjs -m tests/cron-smoke.js
+gjs -m tests/automation-smoke.js
 gjs -m tests/window-background-sync-smoke.js
 gjs -m tests/window-provider-fallback-smoke.js
 gjs -m tests/agent-mode-smoke.js

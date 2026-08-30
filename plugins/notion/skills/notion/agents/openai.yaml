@@ -1,0 +1,5 @@
+interface:
+  display_name: "Notion"
+  short_description: "Search and update Notion with the official MCP"
+  brand_color: "#000000"
+  default_prompt: "Use $notion to work with my Notion workspace safely."

@@ -1,0 +1,44 @@
+{
+  "name": "slack",
+  "version": "1.0.0",
+  "description": "Search, read, summarize, and send Slack workspace content through Slack's official hosted MCP server.",
+  "author": {
+    "name": "Cusco contributors"
+  },
+  "homepage": "https://docs.slack.dev/ai/slack-mcp-server",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "slack",
+    "messages",
+    "channels",
+    "communication",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Slack",
+    "shortDescription": "Work with Slack through its official MCP",
+    "longDescription": "Connect Cusco to Slack's official hosted MCP server with a user-owned registered Slack app and PKCE. Search workspace messages, channels, files, emoji, and people; read conversations; and perform reviewed messaging, reaction, conversation, and canvas actions within the authorized user's permissions.",
+    "developerName": "Cusco",
+    "category": "Communication",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://docs.slack.dev/ai/slack-mcp-server",
+    "privacyPolicyURL": "https://slack.com/trust/privacy/privacy-policy",
+    "termsOfServiceURL": "https://slack.com/terms-of-service",
+    "defaultPrompt": [
+      "Search Slack for a topic and summarize the relevant threads",
+      "Draft a Slack reply from this context",
+      "Review a Slack channel and identify decisions and follow-ups"
+    ],
+    "composerIcon": "./assets/slack.svg",
+    "logo": "./assets/slack.svg",
+    "logoDark": "./assets/slack.svg",
+    "brandColor": "#4A154B",
+    "screenshots": []
+  }
+}

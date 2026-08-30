@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="mail-gradient" x1="18" y1="14" x2="108" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#62A0EA"/>
+      <stop offset="1" stop-color="#1C71D8"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="18" width="112" height="92" rx="22" fill="url(#mail-gradient)"/>
+  <path d="m22 39 42 34 42-34" fill="none" stroke="#fff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m22 91 30-27M106 91 76 64" fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round" opacity=".86"/>
+</svg>

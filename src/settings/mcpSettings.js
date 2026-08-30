@@ -503,6 +503,8 @@ export function presentAddMcpServerDialog(
     const oauthCallbackPortRow = createEntryRow('Callback port', '32123');
     const oauthScopesRow = createEntryRow('Scopes', 'Space-separated scopes');
     const oauthDefaults = defaults.oauth ?? {};
+    const requireOauthClientId = options.requireOauthClientId === true
+        || oauthDefaults.clientIdRequired === true;
 
     oauthResourceRow.set_text(String(oauthDefaults.resource ?? defaults.oauthResource ?? ''));
     oauthClientIdRow.set_text(String(oauthDefaults.clientId ?? ''));
@@ -626,6 +628,7 @@ export function presentAddMcpServerDialog(
             : headersEditor.isValid()
                 && headerEnvironmentEditor.isValid()
                 && (!oauthResourceRow.get_text().trim() || isHttpUrl(oauthResourceRow.get_text()))
+                && (!requireOauthClientId || oauthClientIdRow.get_text().trim())
                 && (!oauthClientSecretEnvRow.get_text().trim()
                     || ENVIRONMENT_NAME_PATTERN.test(oauthClientSecretEnvRow.get_text().trim()))
                 && ['', 'none', 'client_secret_post', 'client_secret_basic']

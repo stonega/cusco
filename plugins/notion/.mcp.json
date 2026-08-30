@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "notion": {
+      "name": "Notion",
+      "description": "Notion's official hosted MCP server for workspace search, reading, and content changes.",
+      "transport": "streamable-http",
+      "url": "https://mcp.notion.com/mcp",
+      "oauth": {
+        "resource": "https://mcp.notion.com/mcp"
+      },
+      "permissionPolicy": "ask"
+    }
+  }
+}

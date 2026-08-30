@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "linear": {
+      "name": "Linear",
+      "description": "Linear's official hosted MCP server for issues, projects, comments, initiatives, milestones, updates, and workspace planning.",
+      "transport": "streamable-http",
+      "url": "https://mcp.linear.app/mcp",
+      "oauth": {
+        "resource": "https://mcp.linear.app/mcp"
+      },
+      "permissionPolicy": "ask"
+    }
+  }
+}

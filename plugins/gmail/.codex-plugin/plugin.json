@@ -23,6 +23,7 @@
         "id": "gmail",
         "name": "gmail",
         "type": "gnome-online-accounts",
+        "runtime": "gmail-goa",
         "provider": "google",
         "service": "mail"
       }
@@ -32,7 +33,7 @@
     "displayName": "Gmail",
     "shortDescription": "Read Gmail with your GNOME account",
     "longDescription": "Search and read Gmail locally through the Google account already connected in GNOME Online Accounts. Cusco does not store the Google access token.",
-    "developerName": "OpenAI",
+    "developerName": "Cusco",
     "category": "Communication",
     "capabilities": [
       "Interactive",

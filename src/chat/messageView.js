@@ -919,6 +919,31 @@ function removeDescriptorWidgets(container, descriptors) {
     }
 }
 
+function setWidgetTreeSelectable(widget, selectable) {
+    widget?.set_selectable?.(selectable);
+
+    for (let child = widget?.get_first_child?.(); child; child = child.get_next_sibling())
+        setWidgetTreeSelectable(child, selectable);
+}
+
+function setRenderedStateSelectable(renderedState, selectable) {
+    for (const descriptor of [
+        ...(renderedState?.blocks ?? []),
+        ...(renderedState?.artifacts ?? []),
+    ]) {
+        setWidgetTreeSelectable(descriptor.widget, selectable);
+    }
+}
+
+function artifactListsMatch(first, second) {
+    const left = Array.isArray(first) ? first : [];
+    const right = Array.isArray(second) ? second : [];
+
+    return left.length === right.length && left.every((artifact, index) => (
+        artifactKey(artifact) === artifactKey(right[index])
+    ));
+}
+
 function updateStreamingMessageContent(container, renderedBody, options, previousState) {
     const nextBlocks = parseMarkdownBlocks(renderedBody);
     const previousBlocks = previousState.blocks.map((descriptor) => descriptor.block);
@@ -1137,6 +1162,15 @@ export function createMessageContent(body, options = {}) {
             return;
 
         renderingOptions.selectable = normalizedSelectable;
+        setRenderedStateSelectable(renderedState, normalizedSelectable);
+    };
+    container.setArtifacts = (artifacts) => {
+        const normalizedArtifacts = Array.isArray(artifacts) ? artifacts : [];
+
+        if (artifactListsMatch(renderingOptions.artifacts, normalizedArtifacts))
+            return;
+
+        renderingOptions.artifacts = normalizedArtifacts;
         cancelQueuedRender();
         render(true);
     };
@@ -1168,9 +1202,15 @@ export function createMessageContent(body, options = {}) {
             finishOptions.onContentRevealed?.();
             await Promise.all(activeAnimationPromises());
             disposeSmoother();
+            const needsCanonicalRender = stabilizeStreamingMarkdown(currentBody) !== currentBody;
+
             renderingOptions.streaming = false;
             renderingOptions.selectable = selectable;
-            render(true);
+
+            if (needsCanonicalRender)
+                render(true);
+            else
+                setRenderedStateSelectable(renderedState, selectable);
         })();
 
         return finishPromise;
