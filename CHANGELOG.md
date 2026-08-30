@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.42] - 2026-08-30
+
 ### Added
 
 - Add a Linear plugin backed by Linear's official hosted MCP server, with OAuth 2.1 dynamic registration, Secret Service credentials, permission-gated planning tools, and consequential-write safeguards.
@@ -448,7 +450,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.41...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.42...HEAD
+[0.5.42]: https://github.com/stonega/cusco/compare/v0.5.41...v0.5.42
 [0.5.41]: https://github.com/stonega/cusco/compare/v0.5.40...v0.5.41
 [0.5.40]: https://github.com/stonega/cusco/compare/v0.5.39...v0.5.40
 [0.5.39]: https://github.com/stonega/cusco/compare/v0.5.38...v0.5.39
