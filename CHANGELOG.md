@@ -11,6 +11,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Show saved prompts as compact, single-line title rows in the composer prompt menu.
 
+### Fixed
+
+- Escape percent signs in scheduled automation commands so cron runs them instead of splitting the command before Cusco starts.
+
 ## [0.5.43] - 2026-09-01
 
 ### Added

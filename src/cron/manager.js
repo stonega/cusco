@@ -93,6 +93,38 @@ function shellQuote(value) {
     return `'${String(value ?? '').replace(/'/g, `'\"'\"'`)}'`;
 }
 
+function escapeCrontabCommand(value) {
+    return String(value ?? '').replace(/%/g, '\\%');
+}
+
+function hasUnescapedPercent(value) {
+    const text = String(value ?? '');
+
+    for (let index = 0; index < text.length; index++) {
+        if (text[index] !== '%')
+            continue;
+
+        let backslashes = 0;
+
+        for (let cursor = index - 1; cursor >= 0 && text[cursor] === '\\'; cursor--)
+            backslashes++;
+
+        if (backslashes % 2 === 0)
+            return true;
+    }
+
+    return false;
+}
+
+function cronSegmentNeedsPercentRepair(segment) {
+    const cronLine = (segment?.lines ?? []).find((line) => {
+        const trimmed = line.trim();
+        return trimmed && (!trimmed.startsWith('#') || line.startsWith(CRONTAB_DISABLED_PREFIX));
+    });
+
+    return cronLine ? hasUnescapedPercent(cronLine) : false;
+}
+
 export function buildAutomationCommand(jobId, options = {}) {
     const id = String(jobId ?? '').trim();
 
@@ -364,7 +396,8 @@ export function serializeCronJob(job, options = {}) {
         createdAt: normalized.createdAt,
         updatedAt: normalized.updatedAt,
     });
-    const cronLine = `${normalized.schedule} ${buildCronCommand(normalized, options)}`;
+    const cronCommand = escapeCrontabCommand(buildCronCommand(normalized, options));
+    const cronLine = `${normalized.schedule} ${cronCommand}`;
 
     return [
         CRONTAB_BEGIN,
@@ -567,7 +600,21 @@ export class CronJobManager {
 
     async _load() {
         const contents = await this._backend.read();
-        return parseCuscoCrontab(contents);
+        const parsed = parseCuscoCrontab(contents);
+        let repaired = false;
+
+        for (const segment of parsed.segments) {
+            if (segment.type !== 'job' || !cronSegmentNeedsPercentRepair(segment))
+                continue;
+
+            segment.lines = serializeCronJob(segment.job, { logDirectory: this._logDirectory });
+            repaired = true;
+        }
+
+        if (repaired)
+            await this._save(parsed.segments);
+
+        return parsed;
     }
 
     async _save(segments) {

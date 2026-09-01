@@ -90,6 +90,32 @@ if (!sessionAutomationCommand.includes("XDG_RUNTIME_DIR='/run/user/1000'")
     throw new Error('Automation command did not enter the GNOME user session');
 }
 
+const legacyJob = {
+    id: 'legacy-percent-job',
+    title: 'Legacy percent job',
+    schedule: '* * * * *',
+    command: 'printf "%s" "100%"',
+};
+const legacyBackend = new FakeCrontabBackend(
+    `${serializeCronJob(legacyJob, { logDirectory }).join('\n').replace(/\\%/g, '%')}\n`,
+);
+const legacyManager = new CronJobManager({ backend: legacyBackend, logDirectory });
+
+await legacyManager.listJobs();
+const repairedLegacyLine = legacyBackend.contents
+    .split('\n')
+    .find((line) => line.trim() && !line.startsWith('#'));
+
+if (legacyBackend.writes.length !== 1
+    || repairedLegacyLine.replace(/\\%/g, '').includes('%')) {
+    throw new Error('Existing cron jobs with unescaped percent signs were not repaired');
+}
+
+await legacyManager.listJobs();
+
+if (legacyBackend.writes.length !== 1)
+    throw new Error('Cron percent repair was not idempotent');
+
 const firstJob = await manager.createJob({
     title: 'Daily sync',
     schedule: '0 9 * * *',
@@ -173,10 +199,18 @@ const wrapperJob = {
     id: 'wrapper-job',
     title: 'Wrapper job',
     schedule: '0 1 * * *',
-    command: 'printf wrapper-stdout; printf wrapper-stderr >&2; exit 3',
+    command: 'printf "%s" wrapper-stdout; printf "%s" wrapper-stderr >&2; exit 3',
 };
 const wrapperLine = serializeCronJob(wrapperJob, { logDirectory }).find((line) => !line.startsWith('#'));
-const wrapperCommand = wrapperLine.replace(/^(?:\S+\s+){5}/, '');
+const escapedPercentCount = wrapperLine.match(/\\%/g)?.length ?? 0;
+
+if (escapedPercentCount < 3 || wrapperLine.replace(/\\%/g, '').includes('%'))
+    throw new Error('Cron wrapper contained an unescaped percent sign');
+
+// Cron removes the escape before passing protected percent signs to the shell.
+const wrapperCommand = wrapperLine
+    .replace(/^(?:\S+\s+){5}/, '')
+    .replace(/\\%/g, '%');
 const wrapperResult = await runShell(wrapperCommand);
 
 if (wrapperResult.exitStatus !== 3)
