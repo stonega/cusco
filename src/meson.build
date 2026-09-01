@@ -190,6 +190,7 @@ tool_sources = files(
   'tools/artifacts.js',
   'tools/askUser.js',
   'tools/display.js',
+  'tools/mcpManagement.js',
   'tools/permissions.js',
   'tools/requestedToolRunner.js',
   'tools/tools.js',

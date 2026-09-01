@@ -78,6 +78,7 @@ gjs -m tests/computer-use-smoke.js
 gjs -m tests/computer-use-benchmark-smoke.js
 gjs -m tests/skills-smoke.js
 gjs -m tests/mcp-smoke.js
+gjs -m tests/mcp-management-smoke.js
 gjs -m tests/search-provider-smoke.js
 gjs -m tests/workspace-smoke.js
 gjs -m tests/prompt-variables-smoke.js

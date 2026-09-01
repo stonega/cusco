@@ -799,6 +799,7 @@ async function registerClient(server, metadata, redirectUri, scope, options = {}
     const registration = await postJson(metadata.registration_endpoint, {
         client_name: 'Cusco',
         client_uri: 'https://github.com/stonega/cusco',
+        application_type: 'native',
         redirect_uris: [redirectUri],
         grant_types: grantTypes,
         response_types: ['code'],

@@ -47,6 +47,10 @@ function resultFor(message) {
                     },
                     required: ['message'],
                 },
+            }, {
+                name: 'hidden',
+                description: 'A tool excluded by the client allowlist.',
+                inputSchema: { type: 'object' },
             }],
         };
     case 'tools/call':

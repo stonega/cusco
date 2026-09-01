@@ -102,6 +102,7 @@ export function buildAgentModeSystemPrompt(tools, {
         nativeSearchInstruction,
         'Do not invent tool results. Do not request a tool unless the tool is listed below.',
         'Tools whose names start with mcp__ are configured MCP server tools exposed through Cusco. If the user asks to use an MCP server such as Context7 and a matching mcp__ tool is listed, use that tool instead of saying the MCP server is not configured.',
+        'Tools whose names start with mcp_server_ manage Cusco MCP connections directly. Use them instead of shell-editing mcp.json or installing a plugin when the user asks to configure, authorize, reconnect, inspect, or immediately call a new MCP server.',
         'For MCP tools, pass JSON matching the listed input fields. Include every required or clearly relevant field from the input description.',
         `You have at most ${maxIterations} tool-use iterations for this response.`,
         askUserInstruction,

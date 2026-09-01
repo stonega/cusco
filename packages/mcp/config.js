@@ -1,7 +1,13 @@
+import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 
 export const MCP_CONFIG_APP_ID = 'io.github.stonega.Cusco';
-export const MCP_PROTOCOL_VERSION = '2025-11-25';
+export const MCP_PROTOCOL_VERSION = '2026-07-28';
+export const MCP_LEGACY_PROTOCOL_VERSION = '2025-11-25';
+export const MCP_SUPPORTED_PROTOCOL_VERSIONS = Object.freeze([
+    MCP_PROTOCOL_VERSION,
+    MCP_LEGACY_PROTOCOL_VERSION,
+]);
 export const MCP_TRANSPORT_STDIO = 'stdio';
 export const MCP_TRANSPORT_HTTP = 'streamable-http';
 
@@ -9,6 +15,13 @@ function normalizeList(values) {
     return Array.isArray(values)
         ? values.map((value) => String(value).trim()).filter(Boolean)
         : [];
+}
+
+function normalizeOptionalList(values) {
+    if (values === undefined || values === null)
+        return null;
+
+    return [...new Set(normalizeList(values))];
 }
 
 function normalizeStringMap(value) {
@@ -125,6 +138,7 @@ export function normalizeMcpServerConfig(server, options = {}) {
         ).trim(),
         oauth: normalizeOauthConfig(server),
         roots: normalizeList(server?.roots),
+        allowedTools: normalizeOptionalList(server?.allowedTools ?? server?.allowed_tools),
         enabled,
         permissionPolicy: String(server?.permissionPolicy ?? 'ask').trim().toLowerCase() || 'ask',
         createdAt: server?.createdAt ?? '',
@@ -217,6 +231,135 @@ function setServerEnabledValue(server, enabled) {
     delete server.disabled;
 }
 
+function writeJsonFileAtomically(path, config) {
+    const directory = GLib.path_get_dirname(path);
+    const basename = GLib.path_get_basename(path);
+    const temporaryPath = GLib.build_filenamev([
+        directory,
+        `.${basename}.${GLib.uuid_string_random()}.tmp`,
+    ]);
+    const payload = `${JSON.stringify(config, null, 2)}\n`;
+
+    GLib.mkdir_with_parents(directory, 0o700);
+    GLib.file_set_contents(temporaryPath, payload);
+    GLib.chmod(temporaryPath, 0o600);
+
+    try {
+        Gio.File.new_for_path(temporaryPath).move(
+            Gio.File.new_for_path(path),
+            Gio.FileCopyFlags.OVERWRITE,
+            null,
+            null,
+        );
+    } finally {
+        if (GLib.file_test(temporaryPath, GLib.FileTest.EXISTS))
+            GLib.unlink(temporaryPath);
+    }
+}
+
+function looksLikeServerConfig(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return false;
+
+    return ['url', 'command', 'transport', 'args', 'oauth'].some((key) => (
+        Object.hasOwn(value, key)
+    ));
+}
+
+function writableMcpServerContainer(config) {
+    if (config?.mcpServers !== undefined)
+        return config.mcpServers;
+
+    if (config?.servers !== undefined)
+        return config.servers;
+
+    if (Array.isArray(config))
+        return config;
+
+    const entries = Object.entries(config ?? {});
+
+    if (entries.length > 0 && entries.every(([, value]) => looksLikeServerConfig(value)))
+        return config;
+
+    config.mcpServers = {};
+    return config.mcpServers;
+}
+
+function mergedServerConfig(existing, updates) {
+    const next = {
+        ...(existing ?? {}),
+        ...updates,
+    };
+
+    if (updates?.oauth && typeof updates.oauth === 'object' && !Array.isArray(updates.oauth)) {
+        next.oauth = {
+            ...(existing?.oauth && typeof existing.oauth === 'object' ? existing.oauth : {}),
+            ...updates.oauth,
+        };
+    }
+
+    return next;
+}
+
+export function upsertMcpConfigFileServer(path, name, updates = {}) {
+    const serverName = String(name ?? updates?.name ?? '').trim();
+
+    if (!serverName)
+        throw new Error('MCP server name cannot be empty.');
+
+    let config = {};
+
+    if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
+        const [, contents] = GLib.file_get_contents(path);
+        config = JSON.parse(new TextDecoder().decode(contents));
+
+        if (!config || typeof config !== 'object')
+            throw new Error('MCP config file must contain a JSON object or array.');
+    }
+
+    const container = writableMcpServerContainer(config);
+    const targetId = sanitizeMcpName(updates.id ?? serverName, 'mcp-server');
+    let stored;
+    let storedKeyOrIndex;
+
+    if (Array.isArray(container)) {
+        const index = container.findIndex((server, itemIndex) => {
+            const normalized = normalizeFileServerEntry(server, itemIndex, path);
+            return normalized.id === targetId || normalized.name === serverName;
+        });
+        const existing = index >= 0 ? container[index] : null;
+        stored = mergedServerConfig(existing, {
+            ...updates,
+            id: String(updates.id ?? existing?.id ?? targetId),
+            name: serverName,
+        });
+
+        if (index >= 0)
+            container[index] = stored;
+        else
+            container.push(stored);
+        storedKeyOrIndex = index >= 0 ? index : container.length - 1;
+    } else if (container && typeof container === 'object') {
+        const entry = Object.entries(container).find(([entryName, server]) => {
+            const normalized = normalizeFileServerEntry(server, entryName, path);
+            return normalized.id === targetId || normalized.name === serverName;
+        });
+        const key = entry?.[0] ?? serverName;
+        stored = mergedServerConfig(entry?.[1], updates);
+        container[key] = stored;
+        storedKeyOrIndex = key;
+    } else {
+        throw new Error('MCP config file does not contain a writable server list.');
+    }
+
+    writeJsonFileAtomically(path, config);
+    return normalizeFileServerEntry(
+        stored,
+        storedKeyOrIndex,
+        path,
+    );
+}
+
 export function setMcpConfigFileServerEnabled(path, targetServer, enabled) {
     if (!GLib.file_test(path, GLib.FileTest.EXISTS))
         throw new Error(`MCP config file does not exist: ${path}`);
@@ -247,5 +390,5 @@ export function setMcpConfigFileServerEnabled(path, targetServer, enabled) {
         throw new Error('MCP config file does not contain a server list.');
     }
 
-    GLib.file_set_contents(path, `${JSON.stringify(config, null, 2)}\n`);
+    writeJsonFileAtomically(path, config);
 }

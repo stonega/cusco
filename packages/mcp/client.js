@@ -3,7 +3,9 @@ import GLib from 'gi://GLib?version=2.0';
 import Soup from 'gi://Soup?version=3.0';
 
 import {
+    MCP_LEGACY_PROTOCOL_VERSION,
     MCP_PROTOCOL_VERSION,
+    MCP_SUPPORTED_PROTOCOL_VERSIONS,
     MCP_TRANSPORT_HTTP,
     MCP_TRANSPORT_STDIO,
 } from './config.js';
@@ -13,6 +15,15 @@ import {
 } from './auth.js';
 
 const DEFAULT_MCP_TIMEOUT_SECONDS = 30;
+const MCP_CLIENT_INFO = Object.freeze({
+    name: 'Cusco',
+    version: '0.5.42',
+});
+const MCP_CLIENT_CAPABILITIES = Object.freeze({
+    roots: {
+        listChanged: false,
+    },
+});
 
 function createUserVisibleError(message, userMessage = message) {
     const error = new Error(message);
@@ -139,12 +150,41 @@ function parseHttpJsonRpcResponse(responseText) {
     throw createUserVisibleError('MCP server returned a non-JSON response.');
 }
 
+function requestParams(params, protocolVersion) {
+    const normalized = params && typeof params === 'object' && !Array.isArray(params)
+        ? { ...params }
+        : {};
+
+    if (protocolVersion !== MCP_PROTOCOL_VERSION)
+        return normalized;
+
+    normalized._meta = {
+        ...(normalized._meta ?? {}),
+        'io.modelcontextprotocol/protocolVersion': MCP_PROTOCOL_VERSION,
+        'io.modelcontextprotocol/clientInfo': MCP_CLIENT_INFO,
+        'io.modelcontextprotocol/clientCapabilities': MCP_CLIENT_CAPABILITIES,
+    };
+    return normalized;
+}
+
+function requestEntityName(payload) {
+    const method = String(payload?.method ?? '');
+
+    if (method === 'tools/call' || method === 'prompts/get')
+        return String(payload?.params?.name ?? '').trim();
+    if (method === 'resources/read')
+        return String(payload?.params?.uri ?? '').trim();
+
+    return '';
+}
+
 class McpJsonRpcSession {
     constructor(config) {
         this.config = config;
         this._nextId = 1;
         this._pending = new Map();
         this._closed = false;
+        this.protocolVersion = '';
     }
 
     request(method, params = {}, options = {}) {
@@ -160,7 +200,7 @@ class McpJsonRpcSession {
             jsonrpc: '2.0',
             id,
             method,
-            params,
+            params: requestParams(params, this.protocolVersion),
         };
 
         return new Promise((resolve, reject) => {
@@ -220,7 +260,7 @@ class McpJsonRpcSession {
         this._send({
             jsonrpc: '2.0',
             method,
-            params,
+            params: requestParams(params, this.protocolVersion),
         }, options);
     }
 
@@ -389,7 +429,6 @@ class McpHttpSession extends McpJsonRpcSession {
     constructor(config) {
         super(config);
         this._sessionId = '';
-        this.protocolVersion = '';
     }
 
     connect() {
@@ -403,7 +442,7 @@ class McpHttpSession extends McpJsonRpcSession {
             jsonrpc: '2.0',
             id,
             method,
-            params,
+            params: requestParams(params, this.protocolVersion),
         }, options);
 
         if (Array.isArray(result))
@@ -419,7 +458,7 @@ class McpHttpSession extends McpJsonRpcSession {
         await this._postJson({
             jsonrpc: '2.0',
             method,
-            params,
+            params: requestParams(params, this.protocolVersion),
         }, options).catch(() => {});
     }
 
@@ -440,7 +479,15 @@ class McpHttpSession extends McpJsonRpcSession {
         if (this.protocolVersion)
             message.request_headers.append('MCP-Protocol-Version', this.protocolVersion);
 
-        if (this._sessionId)
+        if (this.protocolVersion === MCP_PROTOCOL_VERSION && payload?.method) {
+            message.request_headers.append('Mcp-Method', payload.method);
+            const entityName = requestEntityName(payload);
+
+            if (entityName)
+                message.request_headers.append('Mcp-Name', entityName);
+        }
+
+        if (this._sessionId && this.protocolVersion !== MCP_PROTOCOL_VERSION)
             message.request_headers.append('Mcp-Session-Id', this._sessionId);
 
         const requestHeaders = { ...(this.config.headers ?? {}) };
@@ -483,7 +530,7 @@ class McpHttpSession extends McpJsonRpcSession {
         const sessionId = responseHeader(message, 'Mcp-Session-Id')
             || responseHeader(message, 'mcp-session-id');
 
-        if (sessionId)
+        if (sessionId && this.protocolVersion !== MCP_PROTOCOL_VERSION)
             this._sessionId = sessionId;
 
         const status = message.get_status();
@@ -554,30 +601,50 @@ export class McpClient {
             ? new McpHttpSession(this.config)
             : new McpStdioSession(this.config);
         this._session.connect();
+        this._session.protocolVersion = MCP_PROTOCOL_VERSION;
 
+        try {
+            const discovery = await this._session.request('server/discover', {}, options);
+            const supportedVersions = Array.isArray(discovery?.supportedVersions)
+                ? discovery.supportedVersions
+                : [];
+
+            if (!supportedVersions.includes(MCP_PROTOCOL_VERSION)) {
+                throw createUserVisibleError(
+                    `${this.config.name} did not advertise support for MCP ${MCP_PROTOCOL_VERSION}.`,
+                );
+            }
+
+            this.capabilities = discovery?.capabilities ?? {};
+            this.serverInfo = discovery?._meta?.['io.modelcontextprotocol/serverInfo']
+                ?? discovery?.serverInfo
+                ?? {};
+            this._initialized = true;
+            return this;
+        } catch (error) {
+            if (error?.mcpAuth || isCancelled(options.cancellable)) {
+                this.disconnect();
+                throw error;
+            }
+        }
+
+        this._session.protocolVersion = '';
         const result = await this._session.request('initialize', {
-            protocolVersion: MCP_PROTOCOL_VERSION,
-            capabilities: {
-                roots: {
-                    listChanged: false,
-                },
-            },
-            clientInfo: {
-                name: 'Cusco',
-                version: '0.1.0',
-            },
+            protocolVersion: MCP_LEGACY_PROTOCOL_VERSION,
+            capabilities: MCP_CLIENT_CAPABILITIES,
+            clientInfo: MCP_CLIENT_INFO,
         }, options);
+        const negotiatedVersion = result?.protocolVersion ?? MCP_LEGACY_PROTOCOL_VERSION;
 
-        if (result?.protocolVersion && result.protocolVersion !== MCP_PROTOCOL_VERSION) {
+        if (!MCP_SUPPORTED_PROTOCOL_VERSIONS.includes(negotiatedVersion)
+            || negotiatedVersion !== MCP_LEGACY_PROTOCOL_VERSION) {
             this.disconnect();
             throw createUserVisibleError(
-                `${this.config.name} negotiated unsupported MCP protocol version ${result.protocolVersion}.`,
+                `${this.config.name} negotiated unsupported MCP protocol version ${negotiatedVersion}.`,
             );
         }
 
-        if (this._session && this.config.transport === MCP_TRANSPORT_HTTP)
-            this._session.protocolVersion = result?.protocolVersion ?? MCP_PROTOCOL_VERSION;
-
+        this._session.protocolVersion = negotiatedVersion;
         this.capabilities = result?.capabilities ?? {};
         this.serverInfo = result?.serverInfo ?? {};
         await this._session.notification('notifications/initialized', {}, options);

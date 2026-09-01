@@ -99,6 +99,7 @@ import { ArtifactFileStore } from '../src/storage/artifactStore.js';
 import { ConversationFileStore } from '../src/storage/conversationStore.js';
 import { MemoryFileStore } from '../src/storage/memoryStore.js';
 import { WorkspaceFileStore } from '../src/storage/workspaceStore.js';
+import { createMcpManagementTools } from '../src/tools/mcpManagement.js';
 import { createToolPermissionDecision } from '../src/tools/permissions.js';
 import { ToolManager, calculateExpression, parseToolRequest } from '../src/tools/tools.js';
 import { exportConversation } from '../src/workspace/exports.js';
@@ -565,6 +566,9 @@ if (typeof ToolManager !== 'function' || typeof calculateExpression !== 'functio
 
 if (typeof createToolPermissionDecision !== 'function')
     throw new Error('Tool permission helpers did not import');
+
+if (typeof createMcpManagementTools !== 'function')
+    throw new Error('MCP management tools did not import');
 
 if (typeof buildSkillContext !== 'function'
     || typeof discoverInstalledSkills !== 'function'

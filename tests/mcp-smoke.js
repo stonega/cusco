@@ -10,10 +10,12 @@ import {
     shouldRefreshMcpToken,
 } from '../src/mcp/auth.js';
 import {
+    MCP_LEGACY_PROTOCOL_VERSION,
     MCP_PROTOCOL_VERSION,
     MCP_TRANSPORT_HTTP,
     MCP_TRANSPORT_STDIO,
     parseMcpConfigFile,
+    upsertMcpConfigFileServer,
 } from '../src/mcp/config.js';
 import { McpManager } from '../src/mcp/manager.js';
 import { ToolManager } from '../src/tools/tools.js';
@@ -51,6 +53,7 @@ const parsed = parseMcpConfigFile(JSON.stringify({
                 callback_port: 32123,
                 scope: 'tools:read resources:read',
             },
+            allowed_tools: ['read', 'search'],
         },
         local: {
             command: gjs,
@@ -76,6 +79,9 @@ if (parsed.find((server) => server.id === 'remote')?.bearerTokenEnvVar !== 'REMO
     || parsed.find((server) => server.id === 'local')?.envPassthrough?.length !== 2) {
     throw new Error('Environment-backed MCP configuration was not normalized');
 }
+
+if (parsed.find((server) => server.id === 'remote')?.allowedTools?.join(' ') !== 'read search')
+    throw new Error('MCP allowed tool aliases were not normalized');
 
 const parsedRemoteOauth = parsed.find((server) => server.id === 'remote')?.oauth;
 
@@ -110,6 +116,9 @@ const configPath = GLib.build_filenamev([
     `cusco-mcp-${GLib.uuid_string_random()}.json`,
 ]);
 GLib.file_set_contents(configPath, JSON.stringify({
+    unrelated: {
+        retained: true,
+    },
     mcpServers: {
         'file-mcp': {
             command: gjs,
@@ -118,6 +127,20 @@ GLib.file_set_contents(configPath, JSON.stringify({
         },
     },
 }));
+upsertMcpConfigFileServer(configPath, 'deepx-code-truth', {
+    url: 'https://code-truth-mcp.deepx.fi/mcp',
+    oauth: { scopes: ['code:read'] },
+    allowedTools: ['list_code_targets'],
+    enabled: false,
+});
+const [, updatedConfigContents] = GLib.file_get_contents(configPath);
+const updatedConfig = JSON.parse(new TextDecoder().decode(updatedConfigContents));
+
+if (updatedConfig.unrelated?.retained !== true
+    || !updatedConfig.mcpServers?.['file-mcp']
+    || updatedConfig.mcpServers?.['deepx-code-truth']?.allowedTools?.[0] !== 'list_code_targets') {
+    throw new Error('Atomic MCP config upsert did not preserve unrelated settings and servers');
+}
 
 const workspace = new WorkspaceManager({
     autoDiscoverSkills: false,
@@ -128,6 +151,13 @@ workspace.addMcpServer({
     command: gjs,
     args: ['-m', fakeServerPath],
     envPassthrough: ['PATH'],
+    allowedTools: [
+        'echo',
+        'list_resources',
+        'read_resource',
+        'list_prompts',
+        'get_prompt',
+    ],
     enabled: true,
     permissionPolicy: 'allow',
 });
@@ -146,6 +176,8 @@ let httpListening = false;
 let sawEnvironmentBackedHeaders = false;
 let sawStoredBearerToken = false;
 let sawProtocolVersionHeader = false;
+let sawModernRequestMetadata = false;
+let sawMcpMethodHeader = false;
 let oauthRegistration = null;
 let oauthAuthorizationUrl = '';
 let oauthTokenExchange = null;
@@ -226,21 +258,28 @@ httpServer.add_handler('/versioned-mcp', (_server, message) => {
         }
 
         sawProtocolVersionHeader = true;
+        if (message.get_request_headers().get_one('Mcp-Method') === request.method)
+            sawMcpMethodHeader = true;
+        if (request.params?._meta?.['io.modelcontextprotocol/protocolVersion'] === MCP_PROTOCOL_VERSION)
+            sawModernRequestMetadata = true;
     }
 
     switch (request.method) {
-    case 'initialize':
+    case 'server/discover':
         setJsonResponse(message, {
             jsonrpc: '2.0',
             id: request.id,
             result: {
-                protocolVersion: MCP_PROTOCOL_VERSION,
+                resultType: 'complete',
+                supportedVersions: [MCP_PROTOCOL_VERSION],
                 capabilities: {
                     tools: { listChanged: false },
                 },
-                serverInfo: {
-                    name: 'Versioned MCP',
-                    version: '1.0.0',
+                _meta: {
+                    'io.modelcontextprotocol/serverInfo': {
+                        name: 'Versioned MCP',
+                        version: '1.0.0',
+                    },
                 },
             },
         });
@@ -346,7 +385,7 @@ httpServer.add_handler('/refreshing-mcp', (_server, message) => {
         id: request.id,
         result: request.method === 'initialize'
             ? {
-                protocolVersion: MCP_PROTOCOL_VERSION,
+                protocolVersion: MCP_LEGACY_PROTOCOL_VERSION,
                 capabilities: {},
                 serverInfo: { name: 'Refreshing MCP', version: '1.0.0' },
             }
@@ -416,6 +455,7 @@ try {
         });
 
         if (oauthRegistration?.token_endpoint_auth_method !== 'client_secret_post'
+            || oauthRegistration?.application_type !== 'native'
             || !oauthRegistration?.grant_types?.includes('refresh_token')) {
             throw new Error('MCP OAuth registration did not negotiate confidential client authentication');
         }
@@ -585,8 +625,8 @@ try {
 
         await manager.refreshServer(versionedServer.key, { timeoutSeconds: 5 });
 
-        if (!sawProtocolVersionHeader)
-            throw new Error('MCP HTTP protocol version header was not sent after initialization');
+        if (!sawProtocolVersionHeader || !sawModernRequestMetadata || !sawMcpMethodHeader)
+            throw new Error('Modern MCP HTTP protocol headers and request metadata were not sent');
         if (!sawEnvironmentBackedHeaders)
             throw new Error('MCP HTTP environment-backed headers were not resolved');
     }
@@ -613,6 +653,20 @@ try {
         if (!toolNames.includes(expected))
             throw new Error(`MCP tool was not registered: ${expected}`);
     }
+
+    if (toolNames.includes('mcp__local_mcp__hidden'))
+        throw new Error('MCP tool allowlist exposed a disallowed discovered tool');
+
+    let disallowedCallRejected = false;
+
+    try {
+        await manager.callTool(server.key, 'hidden', '{}', { timeoutSeconds: 5 });
+    } catch (error) {
+        disallowedCallRejected = String(error.message).includes('not allowed');
+    }
+
+    if (!disallowedCallRejected)
+        throw new Error('MCP manager did not reject a disallowed direct tool call');
 
     const echoTool = tools.getTool('mcp__local_mcp__echo');
 

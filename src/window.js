@@ -95,6 +95,7 @@ import { ConversationFileStore } from './storage/conversationStore.js';
 import { MemoryFileStore } from './storage/memoryStore.js';
 import { WorkspaceFileStore } from './storage/workspaceStore.js';
 import { createAskUserTool } from './tools/askUser.js';
+import { createMcpManagementTools } from './tools/mcpManagement.js';
 import { createArtifactTools } from './tools/artifacts.js';
 import { ToolManager } from './tools/tools.js';
 import { RequestedToolRunner } from './tools/requestedToolRunner.js';
@@ -1024,6 +1025,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._tools.registerTool(createAskUserTool(
             (questions, options) => this._requestAgentQuestions(questions, options),
         ));
+        for (const tool of createMcpManagementTools(this._mcp, this._tools))
+            this._tools.registerTool(tool);
         this._tools.registerTool(createAutomationCreateTool(this._cron, {
             onJobCreated: async (job) => this._handleCronJobChanged(job),
         }));

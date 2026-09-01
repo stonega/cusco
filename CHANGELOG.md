@@ -7,6 +7,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Add Agent Mode tools for direct Streamable HTTP MCP configuration, OAuth connection, non-sensitive status inspection, and same-turn invocation without installing a plugin.
+
+### Changed
+
+- Negotiate current MCP `2026-07-28` discovery and request metadata while retaining the `2025-11-25` initialization fallback for existing servers.
+
+### Fixed
+
+- Keep links in user messages readable against the accent-colored message bubble.
+- Enforce MCP tool allowlists during discovery and invocation, preserve unrelated settings with atomic `mcp.json` updates, identify OAuth registration as a native client, and report required discovery failures instead of treating them as empty successful lists.
+
 ## [0.5.42] - 2026-08-30
 
 ### Added

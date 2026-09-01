@@ -179,6 +179,9 @@ export class WorkspaceManager {
             env: { ...server.env },
             headers: { ...server.headers },
             roots: [...server.roots],
+            allowedTools: server.allowedTools === null
+                ? null
+                : [...(server.allowedTools ?? [])],
         }));
     }
 

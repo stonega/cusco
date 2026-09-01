@@ -460,6 +460,13 @@
     color: @accent_fg_color;
 }
 
+.cusco-message-user link,
+.cusco-message-user link:visited,
+.cusco-message-user link:hover,
+.cusco-message-user link:active {
+    color: @accent_fg_color;
+}
+
 .cusco-stream-replay-controls {
     background-color: alpha(@window_fg_color, 0.025);
     border-right: 1px solid alpha(@window_fg_color, 0.10);

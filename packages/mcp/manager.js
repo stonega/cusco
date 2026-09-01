@@ -7,6 +7,7 @@ import {
     normalizeMcpServerConfig,
     sanitizeMcpName,
     setMcpConfigFileServerEnabled,
+    upsertMcpConfigFileServer,
 } from './config.js';
 import { McpClient } from './client.js';
 import {
@@ -46,7 +47,15 @@ function cloneServer(server) {
             scopes: [...(server.oauth?.scopes ?? [])],
         },
         roots: [...(server.roots ?? [])],
+        allowedTools: server.allowedTools === null
+            ? null
+            : [...(server.allowedTools ?? [])],
     };
+}
+
+function isMcpToolAllowed(server, toolName) {
+    return server.allowedTools === null
+        || (server.allowedTools ?? []).includes(String(toolName ?? '').trim());
 }
 
 function compactJson(value, maxChars = MAX_SCHEMA_DESCRIPTION_CHARS) {
@@ -354,6 +363,55 @@ export class McpManager {
         return added;
     }
 
+    upsertFileServer(server) {
+        const name = String(server?.name ?? '').trim();
+
+        if (!name)
+            throw createUserVisibleError('MCP server name cannot be empty.');
+
+        const targetId = String(server.id ?? sanitizeMcpName(name, 'mcp-server')).trim();
+        const previous = this._servers.find((item) => (
+            item.source === 'file'
+            && (item.id === targetId || item.name === name)
+        ));
+        const stored = upsertMcpConfigFileServer(this._configPath, name, server);
+
+        if (previous) {
+            const authorizationChanged = previous.url !== stored.url
+                || previous.oauth?.resource !== stored.oauth?.resource
+                || previous.oauth?.clientId !== stored.oauth?.clientId
+                || (previous.oauth?.scopes ?? []).join(' ') !== (stored.oauth?.scopes ?? []).join(' ');
+
+            if (authorizationChanged)
+                this._tokenStore?.clear?.(previous.key);
+            this.disconnectServer(previous.key);
+        }
+
+        this.reloadConfig();
+        return this.listServers().find((item) => (
+            item.source === 'file' && item.id === stored.id
+        )) ?? null;
+    }
+
+    getServer(reference) {
+        const normalized = String(reference ?? '').trim();
+        const matches = this.listServers().filter((server) => (
+            server.key === normalized || server.id === normalized || server.name === normalized
+        ));
+
+        if (matches.length === 0)
+            throw createUserVisibleError(`Unknown MCP server: ${normalized || '(empty reference)'}`);
+        if (matches.length > 1)
+            throw createUserVisibleError(`MCP server reference is ambiguous: ${normalized}`);
+
+        return matches[0];
+    }
+
+    listServerToolNames(reference) {
+        const server = this.getServer(reference);
+        return (this._serverTools.get(server.key) ?? []).map((tool) => tool.name);
+    }
+
     storeServerBearerToken(key, value) {
         const server = this._servers.find((item) => item.key === key);
         const accessToken = String(value ?? '').trim();
@@ -483,19 +541,31 @@ export class McpManager {
             this._setStatus(key, 'connecting', 'Connecting...');
 
             await client.connect(options);
-            const tools = await this._tryList(() => client.listTools(options));
-            const resources = await this._tryList(() => client.listResources(options));
-            const templates = await this._tryList(() => client.listResourceTemplates(options));
-            const prompts = await this._tryList(() => client.listPrompts(options));
+            const tools = client.capabilities?.tools
+                ? await client.listTools(options)
+                : [];
+            const resources = client.capabilities?.resources
+                ? await client.listResources(options)
+                : [];
+            const templates = client.capabilities?.resources
+                ? await this._tryList(() => client.listResourceTemplates(options))
+                : [];
+            const prompts = client.capabilities?.prompts
+                ? await client.listPrompts(options)
+                : [];
+            const allowedTools = tools.filter((tool) => isMcpToolAllowed(server, tool.name));
+            const toolStatus = server.allowedTools === null
+                ? `${allowedTools.length} tools`
+                : `${allowedTools.length} allowed of ${tools.length} discovered tools`;
 
-            this._serverTools.set(key, tools);
+            this._serverTools.set(key, allowedTools);
             this._serverResources.set(key, resources);
             this._serverResourceTemplates.set(key, templates);
             this._serverPrompts.set(key, prompts);
             this._setStatus(
                 key,
                 'connected',
-                `${tools.length} tools, ${resources.length + templates.length} resources, ${prompts.length} prompts.`,
+                `${toolStatus}, ${resources.length + templates.length} resources, ${prompts.length} prompts.`,
             );
         } catch (error) {
             this._setErrorStatus(key, error);
@@ -555,6 +625,18 @@ export class McpManager {
 
         const tools = this._serverTools.get(server.key) ?? [];
         const tool = tools.find((item) => item.name === toolName);
+
+        if (!isMcpToolAllowed(server, toolName)) {
+            throw createUserVisibleError(
+                `${toolName} is not allowed for MCP server ${server.name}.`,
+            );
+        }
+        if (!tool) {
+            throw createUserVisibleError(
+                `${toolName} is not an available tool on MCP server ${server.name}.`,
+            );
+        }
+
         const args = parseMcpToolArguments(input, tool?.inputSchema);
         try {
             const client = await this._clientFor(server, options);
@@ -717,8 +799,10 @@ export class McpManager {
             });
         }
 
-        if ((this._serverResources.get(server.key)?.length ?? 0) > 0
-            || (this._serverResourceTemplates.get(server.key)?.length ?? 0) > 0) {
+        const resourcesAvailable = (this._serverResources.get(server.key)?.length ?? 0) > 0
+            || (this._serverResourceTemplates.get(server.key)?.length ?? 0) > 0;
+
+        if (resourcesAvailable && isMcpToolAllowed(server, 'list_resources')) {
             toolManager.registerTool({
                 name: `${MCP_TOOL_PREFIX}${server.namespace}__list_resources`,
                 label: `${server.name}: List Resources`,
@@ -729,6 +813,9 @@ export class McpManager {
                 concurrencySafe: true,
                 run: async () => this.listResources(server.key),
             });
+        }
+
+        if (resourcesAvailable && isMcpToolAllowed(server, 'read_resource')) {
             toolManager.registerTool({
                 name: `${MCP_TOOL_PREFIX}${server.namespace}__read_resource`,
                 label: `${server.name}: Read Resource`,
@@ -741,7 +828,9 @@ export class McpManager {
             });
         }
 
-        if ((this._serverPrompts.get(server.key)?.length ?? 0) > 0) {
+        const promptsAvailable = (this._serverPrompts.get(server.key)?.length ?? 0) > 0;
+
+        if (promptsAvailable && isMcpToolAllowed(server, 'list_prompts')) {
             toolManager.registerTool({
                 name: `${MCP_TOOL_PREFIX}${server.namespace}__list_prompts`,
                 label: `${server.name}: List Prompts`,
@@ -752,6 +841,9 @@ export class McpManager {
                 concurrencySafe: true,
                 run: async () => this.listPrompts(server.key),
             });
+        }
+
+        if (promptsAvailable && isMcpToolAllowed(server, 'get_prompt')) {
             toolManager.registerTool({
                 name: `${MCP_TOOL_PREFIX}${server.namespace}__get_prompt`,
                 label: `${server.name}: Get Prompt`,

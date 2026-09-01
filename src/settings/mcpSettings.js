@@ -59,6 +59,7 @@ function createDynamicListEditor({
     description = '',
     entryTitle,
     addTooltip,
+    initialValues = [],
     validate = () => true,
     onChanged = () => {},
 }) {
@@ -86,7 +87,12 @@ function createDynamicListEditor({
     const addButton = createActionButton('list-add-symbolic', addTooltip, () => addRow());
 
     group.set_header_suffix(addButton);
-    addRow();
+    const startingValues = Array.isArray(initialValues)
+        ? initialValues.map((value) => String(value ?? '').trim()).filter(Boolean)
+        : [];
+
+    for (const value of startingValues.length > 0 ? startingValues : [''])
+        addRow(value);
     return {
         widget: group,
         values: () => rows.map((row) => row.get_text().trim()).filter(Boolean),
@@ -488,6 +494,14 @@ export function presentAddMcpServerDialog(
         validateValue: (value) => ENVIRONMENT_NAME_PATTERN.test(value),
         onChanged: () => syncSaveState(),
     });
+    const allowedToolsEditor = createDynamicListEditor({
+        title: 'Allowed tools',
+        description: 'Optional raw MCP tool names exposed to Agent Mode. Leave empty to expose every discovered tool.',
+        entryTitle: 'Tool name',
+        addTooltip: 'Add allowed tool',
+        initialValues: defaults.allowedTools,
+        onChanged: () => syncSaveState(),
+    });
     const oauthGroup = new Adw.PreferencesGroup({
         title: 'OAuth',
         description: 'Usually automatic. Use these fields for servers that require a fixed resource, pre-registered client, or callback.',
@@ -534,6 +548,7 @@ export function presentAddMcpServerDialog(
 
     httpContent.append(endpointGroup);
     httpContent.append(oauthGroup);
+    httpContent.append(allowedToolsEditor.widget);
     httpContent.append(headersEditor.widget);
     httpContent.append(headerEnvironmentEditor.widget);
 
@@ -627,6 +642,7 @@ export function presentAddMcpServerDialog(
                 && passthroughEditor.isValid()
             : headersEditor.isValid()
                 && headerEnvironmentEditor.isValid()
+                && allowedToolsEditor.isValid()
                 && (!oauthResourceRow.get_text().trim() || isHttpUrl(oauthResourceRow.get_text()))
                 && (!requireOauthClientId || oauthClientIdRow.get_text().trim())
                 && (!oauthClientSecretEnvRow.get_text().trim()
@@ -692,6 +708,8 @@ export function presentAddMcpServerDialog(
                 envPassthrough: passthroughEditor.values(),
             });
         } else {
+            const allowedTools = allowedToolsEditor.values();
+
             Object.assign(server, {
                 url: urlRow.get_text().trim(),
                 bearerTokenEnvVar: bearerTokenRow.get_text().trim(),
@@ -706,6 +724,7 @@ export function presentAddMcpServerDialog(
                     callbackPort: Number(oauthCallbackPortRow.get_text().trim()) || 0,
                     scopes: oauthScopesRow.get_text().trim().split(/\s+/).filter(Boolean),
                 },
+                ...(allowedTools.length > 0 ? { allowedTools } : {}),
             });
         }
 

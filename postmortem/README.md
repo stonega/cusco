@@ -8,3 +8,4 @@ Use this directory for incident notes and technical retrospectives once Cusco ha
 - [2026-08-16: Streamed messages jumped to the complete response](2026-08-16-stream-revision-animation-jump.md)
 - [2026-08-19: Real provider responses jumped at completion](2026-08-19-real-stream-completion-rebuild-jump.md)
 - [2026-08-28: Message sending had two visible feedback gaps](2026-08-28-message-send-feedback-gaps.md)
+- [2026-08-31: Chat turn boundaries still stalled after content appeared](2026-08-31-chat-turn-boundary-ui-stalls.md)
