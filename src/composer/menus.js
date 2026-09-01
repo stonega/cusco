@@ -169,8 +169,6 @@ export class ComposerMenus {
             button.add_css_class('flat');
 
             const labels = new Gtk.Box({
-                orientation: Gtk.Orientation.VERTICAL,
-                spacing: 2,
                 margin_top: 4,
                 margin_bottom: 4,
                 margin_start: 6,
@@ -180,28 +178,11 @@ export class ComposerMenus {
                 label: prompt.title,
                 xalign: 0,
                 ellipsize: Pango.EllipsizeMode.END,
+                lines: 1,
+                single_line_mode: true,
             });
-            const contentLabel = new Gtk.Label({
-                label: prompt.content,
-                xalign: 0,
-                ellipsize: Pango.EllipsizeMode.END,
-            });
-            contentLabel.add_css_class('caption');
-            contentLabel.add_css_class('dim-label');
 
             labels.append(titleLabel);
-            labels.append(contentLabel);
-
-            if (variableText) {
-                const variableLabel = new Gtk.Label({
-                    label: variableText,
-                    xalign: 0,
-                    ellipsize: Pango.EllipsizeMode.END,
-                });
-                variableLabel.add_css_class('caption');
-                variableLabel.add_css_class('dim-label');
-                labels.append(variableLabel);
-            }
 
             button.set_child(labels);
             button.connect('clicked', () => {

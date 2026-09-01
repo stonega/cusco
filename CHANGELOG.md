@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- Show saved prompts as compact, single-line title rows in the composer prompt menu.
+
 ## [0.5.43] - 2026-09-01
 
 ### Added
