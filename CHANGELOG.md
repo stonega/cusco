@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.44] - 2026-09-01
+
 ### Changed
 
 - Show saved prompts as compact, single-line title rows in the composer prompt menu.
@@ -473,7 +475,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.43...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.44...HEAD
+[0.5.44]: https://github.com/stonega/cusco/compare/v0.5.43...v0.5.44
 [0.5.43]: https://github.com/stonega/cusco/compare/v0.5.42...v0.5.43
 [0.5.42]: https://github.com/stonega/cusco/compare/v0.5.41...v0.5.42
 [0.5.41]: https://github.com/stonega/cusco/compare/v0.5.40...v0.5.41
