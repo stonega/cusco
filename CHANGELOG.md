@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.43] - 2026-09-01
+
 ### Added
 
 - Add Agent Mode tools for direct Streamable HTTP MCP configuration, OAuth connection, non-sensitive status inspection, and same-turn invocation without installing a plugin.
@@ -463,7 +465,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.42...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.43...HEAD
+[0.5.43]: https://github.com/stonega/cusco/compare/v0.5.42...v0.5.43
 [0.5.42]: https://github.com/stonega/cusco/compare/v0.5.41...v0.5.42
 [0.5.41]: https://github.com/stonega/cusco/compare/v0.5.40...v0.5.41
 [0.5.40]: https://github.com/stonega/cusco/compare/v0.5.39...v0.5.40
