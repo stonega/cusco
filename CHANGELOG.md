@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.45] - 2026-09-09
+
 ### Fixed
 
 - Start each automation run with only its task prompt as history, enable skills and MCP tools in background runs, and append results to the automation chat without mixing queued runs.
@@ -479,7 +481,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.44...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.45...HEAD
+[0.5.45]: https://github.com/stonega/cusco/compare/v0.5.44...v0.5.45
 [0.5.44]: https://github.com/stonega/cusco/compare/v0.5.43...v0.5.44
 [0.5.43]: https://github.com/stonega/cusco/compare/v0.5.42...v0.5.43
 [0.5.42]: https://github.com/stonega/cusco/compare/v0.5.41...v0.5.42
