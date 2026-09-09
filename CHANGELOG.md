@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Start each automation run with only its task prompt as history, enable skills and MCP tools in background runs, and append results to the automation chat without mixing queued runs.
+
 ## [0.5.44] - 2026-09-01
 
 ### Changed

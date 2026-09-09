@@ -207,7 +207,7 @@ export class ConversationContextBuilder {
             content: BASE_RESPONSE_SYSTEM_PROMPT,
         }];
         const hookContexts = [
-            ...(this._sessionHookContexts.get(conversation.id) ?? []),
+            ...(conversation.automationRun ? [] : this._sessionHookContexts.get(conversation.id) ?? []),
             ...this._activeTurnHookContexts(conversation.id),
         ].map((context) => String(context ?? '').trim()).filter(Boolean);
 

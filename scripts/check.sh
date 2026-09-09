@@ -67,6 +67,7 @@ gjs -m tests/image-editor-window-smoke.js
 gjs -m tests/tools-smoke.js
 gjs -m tests/cron-smoke.js
 gjs -m tests/automation-smoke.js
+gjs -m tests/automation-run-smoke.js
 gjs -m tests/window-background-sync-smoke.js
 gjs -m tests/window-provider-fallback-smoke.js
 gjs -m tests/agent-mode-smoke.js

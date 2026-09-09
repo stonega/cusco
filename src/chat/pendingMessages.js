@@ -120,6 +120,9 @@ export class PendingMessagesController {
         if (!runtime)
             return null;
 
+        if (runtime.automationRun)
+            return this._enqueuePendingUserMessage(text, references, conversationId);
+
         const hookContextStart = runtime.hookContexts.length;
         if (!await this._runUserPromptHooks(
             conversation,

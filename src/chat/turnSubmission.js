@@ -37,6 +37,14 @@ function waitForUiPresentation() {
     });
 }
 
+function pendingMessagesForTurn(messages) {
+    if (messages[0]?.automationJobId)
+        return messages.slice(0, 1);
+
+    const automationIndex = messages.findIndex((message) => message.automationJobId);
+    return automationIndex < 0 ? [...messages] : messages.slice(0, automationIndex);
+}
+
 export class TurnSubmission {
     constructor({
         conversations,
@@ -125,12 +133,18 @@ export class TurnSubmission {
     }
 
     _drainPendingUserMessages(conversationId) {
-        const pendingMessages = [...this._getPendingUserMessages(conversationId)];
+        const queuedMessages = this._getPendingUserMessages(conversationId);
+        const pendingMessages = pendingMessagesForTurn(queuedMessages);
 
         if (pendingMessages.length === 0)
             return [];
 
-        this._pendingUserMessagesByConversation.delete(conversationId);
+        const remainingMessages = queuedMessages.slice(pendingMessages.length);
+
+        if (remainingMessages.length > 0)
+            this._pendingUserMessagesByConversation.set(conversationId, remainingMessages);
+        else
+            this._pendingUserMessagesByConversation.delete(conversationId);
         this._renderPendingUserMessages();
 
         const conversation = this._conversations.getConversation(conversationId);
@@ -155,13 +169,17 @@ export class TurnSubmission {
                     metadata: {
                         composerReferences: references,
                         composerText: pendingMessage.content,
+                        ...(pendingMessage.automationJobId
+                            ? { automationJobId: pendingMessage.automationJobId }
+                            : {}),
                     },
                 },
             );
 
             this._conversations.appendMessage(conversation.id, userMessage, { persist: 'async' });
             this._addMessageIfActiveConversation(conversation.id, userMessage);
-            this._promptMemoryProposal(userMessage, conversation);
+            if (!pendingMessage.automationJobId)
+                this._promptMemoryProposal(userMessage, conversation);
             messages.push(userMessage);
         }
 
@@ -171,6 +189,12 @@ export class TurnSubmission {
     }
 
     _drainPendingUserMessagesForRuntime(conversation, runtimeMessages) {
+        // Scheduled runs cannot join a live response or absorb queued chat input.
+        if (conversation.automationRun
+            || this._getPendingUserMessages(conversation.id)[0]?.automationJobId) {
+            return [];
+        }
+
         const messages = this._drainPendingUserMessages(conversation.id);
 
         for (const message of messages) {
@@ -190,7 +214,7 @@ export class TurnSubmission {
     }
 
     async _preparePendingUserMessageHooks(conversation, cancellable) {
-        const pendingMessages = [...this._getPendingUserMessages(conversation.id)];
+        const pendingMessages = pendingMessagesForTurn(this._getPendingUserMessages(conversation.id));
         const runtime = this._activeTurnsByConversation.get(conversation.id);
         let changed = false;
 
@@ -251,7 +275,18 @@ export class TurnSubmission {
         let presentationFinished = null;
 
         try {
+            const runtime = this._activeTurnsByConversation.get(conversation.id);
+            if (runtime)
+                runtime.automationRun = Boolean(this._getPendingUserMessages(conversation.id)[0]?.automationJobId);
+
+            const submittedIds = new Set(pendingMessagesForTurn(
+                this._getPendingUserMessages(conversation.id),
+            ).map((message) => message.id));
             await this._preparePendingUserMessageHooks(conversation, cancellable);
+
+            if (!submittedIds.has(this._getPendingUserMessages(conversation.id)[0]?.id))
+                return false;
+
             const messages = this._drainPendingUserMessages(conversation.id);
 
             if (messages.length === 0)
@@ -264,6 +299,7 @@ export class TurnSubmission {
 
             const responseResult = await this._streamAssistantResponse(conversation.id, {
                 cancellable,
+                automationMessage: messages[0].metadata?.automationJobId ? messages[0] : null,
                 onPresentationSettling: (promise) => {
                     presentationFinished = promise;
                 },

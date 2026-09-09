@@ -2303,6 +2303,8 @@ class CuscoWindow extends Adw.ApplicationWindow {
         if (!pendingMessage)
             throw automationError('The automation prompt could not be queued.');
 
+        pendingMessage.automationJobId = job.id;
+
         if (this._isConversationBusy(conversation.id)) {
             this._schedulePendingConversationSend();
 

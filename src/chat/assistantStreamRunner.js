@@ -15,6 +15,21 @@ function wasOperationCancelled(error, cancellable = null) {
     return isCancellableCancelled(cancellable) || isGioError(error, Gio.IOErrorEnum.CANCELLED);
 }
 
+function automationRunConversation(conversation, promptMessage) {
+    return {
+        ...conversation,
+        automationRun: true,
+        agentModeEnabled: true,
+        memoryEnabled: false,
+        // Keep the transcript as the output destination, but expose only this run
+        // when rebuilding context for tool use or Stop-hook continuations.
+        get messages() {
+            const promptIndex = conversation.messages.findIndex((message) => message.id === promptMessage.id);
+            return promptIndex < 0 ? [promptMessage] : conversation.messages.slice(promptIndex);
+        },
+    };
+}
+
 export class AssistantStreamRunner {
     constructor({
         appSettings,
@@ -103,11 +118,14 @@ export class AssistantStreamRunner {
     }
 
     async _streamAssistantResponse(conversationId, options = {}) {
-        const conversation = this._conversations.getConversation(conversationId);
+        const storedConversation = this._conversations.getConversation(conversationId);
 
-        if (!conversation)
+        if (!storedConversation)
             return;
 
+        const conversation = options.automationMessage
+            ? automationRunConversation(storedConversation, options.automationMessage)
+            : storedConversation;
         const ownsActiveTurn = !options.cancellable;
         const cancellable = options.cancellable ?? this._beginActiveTurn(conversation.id);
 
@@ -144,7 +162,8 @@ export class AssistantStreamRunner {
                 return { stoppedBeforeAssistantText };
             }
 
-            this._injectMemoryContext(conversation);
+            if (!conversation.automationRun)
+                this._injectMemoryContext(conversation);
             const activeSkills = this._injectSkillContext(conversation);
 
             if (conversation.agentModeEnabled) {
@@ -163,11 +182,13 @@ export class AssistantStreamRunner {
                 await Promise.all(toolRefreshes);
             }
 
-            const compactionStatus = await this._maybeAutoCompactConversation(
-                conversation,
-                activeSkills,
-                cancellable,
-            );
+            const compactionStatus = conversation.automationRun
+                ? false
+                : await this._maybeAutoCompactConversation(
+                    conversation,
+                    activeSkills,
+                    cancellable,
+                );
 
             if (compactionStatus === 'stopped') {
                 stoppedBeforeAssistantText = true;

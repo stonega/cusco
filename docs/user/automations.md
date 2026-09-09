@@ -27,7 +27,13 @@ message history, and **Run now** can still run a paused automation.
 
 Select an automation to change its provider, model, reasoning, or other
 conversation controls. Future runs use those selections and retain earlier
-messages as context.
+messages in the transcript. Each scheduled or immediate task run starts with
+only its saved prompt as conversation history, plus the configured skills and
+tool instructions. Agent Mode and configured MCP tools are available on every
+task run, including in the background, with the normal tool permissions.
+Earlier runs, chat replies, and conversation summaries are not sent as context.
+The new result is appended to the automation's conversation. Overlapping runs
+are queued and executed separately.
 
 Cusco installs schedules in the current user's crontab. On systemd-based GNOME
 desktops, the schedule starts Cusco through the graphical user session so an

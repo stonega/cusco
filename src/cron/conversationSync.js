@@ -112,7 +112,7 @@ export class CronConversationSync {
                 conversationType: 'cron',
                 cronJobId: job.id,
                 memoryEnabled: false,
-                agentModeEnabled: false,
+                agentModeEnabled: Boolean(job.prompt),
                 messages: [createMessage('system', this.formatJobCreatedMessage(job))],
             });
             changed = true;
