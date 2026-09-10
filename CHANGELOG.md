@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.46] - 2026-09-10
+
 ### Added
 
 - Add a Cloudflare plugin backed by Cloudflare's official hosted API MCP server, with OAuth, Secret Service credentials, and permission-gated access across the Cloudflare API.
@@ -495,7 +497,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.45...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.46...HEAD
+[0.5.46]: https://github.com/stonega/cusco/compare/v0.5.45...v0.5.46
 [0.5.45]: https://github.com/stonega/cusco/compare/v0.5.44...v0.5.45
 [0.5.44]: https://github.com/stonega/cusco/compare/v0.5.43...v0.5.44
 [0.5.43]: https://github.com/stonega/cusco/compare/v0.5.42...v0.5.43
