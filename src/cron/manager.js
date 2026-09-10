@@ -1,7 +1,7 @@
 import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 
-import { TOOL_PERMISSION_ASK } from '../tools/permissions.js';
+import { TOOL_PERMISSION_ALLOW, TOOL_PERMISSION_ASK } from '../tools/permissions.js';
 
 const APP_ID = 'io.github.stonega.Cusco';
 const CRONTAB_BEGIN = '# CUSCO_CRON_BEGIN';
@@ -313,7 +313,7 @@ export function parseCronCreateInput(input) {
 }
 
 export function parseAutomationCreateInput(input) {
-    const inputObject = parseJobInputObject(input, 'Automation');
+    const inputObject = parseAutomationToolInput(input, ['title', 'schedule', 'prompt', 'enabled']);
 
     if (!normalizePrompt(inputObject.prompt))
         throw userVisibleError('Automation prompt cannot be empty.');
@@ -723,9 +723,10 @@ export function formatCronJobForTranscript(job) {
     ].join('\n');
 }
 
-export function formatAutomationForTranscript(job) {
+export function formatAutomationForTranscript(job, heading = 'Automation created') {
     return [
-        'Automation created',
+        heading,
+        `ID: ${job.id}`,
         `Title: ${job.title}`,
         `Schedule: ${job.schedule}`,
         `Status: ${job.enabled ? 'Active' : 'Paused'}`,
@@ -734,12 +735,77 @@ export function formatAutomationForTranscript(job) {
     ].join('\n');
 }
 
+const AUTOMATION_INPUT_PROPERTIES = {
+    id: { type: 'string', description: 'Exact automation ID returned by automation_list or automation_create.' },
+    title: { type: 'string', description: 'Automation name.' },
+    schedule: { type: 'string', description: 'Five-field cron expression in the local system timezone.' },
+    prompt: { type: 'string', description: 'Nonempty prompt sent to AI on each run.' },
+    enabled: { type: 'boolean', description: 'Whether scheduled runs are active.' },
+};
+
+function automationInputSchema(fields, required = []) {
+    return {
+        type: 'object',
+        properties: Object.fromEntries(fields.map((field) => [field, AUTOMATION_INPUT_PROPERTIES[field]])),
+        required,
+        additionalProperties: false,
+    };
+}
+
+function parseAutomationToolInput(input, fields) {
+    const parsed = parseJobInputObject(input, 'Automation');
+
+    for (const [key, value] of Object.entries(parsed)) {
+        if (!fields.includes(key))
+            throw userVisibleError(`Unknown automation field: ${key}`);
+
+        if (key === 'enabled') {
+            if (typeof value !== 'boolean')
+                throw userVisibleError('Automation enabled must be a boolean.');
+        } else if (typeof value !== 'string' || !value.trim()) {
+            throw userVisibleError(`Automation ${key} must be a nonempty string.`);
+        }
+    }
+
+    return parsed;
+}
+
+async function automationFromInput(cronManager, input) {
+    const id = String(input.id ?? '').trim();
+
+    if (!id)
+        throw userVisibleError('Automation ID is required. Use automation_list to find it.');
+
+    const job = (await cronManager.listJobs()).find((candidate) => candidate.id === id);
+
+    if (!job)
+        throw userVisibleError(`Automation does not exist: ${id}`);
+    if (!job.prompt)
+        throw userVisibleError('This scheduled job does not contain an AI prompt.');
+
+    return job;
+}
+
+function automationSummary(job) {
+    return {
+        id: job.id,
+        title: job.title,
+        schedule: job.schedule,
+        prompt: job.prompt,
+        enabled: job.enabled,
+        conversationId: job.conversationId,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+    };
+}
+
 export function createAutomationCreateTool(cronManager, options = {}) {
     return {
         name: 'automation_create',
         label: 'Automation',
         description: 'Create a scheduled AI task managed by Cusco. Each run sends the prompt to AI and stores the answer in the automation conversation.',
         inputDescription: 'JSON object: {"title":"Daily briefing","schedule":"0 9 * * *","prompt":"Summarize today’s priorities","enabled":true}',
+        inputSchema: automationInputSchema(['title', 'schedule', 'prompt', 'enabled'], ['schedule', 'prompt']),
         permissionPolicy: TOOL_PERMISSION_ASK,
         requiresPermission: true,
         concurrencySafe: false,
@@ -750,6 +816,128 @@ export function createAutomationCreateTool(cronManager, options = {}) {
             return formatAutomationForTranscript(job);
         },
     };
+}
+
+export function createAutomationTools(cronManager, options = {}) {
+    const idFields = ['id'];
+    const updateFields = ['id', 'title', 'schedule', 'prompt', 'enabled'];
+    const mutationPolicy = {
+        permissionPolicy: TOOL_PERMISSION_ASK,
+        requiresPermission: true,
+        concurrencySafe: false,
+    };
+
+    return [
+        createAutomationCreateTool(cronManager, {
+            onJobCreated: options.onJobCreated ?? options.onJobChanged,
+        }),
+        {
+            name: 'automation_list',
+            label: 'List Automations',
+            description: 'List all Cusco AI automations, including paused tasks, with exact IDs, prompts, schedules, and conversation IDs.',
+            inputDescription: 'Empty JSON object: {}',
+            inputSchema: automationInputSchema([]),
+            permissionPolicy: TOOL_PERMISSION_ALLOW,
+            requiresPermission: false,
+            concurrencySafe: false,
+            run: async (input) => {
+                parseAutomationToolInput(String(input ?? '').trim() || '{}', []);
+                const jobs = (await cronManager.listJobs()).filter((job) => job.prompt);
+                return JSON.stringify(jobs.map(automationSummary), null, 2);
+            },
+        },
+        {
+            name: 'automation_get',
+            label: 'Inspect Automation',
+            description: 'Read the current prompt, schedule, status, and conversation ID for one Cusco AI automation.',
+            inputDescription: 'JSON object: {"id":"automation-id"}',
+            inputSchema: automationInputSchema(idFields, idFields),
+            permissionPolicy: TOOL_PERMISSION_ALLOW,
+            requiresPermission: false,
+            concurrencySafe: false,
+            run: async (input) => {
+                const job = await automationFromInput(cronManager, parseAutomationToolInput(input, idFields));
+                return JSON.stringify(automationSummary(job), null, 2);
+            },
+        },
+        {
+            name: 'automation_update',
+            label: 'Update Automation',
+            description: 'Edit an existing Cusco AI automation. Provide its exact ID and at least one of title, schedule, prompt, or enabled. Omitted fields and message history are preserved.',
+            inputDescription: 'JSON object: {"id":"automation-id","schedule":"0 10 * * *","prompt":"Summarize my priorities"}',
+            inputSchema: automationInputSchema(updateFields, idFields),
+            ...mutationPolicy,
+            run: async (input) => {
+                const parsed = parseAutomationToolInput(input, updateFields);
+                const { id: _id, ...updates } = parsed;
+
+                if (Object.keys(updates).length === 0)
+                    throw userVisibleError('Provide at least one automation field to update.');
+
+                const job = await automationFromInput(cronManager, parsed);
+                const updated = await cronManager.updateJob(job.id, updates);
+                await options.onJobChanged?.(updated);
+                return formatAutomationForTranscript(updated, 'Automation updated');
+            },
+        },
+        ...['pause', 'resume'].map((action) => ({
+            name: `automation_${action}`,
+            label: action === 'pause' ? 'Pause Automation' : 'Resume Automation',
+            description: action === 'pause'
+                ? 'Pause future scheduled runs of a Cusco AI automation without deleting its prompt or message history. An already running response continues.'
+                : 'Resume future scheduled runs of a paused Cusco AI automation without changing its prompt, schedule, or message history.',
+            inputDescription: 'JSON object: {"id":"automation-id"}',
+            inputSchema: automationInputSchema(idFields, idFields),
+            ...mutationPolicy,
+            run: async (input) => {
+                const job = await automationFromInput(cronManager, parseAutomationToolInput(input, idFields));
+                const updated = await cronManager.setJobEnabled(job.id, action === 'resume');
+                await options.onJobChanged?.(updated);
+                return formatAutomationForTranscript(updated, `Automation ${action === 'pause' ? 'paused' : 'resumed'}`);
+            },
+        })),
+        {
+            name: 'automation_run',
+            label: 'Run Automation',
+            description: 'Queue one immediate run of a Cusco AI automation, even when paused. Returns after queuing; the AI answer appears in the automation conversation. The recurring schedule and paused status are unchanged.',
+            inputDescription: 'JSON object: {"id":"automation-id"}',
+            inputSchema: automationInputSchema(idFields, idFields),
+            ...mutationPolicy,
+            run: async (input, context = {}) => {
+                const job = await automationFromInput(cronManager, parseAutomationToolInput(input, idFields));
+
+                if (typeof options.runJob !== 'function')
+                    throw userVisibleError('Automation execution is unavailable.');
+
+                const result = await options.runJob(job, context);
+                return JSON.stringify({
+                    id: job.id,
+                    title: job.title,
+                    status: result.queued ? 'queued' : 'finished',
+                    conversationId: result.conversationId,
+                }, null, 2);
+            },
+        },
+        {
+            name: 'automation_delete',
+            label: 'Delete Automation',
+            description: 'Delete a Cusco AI automation and its conversation history. Use pause to keep the automation and history. An automation cannot delete its own active conversation; request that from another chat or the sidebar.',
+            inputDescription: 'JSON object: {"id":"automation-id"}',
+            inputSchema: automationInputSchema(idFields, idFields),
+            ...mutationPolicy,
+            run: async (input, context = {}) => {
+                const job = await automationFromInput(cronManager, parseAutomationToolInput(input, idFields));
+
+                if (options.deleteJob)
+                    await options.deleteJob(job, context);
+                else
+                    await cronManager.deleteJob(job.id);
+
+                await options.onJobDeleted?.(job);
+                return formatAutomationForTranscript(job, 'Automation deleted');
+            },
+        },
+    ];
 }
 
 export function createCronCreateTool(cronManager, options = {}) {

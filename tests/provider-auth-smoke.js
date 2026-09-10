@@ -216,6 +216,20 @@ assert(openAiRequest.headers['chatgpt-account-id'] === 'account-fixture'
     && openAiRequest.body.include.includes('reasoning.encrypted_content'),
 'ChatGPT subscription request profile was incomplete');
 
+const defaultReasoningRequest = await openAiManager.authorizeRequest(
+    'openai', 'chatgpt-subscription', {
+        operation: 'chat', url: 'https://api.openai.com/v1/responses', headers: {}, stream: true,
+        body: { model: 'gpt-5.6-sol', input: [], include: ['web_search_call.action.sources'] },
+    },
+);
+assert(defaultReasoningRequest.body.include.join(',') === 'web_search_call.action.sources,reasoning.encrypted_content',
+    'Subscription requests must retain encrypted reasoning with the default effort');
+const repeatedAuthorization = await openAiManager.authorizeRequest(
+    'openai', 'chatgpt-subscription', defaultReasoningRequest,
+);
+assert(repeatedAuthorization.body.include.length === 2,
+    'Subscription authorization duplicated include fields');
+
 let refreshCount = 0;
 const grokTokens = new MemoryProviderTokenStore({
     'grok:grok-subscription': {

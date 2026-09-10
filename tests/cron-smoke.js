@@ -1,6 +1,7 @@
 import {
     buildAutomationCommand,
     createAutomationCreateTool,
+    createAutomationTools,
     CronJobManager,
     parseAutomationCreateInput,
     parseCronCreateInput,
@@ -9,6 +10,7 @@ import {
     serializeCronJob,
 } from '../src/cron/manager.js';
 import { ToolManager } from '../src/tools/tools.js';
+import { buildAgentModeSystemPrompt } from '../src/chat/agentMode.js';
 import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 
@@ -262,6 +264,171 @@ jobs = await manager.listJobs();
 
 if (jobs.length !== 3 || !jobs.find((job) => job.title === 'Weekly plan'))
     throw new Error('Automation slash command did not persist a job');
+
+const managementBackend = new FakeCrontabBackend(unmanagedCrontab);
+const managementManager = new CronJobManager({ backend: managementBackend, logDirectory });
+const legacyCommand = await managementManager.createJob({
+    title: 'Legacy command', schedule: '0 1 * * *', command: '/usr/bin/true',
+});
+const managementTools = new ToolManager();
+const changedJobs = [];
+const deletedJobs = [];
+const runJobs = [];
+
+for (const tool of createAutomationTools(managementManager, {
+    onJobChanged: (job) => changedJobs.push(job),
+    onJobDeleted: (job) => deletedJobs.push(job),
+    runJob: (job, context) => {
+        runJobs.push({ job, context });
+        return { queued: true, conversationId: job.conversationId };
+    },
+})) {
+    managementTools.registerTool(tool);
+}
+
+async function runAutomationTool(name, input = {}, context = {}) {
+    return managementTools.runRequest(
+        managementTools.createRequest(name, JSON.stringify(input)), context,
+    );
+}
+
+for (const action of ['create', 'list', 'get', 'update', 'pause', 'resume', 'run', 'delete']) {
+    const tool = managementTools.getTool(`automation_${action}`);
+    const requiresPermission = !['list', 'get'].includes(action);
+
+    if (!tool || tool.requiresPermission !== requiresPermission
+        || tool.permissionPolicy !== (requiresPermission ? 'ask' : 'allow')
+        || tool.inputSchema?.additionalProperties !== false) {
+        throw new Error(`Automation ${action} did not expose its schema and permission policy`);
+    }
+}
+
+if (JSON.parse((await runAutomationTool('automation_list')).output).length !== 0)
+    throw new Error('Automation listing exposed legacy shell command jobs');
+
+const createdResult = await runAutomationTool('automation_create', {
+    title: 'Managed briefing', schedule: '0 9 * * *', prompt: 'Original prompt',
+});
+const managedJob = changedJobs[0];
+
+if (!managedJob || !createdResult.output.includes(`ID: ${managedJob.id}`))
+    throw new Error('Automation creation did not report an actionable ID and synchronize changes');
+
+await managementManager.updateJob(managedJob.id, { conversationId: 'managed-conversation' });
+await runAutomationTool('automation_update', { id: managedJob.id, title: 'Renamed briefing', schedule: '0 10 * * *' });
+let inspectedJob = JSON.parse((await runAutomationTool('automation_get', { id: managedJob.id })).output);
+
+if (inspectedJob.title !== 'Renamed briefing' || inspectedJob.schedule !== '0 10 * * *'
+    || inspectedJob.prompt !== 'Original prompt' || inspectedJob.conversationId !== 'managed-conversation'
+    || inspectedJob.createdAt !== managedJob.createdAt || !inspectedJob.enabled
+    || Object.hasOwn(inspectedJob, 'command')) {
+    throw new Error('Partial automation updates lost preserved fields or exposed launch commands');
+}
+
+await runAutomationTool('automation_update', { id: managedJob.id, prompt: 'Updated prompt', enabled: false });
+await runAutomationTool('automation_resume', { id: managedJob.id });
+inspectedJob = JSON.parse((await runAutomationTool('automation_get', { id: managedJob.id })).output);
+
+if (!inspectedJob.enabled || inspectedJob.prompt !== 'Updated prompt')
+    throw new Error('Automation resume did not retain the updated prompt');
+
+await runAutomationTool('automation_pause', { id: managedJob.id });
+await runAutomationTool('automation_pause', { id: managedJob.id });
+const listedJobs = JSON.parse((await runAutomationTool('automation_list')).output);
+
+if (listedJobs.length !== 1 || listedJobs[0].id !== managedJob.id || listedJobs[0].enabled
+    || changedJobs.length !== 6 || !managementBackend.contents.includes('CUSCO_CRON_DISABLED')) {
+    throw new Error('Automation pause was not idempotent, persisted, and visible in the list');
+}
+
+const runResult = JSON.parse((await runAutomationTool('automation_run', { id: managedJob.id }, {
+    conversationId: 'requesting-chat',
+})).output);
+
+if (runResult.status !== 'queued' || runResult.conversationId !== 'managed-conversation'
+    || runJobs.length !== 1 || runJobs[0].job.enabled
+    || runJobs[0].context.conversationId !== 'requesting-chat'
+    || (await managementManager.listJobs()).find((job) => job.id === managedJob.id).enabled) {
+    throw new Error('Running a paused automation failed to queue or changed its scheduled status');
+}
+
+const contentsBeforeInvalidInput = managementBackend.contents;
+
+for (const [action, input] of [
+    ['get', {}],
+    ['get', { id: 'missing' }],
+    ['update', { id: managedJob.id }],
+    ['update', { id: managedJob.id, prompt: '' }],
+    ['update', { id: managedJob.id, prompt: null }],
+    ['update', { id: managedJob.id, schedule: '@daily' }],
+    ['update', { id: managedJob.id, enabled: 'false' }],
+    ['update', { id: managedJob.id, command: '/usr/bin/false' }],
+    ['update', { id: managedJob.id, conversationId: 'other-chat' }],
+    ['create', { schedule: '0 9 * * *', prompt: 'Test', enabled: 'false' }],
+    ['create', { schedule: '0 9 * * *', prompt: 'Test', executablePath: '/usr/bin/false' }],
+    ...['get', 'update', 'pause', 'resume', 'run', 'delete'].map((action) => [
+        action, { id: legacyCommand.id, ...(action === 'update' ? { prompt: 'Replacement' } : {}) },
+    ]),
+    ...['update', 'pause', 'resume', 'run', 'delete'].map((action) => [
+        action, { id: 'missing', ...(action === 'update' ? { prompt: 'Replacement' } : {}) },
+    ]),
+]) {
+    let rejected = false;
+
+    try {
+        await runAutomationTool(`automation_${action}`, input);
+    } catch (error) {
+        rejected = Boolean(error.userMessage);
+    }
+
+    if (!rejected || managementBackend.contents !== contentsBeforeInvalidInput)
+        throw new Error(`Invalid automation ${action} input changed the crontab: ${JSON.stringify(input)}`);
+}
+
+for (const badInput of ['[]', 'null', '{invalid']) {
+    let rejected = false;
+
+    try {
+        await managementTools.runRequest(managementTools.createRequest('automation_list', badInput));
+    } catch (error) {
+        rejected = Boolean(error.userMessage);
+    }
+
+    if (!rejected)
+        throw new Error(`Automation tool accepted invalid JSON input: ${badInput}`);
+}
+
+managementBackend.writeError = new Error('Simulated crontab write failure');
+let writeRejected = false;
+
+try {
+    await runAutomationTool('automation_resume', { id: managedJob.id });
+} catch (error) {
+    writeRejected = error === managementBackend.writeError;
+}
+
+if (!writeRejected || changedJobs.length !== 6)
+    throw new Error('Failed automation persistence was reported as a successful change');
+
+managementBackend.writeError = null;
+const deleteResult = await runAutomationTool('automation_delete', { id: managedJob.id });
+
+if (!deleteResult.output.includes('Automation deleted') || deletedJobs[0]?.id !== managedJob.id
+    || JSON.parse((await runAutomationTool('automation_list')).output).length !== 0
+    || (await managementManager.listJobs())[0]?.id !== legacyCommand.id
+    || !managementBackend.contents.startsWith(unmanagedCrontab)) {
+    throw new Error('Automation deletion did not synchronize removal or preserve unrelated jobs');
+}
+
+for (const nativeToolCalling of [false, true]) {
+    const automationPrompt = buildAgentModeSystemPrompt(managementTools.listTools(), { nativeToolCalling });
+
+    if (!automationPrompt.includes('Use automation_* tools for in-app scheduled AI tasks')
+        || !automationPrompt.includes('Do not create a duplicate')
+        || !automationPrompt.includes('A queued run is not a completed run')) {
+        throw new Error('Agent Mode did not receive automation management guidance');
+    }
+}
 
 await manager.deleteJob(firstJob.id);
 jobs = await manager.listJobs();

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "cloudflare-api": {
+      "name": "Cloudflare API",
+      "description": "Cloudflare's official hosted MCP server for searching and using the complete Cloudflare API.",
+      "transport": "streamable-http",
+      "url": "https://mcp.cloudflare.com/mcp",
+      "oauth": {
+        "resource": "https://mcp.cloudflare.com/mcp"
+      },
+      "permissionPolicy": "ask"
+    }
+  }
+}

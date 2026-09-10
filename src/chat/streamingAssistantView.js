@@ -136,7 +136,7 @@ export function createStreamingAssistantView({
             message.id,
             {
                 ...message.metadata,
-                geminiProviderParts: providerParts.map((part) => ({ ...part })),
+                providerParts: providerParts.map((part) => ({ ...part })),
             },
             { persist: false },
         );

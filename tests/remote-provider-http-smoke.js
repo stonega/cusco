@@ -13,6 +13,14 @@ import {
     ServerSentEventDecoder,
 } from '../src/providers/remoteProvider.js';
 import { createMessage } from '../src/providers/provider.js';
+import { createNativeToolRuntimeBatch } from '../src/chat/agentMode.js';
+
+const subscriptionOutput = [
+    { type: 'reasoning', id: 'rs-subscription', summary: [], encrypted_content: 'encrypted-fixture' },
+    { type: 'message', id: 'msg-subscription', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Checking.' }] },
+    { type: 'function_call', id: 'fc-subscription', call_id: 'call-subscription', name: 'calc', arguments: '{"expression":"2+2"}', status: 'completed' },
+    { type: 'function_call', id: 'fc-subscription-2', call_id: 'call-subscription-2', name: 'calc', arguments: '{"expression":"3+3"}', status: 'completed' },
+];
 
 function assertEqual(actual, expected, label) {
     if (actual !== expected)
@@ -401,6 +409,37 @@ server.add_handler('/v1/responses', (_server, message) => {
     ]);
 });
 
+server.add_handler('/subscription/responses', (_server, message) => {
+    const request = requestJson(message);
+    const results = request.input.filter(item => item.type === 'function_call_output');
+
+    if (results.length > 0) {
+        assertEqual(JSON.stringify(request.input.slice(1, 5)), JSON.stringify(subscriptionOutput),
+            'Subscription follow-up replays ordered reasoning, commentary phase, and parallel calls');
+        assertEqual(results.map(item => item.call_id).join(','), 'call-subscription,call-subscription-2',
+            'Subscription follow-up preserves call IDs');
+        setEventStreamResponse(message, [
+            eventData({ type: 'response.output_text.delta', delta: '4 and 6.' }),
+            eventData({ type: 'response.completed', response: { status: 'completed', output: [] } }),
+        ]);
+        return;
+    }
+
+    setEventStreamResponse(message, [
+        eventData({ type: 'response.created', response: { id: 'resp-subscription', output: [] } }),
+        ...subscriptionOutput.map((item, output_index) => eventData({ type: 'response.output_item.done', output_index, item })),
+        eventData({ type: 'response.completed', response: { id: 'resp-subscription', status: 'completed', output: [], usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 } } }),
+    ]);
+});
+
+server.add_handler('/subscription-interrupted/responses', (_server, message) => {
+    setEventStreamResponse(message, [
+        eventData({ type: 'response.output_text.delta', delta: 'Partial' }),
+        eventData({ type: 'response.output_item.done', output_index: 0, item: subscriptionOutput[2] }),
+        'data: [DONE]\n\n',
+    ]);
+});
+
 server.add_handler('/deepseek/responses', (_server, message) => {
     const request = requestJson(message);
     const hasWebSearch = request.tools?.some((tool) => tool?.type === 'web_search');
@@ -704,6 +743,43 @@ if (listening) {
             5,
             'OpenAI Responses stream usage',
         );
+
+        const subscriptionProvider = new OpenAiResponsesProvider({
+            ...config,
+            id: 'openai',
+            name: 'Subscription Provider',
+            baseUrl: `${serverBaseUrl}/subscription`,
+        });
+        const subscriptionEvents = await collectStreamChunks(subscriptionProvider);
+        const subscriptionCalls = subscriptionEvents.find(chunk => chunk?.type === 'tool_calls')?.toolCalls ?? [];
+        assertEqual(subscriptionCalls.length, 2, 'Empty subscription terminal output preserves parallel tool calls');
+        assertEqual(subscriptionCalls[0]?.input, '{"expression":"2+2"}', 'Subscription tool arguments');
+        assertEqual(resolvedText(subscriptionEvents), 'Checking.', 'Empty subscription terminal output preserves completed text');
+        const subscriptionContext = subscriptionEvents.find(chunk => chunk?.type === 'provider_context')?.providerParts ?? [];
+        const subscriptionHistory = [
+            createMessage('user', 'Stream this'),
+            ...createNativeToolRuntimeBatch('Checking.', subscriptionCalls, subscriptionCalls.map((call, index) => ({
+                role: 'tool', toolCallId: call.id, toolName: call.name, content: index === 0 ? '4' : '6',
+            })), { providerParts: subscriptionContext }),
+        ];
+        const subscriptionFollowUp = [];
+        for await (const chunk of subscriptionProvider.streamChat(subscriptionHistory, { timeoutSeconds: 5 }))
+            subscriptionFollowUp.push(chunk);
+        assertEqual(resolvedText(subscriptionFollowUp), '4 and 6.', 'Subscription tool loop reaches the final answer');
+
+        let subscriptionInterruptedError = null;
+        let interruptedSubscriptionTools = false;
+        try {
+            for await (const chunk of new OpenAiResponsesProvider({
+                ...config, baseUrl: `${serverBaseUrl}/subscription-interrupted`,
+            }).streamChat([createMessage('user', 'Interrupt this')], { timeoutSeconds: 5 }))
+                interruptedSubscriptionTools ||= chunk?.type === 'tool_calls';
+        } catch (error) {
+            subscriptionInterruptedError = error;
+        }
+        assertEqual(interruptedSubscriptionTools, false, 'Interrupted subscription stream does not execute tools');
+        assertEqual(subscriptionInterruptedError?.userMessage?.includes('ended before completion'), true,
+            'Subscription stream still requires a terminal response');
 
         const deepSeekResponsesProvider = new OpenAiResponsesProvider({
             ...config,

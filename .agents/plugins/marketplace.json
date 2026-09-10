@@ -29,6 +29,18 @@
       "category": "Communication"
     },
     {
+      "name": "cloudflare",
+      "source": {
+        "source": "local",
+        "path": "./plugins/cloudflare"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
       "name": "gnome-shell-extension-development",
       "source": {
         "source": "local",

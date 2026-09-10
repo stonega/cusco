@@ -302,6 +302,10 @@ function assistantHasProviderPayload(message, options = {}) {
     if (options.includeImages !== false && imageAttachments(message).length > 0)
         return true;
 
+    if (options.includeOpenAiResponseItems === true
+        && messageOpenAiResponseItems(message, options).length > 0)
+        return true;
+
     return options.includeGeminiProviderParts === true
         && messageGeminiProviderParts(message).length > 0;
 }
@@ -336,7 +340,7 @@ function messageToolCalls(message) {
         : [];
 }
 
-function normalizeGeminiProviderParts(parts) {
+function normalizeProviderParts(parts) {
     return Array.isArray(parts)
         ? parts
             .filter((part) => part && typeof part === 'object' && !Array.isArray(part))
@@ -344,10 +348,36 @@ function normalizeGeminiProviderParts(parts) {
         : [];
 }
 
+function normalizeGeminiProviderParts(parts) {
+    return normalizeProviderParts(parts).filter(part => part.type !== 'openai_response');
+}
+
 function messageGeminiProviderParts(message) {
     return normalizeGeminiProviderParts(
-        message?.providerParts ?? message?.metadata?.geminiProviderParts,
+        message?.providerParts ?? message?.metadata?.providerParts ?? message?.metadata?.geminiProviderParts,
     );
+}
+
+function messageOpenAiResponseItems(message, { provider, model } = {}) {
+    const context = normalizeProviderParts(message?.providerParts ?? message?.metadata?.providerParts)
+        .find(part => part.type === 'openai_response'
+            && part.providerId === (provider?.id ?? 'openai')
+            && (!part.modelId || !model?.id || part.modelId === model.id));
+    const output = normalizeProviderParts(context?.output);
+    const outputCalls = output.filter(item => item.type === 'function_call');
+    const calls = messageToolCalls(message);
+
+    // Saved display messages may omit the tool exchange. Only replay calls when
+    // the assistant's runtime history still contains the matching tool calls.
+    if (outputCalls.length !== calls.length
+        || outputCalls.some((item, index) => item.call_id !== toolCallId(calls[index], index)))
+        return [];
+
+    // Editing a saved answer must not resurrect its original provider output.
+    if (!message.providerParts && messageContent(message) !== extractOpenAiText({ output }))
+        return [];
+
+    return output;
 }
 
 function toolArguments(input) {
@@ -995,7 +1025,7 @@ function normalizeProviderResponse(response) {
                 providerName: String(result?.providerName ?? ''),
             }))
             : [],
-        providerParts: normalizeGeminiProviderParts(response.providerParts),
+        providerParts: normalizeProviderParts(response.providerParts),
     };
 }
 
@@ -1860,7 +1890,18 @@ export function openAiMessages(messages, options = {}) {
     const includeReasoning = provider?.supportsReasoningContentItems === true;
     const output = [];
 
-    for (const message of providerMessages(messages, { includeImages, includeReasoning })) {
+    for (const message of providerMessages(messages, {
+        includeImages, includeReasoning, includeOpenAiResponseItems: true, provider, model,
+    })) {
+        const responseItems = message.role === 'assistant'
+            ? messageOpenAiResponseItems(message, { provider, model })
+            : [];
+
+        if (responseItems.length > 0) {
+            output.push(...responseItems);
+            continue;
+        }
+
         const toolCalls = messageToolCalls(message);
         const reasoning = message.role === 'assistant' && includeReasoning
             ? messageReasoningContent(message, provider)
@@ -2367,7 +2408,7 @@ export function buildOpenAiResponsesBody(messages, modelId, options = {}) {
         model: modelId,
         input: openAiMessages(
             messagesWithLocalAttachmentPaths(messages, options.tools),
-            { provider, model: options.model },
+            { provider, model: { ...options.model, id: modelId } },
         ),
         max_output_tokens: normalizeMaxOutputTokens(options.maxOutputTokens),
     };
@@ -2573,6 +2614,13 @@ export function extractOpenAiResponse(response, options = {}) {
         toolCalls,
         toolCallIntegrity: classifyNativeToolCallIntegrity(toolCalls, finishReason),
         serverToolResults,
+        providerParts: (options.provider?.id ?? 'openai') === 'openai'
+            && (response.output?.length ?? 0) > 0 ? [{
+            type: 'openai_response',
+            providerId: options.provider?.id ?? 'openai',
+            modelId: response.model ?? options.model?.id ?? '',
+            output: normalizeProviderParts(response.output),
+        }] : [],
     };
 }
 
@@ -2782,7 +2830,15 @@ class OpenAiResponsesStreamState {
         }
 
         if (event?.type === 'response.completed' || event?.type === 'response.incomplete') {
-            this.response = event.response ?? this.response;
+            // Subscription streams send completed items separately and may leave
+            // the terminal output empty. Keep those items, including tool calls.
+            this.response = {
+                ...this.response,
+                ...event.response,
+                output: event.response?.output?.length > 0
+                    ? event.response.output
+                    : this.response.output,
+            };
             this.terminal = true;
         } else if (!event?.type && (event?.output || event?.output_text)) {
             this.response = event;
@@ -3561,9 +3617,17 @@ export class OpenAiResponsesProvider extends RemoteProvider {
         )) {
             for (const delta of state.push(event.data, event.done))
                 yield delta;
+
+            if (state.terminal)
+                break;
         }
 
-        yield { type: 'response', response: extractOpenAiResponse(state.finish(), options) };
+        yield {
+            type: 'response',
+            response: extractOpenAiResponse(state.finish(), {
+                ...options, provider: this._config, model: { ...options.model, id: modelId },
+            }),
+        };
     }
 
     async _complete(messages, modelId, options = {}) {
@@ -3594,7 +3658,9 @@ export class OpenAiResponsesProvider extends RemoteProvider {
             },
         );
 
-        return extractOpenAiResponse(response, options);
+        return extractOpenAiResponse(response, {
+            ...options, provider: this._config, model: { ...options.model, id: modelId },
+        });
     }
 }
 

@@ -40,6 +40,7 @@ import {
     OpenAiCompatibleChatProvider,
 } from '../src/providers/remoteProvider.js';
 import { createMessage } from '../src/providers/provider.js';
+import { createStreamingAssistantView } from '../src/chat/streamingAssistantView.js';
 import {
     estimateRequestInputTokens,
     isOutputCapacityError,
@@ -243,6 +244,67 @@ const openAiNativeToolBody = buildOpenAiResponsesBody(nativeToolMessages, 'gpt-t
 assertEqual(openAiNativeToolBody.input[1].type, 'function_call', 'OpenAI native function call history');
 assertEqual(openAiNativeToolBody.input[2].type, 'function_call_output', 'OpenAI native function result history');
 assertEqual(openAiNativeToolBody.input[3].content[1].type, 'input_image', 'OpenAI native tool screenshot history');
+
+const openAiResponseOutput = [
+    { type: 'reasoning', id: 'rs-tool', summary: [], encrypted_content: 'encrypted-tool-context' },
+    { type: 'function_call', id: 'fc-tool', call_id: 'call-computer-1', name: 'computer_step', arguments: nativeToolMessages[1].toolCalls[0].input },
+];
+const openAiResponseContext = extractOpenAiResponse({ model: 'gpt-test', output: openAiResponseOutput }).providerParts;
+const openAiContextHistory = nativeToolMessages.map((message, index) => index === 1
+    ? { ...message, providerParts: openAiResponseContext }
+    : message);
+const openAiContextBody = buildOpenAiResponsesBody(openAiContextHistory, 'gpt-test');
+assertEqual(JSON.stringify(openAiContextBody.input.slice(1, 3)), JSON.stringify(openAiResponseOutput),
+    'OpenAI tool history retains encrypted reasoning and original response items');
+assertEqual(openAiContextBody.input[3].call_id, 'call-computer-1', 'OpenAI replay retains tool result linkage');
+assertEqual(openAiContextBody.input[4].content[1].type, 'input_image', 'OpenAI replay retains tool screenshots');
+for (const options of [{ provider: { id: 'grok' } }, { provider: { id: 'deepseek' } }]) {
+    assertEqual(buildOpenAiResponsesBody(openAiContextHistory, 'gpt-test', options).input.some(item => item.type === 'reasoning'), false,
+        'Switching providers excludes OpenAI encrypted reasoning');
+}
+assertEqual(buildOpenAiResponsesBody(openAiContextHistory, 'other-model').input.some(item => item.type === 'reasoning'), false,
+    'Switching models excludes saved OpenAI response context');
+const geminiFromOpenAi = buildGeminiGenerateContentBody(openAiContextHistory);
+assertEqual(geminiFromOpenAi.contents[1].parts[0].functionCall.name, 'computer_step',
+    'Gemini rebuilds native calls when switching from OpenAI');
+assertEqual(JSON.stringify(geminiFromOpenAi).includes('encrypted-tool-context'), false,
+    'Gemini does not receive OpenAI response envelopes');
+const savedToolDisplay = createMessage('assistant', 'Tool completed.', { metadata: { providerParts: openAiResponseContext } });
+assertEqual(buildOpenAiResponsesBody([nativeToolMessages[0], savedToolDisplay], 'gpt-test').input.some(item => item.type === 'function_call'), false,
+    'Saved display messages do not replay orphaned tool calls');
+
+let storedContextMessage = null;
+const contextView = createStreamingAssistantView({
+    conversation: { id: 'context-test' },
+    isActiveConversationId: () => false,
+    conversations: {
+        appendMessage(_id, message) { storedContextMessage = message; },
+        updateMessageContent(_id, _messageId, text) { storedContextMessage.content = text; },
+        updateMessageMetadata(_id, _messageId, metadata) {
+            storedContextMessage.metadata = metadata;
+            return storedContextMessage;
+        },
+    },
+});
+const finalResponseOutput = [{
+    type: 'message', id: 'msg-final', role: 'assistant', phase: 'final_answer',
+    content: [{ type: 'output_text', text: 'Done.' }],
+}];
+contextView.set_label('Done.');
+contextView.set_provider_context(extractOpenAiResponse({ model: 'gpt-test', output: finalResponseOutput }).providerParts);
+const restoredContextMessage = JSON.parse(JSON.stringify(storedContextMessage));
+assertEqual(buildOpenAiResponsesBody([nativeToolMessages[0], restoredContextMessage], 'gpt-test').input[1].phase, 'final_answer',
+    'Persisted OpenAI messages retain their final-answer phase');
+restoredContextMessage.content = 'Edited answer.';
+assertEqual(buildOpenAiResponsesBody([nativeToolMessages[0], restoredContextMessage], 'gpt-test').input[1].content, 'Edited answer.',
+    'Saved provider context does not override an edited answer');
+for (const key of ['providerParts', 'geminiProviderParts']) {
+    const geminiContextMessage = createMessage('assistant', 'Gemini answer', {
+        metadata: { [key]: [{ text: 'Gemini answer', thoughtSignature: 'saved-gemini-signature' }] },
+    });
+    assertEqual(buildGeminiGenerateContentBody([nativeToolMessages[0], geminiContextMessage]).contents[1].parts[0].thoughtSignature, 'saved-gemini-signature',
+        'Gemini reads current and legacy persisted provider context');
+}
 
 const compatibleNativeToolBody = buildOpenAiCompatibleChatBody(nativeToolMessages, 'model-test');
 assertEqual(compatibleNativeToolBody.messages[1].tool_calls[0].function.name, 'computer_step', 'Chat Completions native function call history');

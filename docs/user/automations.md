@@ -16,14 +16,21 @@ The five schedule fields are minute, hour, day of month, month, and weekday.
 For example, `0 9 * * 1-5` runs at 09:00 every weekday, while
 `30 18 * * *` runs every day at 18:30.
 
-You can also ask Cusco to create an automation in Agent Mode. Cusco requests
-permission before installing the schedule.
+You can also ask Cusco to create, list, inspect, edit, pause, resume, run, or
+delete automations in Agent Mode. Listing and inspecting do not require
+confirmation; changes and immediate runs use the normal tool permission flow.
 
 ## Manage and run automations
 
 Open an automation's row menu to run it immediately, edit its schedule or
 prompt, pause or resume future runs, or delete it. Pausing does not remove its
 message history, and **Run now** can still run a paused automation.
+
+For example, ask "List my automations", "Move my daily briefing to 10 AM",
+or "Run my briefing now". Agent Mode queues an immediate run and returns; the
+answer appears in that automation's conversation. Deleting an automation also
+deletes its conversation history. Request deletion from another chat or the
+sidebar when the automation itself is running.
 
 Select an automation to change its provider, model, reasoning, or other
 conversation controls. Future runs use those selections and retain earlier

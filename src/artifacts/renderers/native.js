@@ -34,9 +34,21 @@ function errorView(message) {
     return label;
 }
 
-function sourceLanguageId(resolved) {
+function isPlainTextFile(resolved, path = resolved.revision.manifest.entrypoint) {
+    const file = resolved.revision.manifest.files.find((entry) => entry.path === path);
+    const mimeType = String(file?.mimeType ?? resolved.artifact.mimeType ?? '')
+        .split(';')[0].trim().toLowerCase();
+
+    return mimeType === 'text/plain'
+        || ((!mimeType || mimeType === 'application/octet-stream') && /\.txt$/i.test(path));
+}
+
+function sourceLanguageId(resolved, path) {
     const format = String(resolved.artifact.format ?? '').toLowerCase();
     const mimeType = String(resolved.artifact.mimeType ?? '').toLowerCase();
+
+    if (resolved.artifact.kind === 'file' && isPlainTextFile(resolved, path))
+        return '';
 
     if (resolved.artifact.kind === 'svg')
         return 'xml';
@@ -71,7 +83,7 @@ function createSourceView(manager, resolved, options = {}) {
     }
 
     const buffer = new GtkSource.Buffer();
-    const languageId = sourceLanguageId(resolved);
+    const languageId = sourceLanguageId(resolved, options.path);
     const language = languageId
         ? GtkSource.LanguageManager.get_default().get_language(languageId)
         : null;
@@ -89,7 +101,8 @@ function createSourceView(manager, resolved, options = {}) {
         monospace: true,
         hexpand: true,
         vexpand: true,
-        wrap_mode: resolved.artifact.kind === 'document'
+        wrap_mode: (resolved.artifact.kind === 'document'
+            || (resolved.artifact.kind === 'file' && isPlainTextFile(resolved, options.path)))
             ? Gtk.WrapMode.WORD_CHAR
             : Gtk.WrapMode.NONE,
     });
@@ -167,7 +180,8 @@ export class NativeImageArtifactRenderer {
 
 export class NativeSourceArtifactRenderer {
     supports(resolved) {
-        return ['document', 'code', 'data', 'chart', 'diagram'].includes(resolved.artifact.kind);
+        return ['document', 'code', 'data', 'chart', 'diagram'].includes(resolved.artifact.kind)
+            || (resolved.artifact.kind === 'file' && isPlainTextFile(resolved));
     }
 
     createInlineView(manager, resolved, options = {}) {

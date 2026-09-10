@@ -40,6 +40,7 @@ assert(
     'Plugins UI did not consistently use Cusco branding or retained a porting notice',
 );
 const brandedPluginNames = [
+    'cloudflare',
     'gmail',
     'gnome-shell-extension-development',
     'github',

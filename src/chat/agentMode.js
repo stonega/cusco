@@ -63,6 +63,10 @@ export function buildAgentModeSystemPrompt(tools, {
     const hasComputerExit = (tools ?? []).some(tool => tool?.name === 'computer_exit');
     const hasComputerRegion = (tools ?? []).some(tool => tool?.name === 'computer_observe_region');
     const hasAskUser = (tools ?? []).some(tool => tool?.name === 'ask_user');
+    const hasAutomations = (tools ?? []).some(tool => tool?.name === 'automation_list');
+    const automationInstruction = hasAutomations
+        ? 'Use automation_* tools for in-app scheduled AI tasks. Use automation_list to find existing tasks and their exact IDs, and automation_get to inspect one before editing it. Use automation_update for requested changes, automation_pause or automation_resume for scheduled status, automation_run for one immediate run, and automation_delete to remove a task and its history. Do not create a duplicate when the user asks to change an existing automation. If the target is ambiguous, ask the user to choose. Schedules use five-field cron expressions in the local system timezone. A queued run is not a completed run; its answer appears in the automation conversation.'
+        : '';
     const askUserInstruction = hasAskUser
         ? 'When required information or a user choice is missing, call ask_user instead of asking in ordinary assistant text. Ask only the questions needed to continue.'
         : '';
@@ -106,6 +110,7 @@ export function buildAgentModeSystemPrompt(tools, {
         'For MCP tools, pass JSON matching the listed input fields. Include every required or clearly relevant field from the input description.',
         `You have at most ${maxIterations} tool-use iterations for this response.`,
         askUserInstruction,
+        automationInstruction,
         computerUseInstruction,
         '',
         ...toolProtocol,

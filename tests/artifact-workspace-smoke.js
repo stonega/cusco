@@ -87,6 +87,71 @@ if (Gtk.init_check()) {
         throw new Error(`Markdown artifact preview did not render task markers: ${markdownPreviewText}`);
     }
 
+    const plainText = '第一回 飞刀与快剑（纯文本）\n\n  **Literal text** <tag> & symbols 🗡️\n';
+    const assertTextPreview = (view, expected, description) => {
+        if (!(view instanceof Gtk.ScrolledWindow))
+            throw new Error(`${description} did not produce a scrollable text preview`);
+
+        const textView = view.get_child();
+
+        if (!(textView instanceof Gtk.TextView))
+            throw new Error(`${description} did not use a native text view`);
+
+        const buffer = textView.get_buffer();
+        const contents = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), true);
+
+        if (contents !== expected)
+            throw new Error(`${description} changed the plain text contents`);
+
+        if (textView.get_editable() || textView.get_wrap_mode() !== Gtk.WrapMode.WORD_CHAR)
+            throw new Error(`${description} was not read-only with word wrapping`);
+
+        if (buffer.get_highlight_syntax())
+            throw new Error(`${description} enabled syntax highlighting for plain text`);
+    };
+
+    for (const input of [
+        { filename: 'chapter.txt', mimeType: 'text/plain' },
+        { filename: 'chapter.TXT' },
+        { filename: 'chapter.txt', mimeType: 'application/octet-stream' },
+        { filename: 'chapter.bin', mimeType: 'Text/Plain; charset=utf-8' },
+        { filename: 'empty.txt', content: '' },
+        {
+            entrypoint: 'chapter.txt',
+            files: { 'chapter.txt': plainText, 'cover.png': new Uint8Array([0, 1, 2]) },
+        },
+    ]) {
+        const textArtifact = manager.createArtifact({
+            title: 'Plain text file',
+            kind: 'file',
+            content: plainText,
+            ...input,
+        });
+        const expected = input.content ?? plainText;
+        const description = input.filename ?? input.entrypoint;
+        assertTextPreview(registry.createInlineView(textArtifact.reference), expected, `${description} inline`);
+        assertTextPreview(registry.createWorkspaceView(textArtifact.reference), expected, `${description} workspace`);
+
+        const updatedText = manager.updateArtifact(textArtifact.artifact.id, {
+            baseRevisionId: textArtifact.revision.id,
+            content: 'Revised text\n',
+        });
+        const restartedManager = new ArtifactManager({ store: new ArtifactFileStore({ root }) });
+        const restartedRegistry = createDefaultArtifactRendererRegistry(restartedManager);
+        assertTextPreview(restartedRegistry.createWorkspaceView(textArtifact.reference), expected, `${description} saved revision`);
+        assertTextPreview(restartedRegistry.createWorkspaceView(updatedText.reference), 'Revised text\n', `${description} latest revision`);
+    }
+
+    const binaryArtifact = manager.createArtifact({
+        title: 'Binary file',
+        kind: 'file',
+        filename: 'archive.bin',
+        content: new Uint8Array([0, 1, 2, 255]),
+    });
+
+    if (registry.createWorkspaceView(binaryArtifact.reference) instanceof Gtk.ScrolledWindow)
+        throw new Error('Binary artifact unexpectedly used the text preview');
+
     const workspace = createArtifactWorkspace({
         artifactManager: manager,
         artifactRegistry: registry,

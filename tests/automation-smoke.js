@@ -111,6 +111,84 @@ try {
 if (!pausedRejected)
     throw new Error('Scheduled invocation accepted a paused automation');
 
+result = await windowPrototype._executeAutomation.call(pausedHarness, job.id, {
+    allowPaused: true,
+    queueOnly: true,
+});
+
+if (!result.queued || result.conversationId !== conversation.id)
+    throw new Error('Manual tool invocation could not queue a paused automation');
+
+for (const busy of [false, true]) {
+    test = createHarness({ busy });
+    result = await windowPrototype._executeAutomation.call(test.harness, job.id, {
+        allowPaused: true,
+        queueOnly: true,
+    });
+
+    if (!result.queued || !test.calls.includes('schedule')
+        || test.calls.some((call) => call[0] === 'send')) {
+        throw new Error('Automation tool execution waited for a response while holding the tool queue');
+    }
+}
+
+const deletionCalls = [];
+const deletionHarness = {
+    _findCronConversation: () => conversation,
+    _cron: {
+        async deleteJob(id) {
+            deletionCalls.push(['delete-job', id]);
+        },
+    },
+    async _deleteConversationAfterStopping(id) {
+        deletionCalls.push(['stop-and-delete-conversation', id]);
+    },
+    async _handleCronJobChanged(deletedJob) {
+        deletionCalls.push(['sync', deletedJob.id]);
+    },
+};
+let selfDeletionRejected = false;
+
+try {
+    await windowPrototype._deleteAutomationFromTool.call(deletionHarness, job, {
+        conversationId: conversation.id,
+    });
+} catch (error) {
+    selfDeletionRejected = Boolean(error.userMessage);
+}
+
+if (!selfDeletionRejected || deletionCalls.length)
+    throw new Error('Automation tool allowed deletion of its own executing conversation');
+
+await windowPrototype._deleteAutomationFromTool.call(deletionHarness, job, {
+    conversationId: 'another-chat',
+});
+
+if (JSON.stringify(deletionCalls) !== JSON.stringify([
+    ['delete-job', job.id],
+    ['stop-and-delete-conversation', conversation.id],
+    ['sync', job.id],
+])) {
+    throw new Error('Automation deletion bypassed turn cancellation, conversation cleanup, or synchronization');
+}
+
+deletionCalls.length = 0;
+deletionHarness._cron.deleteJob = async () => {
+    throw new Error('Simulated crontab write failure');
+};
+let deletionRejected = false;
+
+try {
+    await windowPrototype._deleteAutomationFromTool.call(deletionHarness, job, {
+        conversationId: 'another-chat',
+    });
+} catch (_error) {
+    deletionRejected = true;
+}
+
+if (!deletionRejected || deletionCalls.length)
+    throw new Error('Failed automation deletion removed its conversation history');
+
 if (Gtk.init_check()) {
     const conversations = new ConversationManager({
         providerId: 'test-provider',

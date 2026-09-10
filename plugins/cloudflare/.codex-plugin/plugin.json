@@ -1,0 +1,45 @@
+{
+  "name": "cloudflare",
+  "version": "1.0.0",
+  "description": "Inspect and manage Cloudflare resources through Cloudflare's official hosted API MCP server.",
+  "author": {
+    "name": "Cloudflare"
+  },
+  "homepage": "https://developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare/",
+  "repository": "https://github.com/cloudflare/skills",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "dns",
+    "r2",
+    "zero-trust",
+    "mcp"
+  ],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Cloudflare",
+    "shortDescription": "Manage Cloudflare through its official MCP",
+    "longDescription": "Connect Cusco directly to Cloudflare's official hosted API MCP server with OAuth. Search the complete Cloudflare API, inspect account and zone resources, and make permission-gated changes across Workers, DNS, R2, Zero Trust, and other Cloudflare products.",
+    "developerName": "Cusco",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare/",
+    "privacyPolicyURL": "https://www.cloudflare.com/privacypolicy/",
+    "termsOfServiceURL": "https://www.cloudflare.com/website-terms/",
+    "defaultPrompt": [
+      "Inspect my Cloudflare account and summarize its resources",
+      "Find the Cloudflare API operation for this task",
+      "Review a proposed Cloudflare change before applying it"
+    ],
+    "composerIcon": "./assets/cloudflare.svg",
+    "logo": "./assets/cloudflare.svg",
+    "logoDark": "./assets/cloudflare.svg",
+    "brandColor": "#F6821F",
+    "screenshots": []
+  }
+}

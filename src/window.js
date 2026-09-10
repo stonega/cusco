@@ -74,7 +74,7 @@ import { GmailGoaConnector } from './connectors/gmailGoa.js';
 import { MailGoaConnector } from './connectors/mailGoa.js';
 import { ComposerMenus } from './composer/menus.js';
 import { presentAutomationDialog } from './cron/dialog.js';
-import { createAutomationCreateTool, CronJobManager } from './cron/manager.js';
+import { createAutomationTools, CronJobManager } from './cron/manager.js';
 import { CronConversationSync } from './cron/conversationSync.js';
 import { ComputerUseService } from './computerUse/service.js';
 import { createComputerUseTools } from './computerUse/tools.js';
@@ -1027,9 +1027,16 @@ class CuscoWindow extends Adw.ApplicationWindow {
         ));
         for (const tool of createMcpManagementTools(this._mcp, this._tools))
             this._tools.registerTool(tool);
-        this._tools.registerTool(createAutomationCreateTool(this._cron, {
-            onJobCreated: async (job) => this._handleCronJobChanged(job),
-        }));
+        for (const tool of createAutomationTools(this._cron, {
+            onJobChanged: (job) => this._handleCronJobChanged(job),
+            runJob: (job) => this._executeAutomation(job.id, {
+                allowPaused: true,
+                queueOnly: true,
+            }),
+            deleteJob: (job, context) => this._deleteAutomationFromTool(job, context),
+        })) {
+            this._tools.registerTool(tool);
+        }
         for (const tool of createArtifactTools(this._artifacts, {
             getConversationId: () => this._conversations.activeConversation?.id ?? '',
             onPresent: (reference, context = {}) => {
@@ -2281,6 +2288,23 @@ class CuscoWindow extends Adw.ApplicationWindow {
         });
     }
 
+    async _deleteAutomationFromTool(job, context = {}) {
+        const conversation = this._findCronConversation(job.id);
+
+        if (conversation && conversation.id === context.conversationId) {
+            throw automationError(
+                'An automation cannot delete its own active conversation. Delete it from another chat or the sidebar.',
+            );
+        }
+
+        await this._cron.deleteJob(job.id);
+
+        if (conversation)
+            await this._deleteConversationAfterStopping(conversation.id);
+
+        await this._handleCronJobChanged(job);
+    }
+
     async _executeAutomation(jobId, options = {}) {
         this._cronConversationSync ??= createCronConversationSync(this);
         const status = await this._cronConversationSync.sync({ refreshUi: true });
@@ -2304,6 +2328,12 @@ class CuscoWindow extends Adw.ApplicationWindow {
             throw automationError('The automation prompt could not be queued.');
 
         pendingMessage.automationJobId = job.id;
+
+        // Tool calls must release the tool queue before the automation can use tools.
+        if (options.queueOnly) {
+            this._schedulePendingConversationSend();
+            return { conversationId: conversation.id, queued: true };
+        }
 
         if (this._isConversationBusy(conversation.id)) {
             this._schedulePendingConversationSend();

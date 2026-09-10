@@ -7,6 +7,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Add a Cloudflare plugin backed by Cloudflare's official hosted API MCP server, with OAuth, Secret Service credentials, and permission-gated access across the Cloudflare API.
+- Support listing, inspecting, editing, pausing, resuming, running, and deleting automations from Agent Mode alongside creation.
+
+### Changed
+
+- Remove the close button from the artifact workspace header.
+
+### Fixed
+
+- Fix OpenAI subscription chats stopping before tool execution, and preserve reasoning and tool-call context when continuing after tool results.
+- Preview plain-text and `.txt` file artifacts inline and in the workspace with native, selectable, wrapped text, including previously saved revisions.
+
 ## [0.5.45] - 2026-09-09
 
 ### Fixed

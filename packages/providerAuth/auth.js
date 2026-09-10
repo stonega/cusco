@@ -479,12 +479,12 @@ function normalizeCodexRequestBody(body, stream) {
     ])
         delete body[key];
 
-    if (body.reasoning && typeof body.reasoning === 'object') {
-        const include = Array.isArray(body.include) ? [...body.include] : [];
-        if (!include.includes('reasoning.encrypted_content'))
-            include.push('reasoning.encrypted_content');
-        body.include = include;
-    }
+    // Reasoning models may think even without an explicit effort setting. The
+    // stateless subscription endpoint needs this context on tool follow-ups.
+    const include = Array.isArray(body.include) ? [...body.include] : [];
+    if (!include.includes('reasoning.encrypted_content'))
+        include.push('reasoning.encrypted_content');
+    body.include = include;
 }
 
 export function listProviderAuthMethods(providerId, envLookup = GLib.getenv) {

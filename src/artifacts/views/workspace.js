@@ -84,9 +84,6 @@ export function createArtifactWorkspace(options = {}) {
         margin_end: 8,
     });
     header.add_css_class('toolbar');
-    const closeButton = actionButton('window-close-symbolic', 'Close artifact workspace', () => {
-        options.onClose?.();
-    });
     const artifactPicker = new Gtk.ComboBoxText({
         hexpand: true,
         tooltip_text: 'Artifact',
@@ -134,7 +131,6 @@ export function createArtifactWorkspace(options = {}) {
     const archiveButton = actionButton('user-trash-symbolic', 'Archive artifact', () => {
         toggleArchiveActiveArtifact();
     });
-    header.append(closeButton);
     header.append(artifactPicker);
     header.append(revisionPicker);
     header.append(reloadButton);
