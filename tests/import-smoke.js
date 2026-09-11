@@ -257,8 +257,8 @@ const deepSeekAttachmentProvider = {
     models: [
         { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
         {
-            id: 'deepseek-v4-flash-vision-exp',
-            name: 'DeepSeek V4 Flash Vision Experimental',
+            id: 'deepseek-flash',
+            name: 'DeepSeek Flash',
             supportsImageAttachments: true,
         },
     ],
@@ -291,7 +291,7 @@ if (modelSpecificAttachments.supportsImages()
     throw new Error('Composer image support should follow the selected DeepSeek text model');
 }
 
-deepSeekAttachmentConversation.activeConversation.modelId = 'deepseek-v4-flash-vision-exp';
+deepSeekAttachmentConversation.activeConversation.modelId = 'deepseek-flash';
 
 if (!modelSpecificAttachments.supportsImages())
     throw new Error('Composer image support did not enable the selected DeepSeek vision model');

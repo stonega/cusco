@@ -220,7 +220,7 @@ const deepSeekProvider = providers.getProvider('deepseek');
 
 if (deepSeekProvider.defaultModelId !== 'deepseek-v4-pro'
     || deepSeekProvider.models.map((model) => model.id).join(',')
-        !== 'deepseek-v4-pro,deepseek-v4-flash,deepseek-v4-flash-vision-exp') {
+        !== 'deepseek-v4-pro,deepseek-flash') {
     throw new Error('DeepSeek chat models were not configured');
 }
 

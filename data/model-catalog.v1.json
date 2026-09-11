@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "revision": 1,
-  "publishedAt": "2026-09-11T00:00:00Z",
+  "revision": 2,
+  "publishedAt": "2026-09-11T11:26:15Z",
   "minAppVersion": "0.5.46",
   "requiredRuntimeFeatures": [
     "model-catalog-v1"
@@ -704,7 +704,10 @@
     {
       "id": "deepseek",
       "defaultModelId": "deepseek-v4-pro",
-      "aliases": {},
+      "aliases": {
+        "deepseek-v4-flash": "deepseek-flash",
+        "deepseek-v4-flash-vision-exp": "deepseek-flash"
+      },
       "discovery": {
         "chat": "curated",
         "image": "open",
@@ -796,26 +799,9 @@
           }
         },
         {
-          "id": "deepseek-v4-flash",
-          "name": "DeepSeek V4 Flash",
-          "description": "DeepSeek lower-latency model.",
-          "contextWindowTokens": 1000000,
-          "maxOutputTokens": 384000,
-          "thinking": {
-            "api": "openai-responses",
-            "levels": [
-              "off",
-              "low",
-              "high",
-              "max"
-            ],
-            "defaultLevel": "high"
-          }
-        },
-        {
-          "id": "deepseek-v4-flash-vision-exp",
-          "name": "DeepSeek V4 Flash Vision Experimental",
-          "description": "Experimental DeepSeek model for visual understanding with text and image input.",
+          "id": "deepseek-flash",
+          "name": "DeepSeek Flash",
+          "description": "DeepSeek V4.1 Flash model with text and image input.",
           "contextWindowTokens": 1000000,
           "maxOutputTokens": 384000,
           "supportsImageAttachments": true,
@@ -834,7 +820,87 @@
               "max"
             ],
             "defaultLevel": "high"
-          }
+          },
+          "nativeSearch": false,
+          "supportsStreaming": true,
+          "supportsFunctionCalling": true,
+          "modalities": {
+            "input": {
+              "text": "supported",
+              "image": "supported"
+            },
+            "output": {
+              "text": "supported"
+            }
+          },
+          "attachmentLimits": {
+            "maxCount": 600,
+            "maxBytes": 33554432,
+            "mimeTypes": [
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp"
+            ]
+          },
+          "capabilities": {
+            "streaming": "supported",
+            "functionCalling": "supported",
+            "parallelToolCalls": "supported",
+            "nativeSearch": "unsupported",
+            "jsonOutput": "supported",
+            "jsonSchemaOutput": "supported",
+            "usageReporting": "supported"
+          },
+          "parameters": {
+            "temperature": {
+              "support": "supported",
+              "type": "number",
+              "runtime": true,
+              "minimum": 0,
+              "maximum": 2,
+              "onlyWithoutThinking": true
+            },
+            "topP": {
+              "support": "supported",
+              "type": "number",
+              "runtime": true,
+              "minimum": 0.95,
+              "maximum": 1,
+              "notes": "Only effective in thinking mode; the API fixes top_p at 1.0 in non-thinking mode."
+            },
+            "toolChoice": {
+              "support": "supported",
+              "type": "string",
+              "runtime": true,
+              "allowedValues": [
+                "none",
+                "auto",
+                "required"
+              ],
+              "notes": "Named tool selection is also supported by the API, but Cusco currently maps only the string choices."
+            },
+            "parallelToolCalls": {
+              "support": "unsupported",
+              "type": "boolean",
+              "runtime": false,
+              "notes": "This control is ignored by the API; parallel tool calling is always enabled."
+            },
+            "responseFormat": {
+              "support": "supported",
+              "type": "object",
+              "runtime": false,
+              "notes": "The API supports text.format; Cusco has no catalog parameter mapping for this Responses field."
+            }
+          },
+          "sources": [
+            "https://api-docs.deepseek.com/quick_start/pricing",
+            "https://api-docs.deepseek.com/guides/thinking_mode",
+            "https://api-docs.deepseek.com/guides/vision",
+            "https://api-docs.deepseek.com/guides/responses_api"
+          ],
+          "verifiedAt": "2026-09-11",
+          "notes": "The canonical deepseek-flash ID currently serves DeepSeek-V4.1-Flash. Both legacy Flash IDs route to it. Image limits describe the API: maxBytes applies to each inline image; inline request bodies are limited to 48 MiB. Cusco uses inline images and its own attachment limits. Native Responses tools, including web_search, are ignored; use the configured search fallback."
         }
       ],
       "imageModels": []

@@ -48,7 +48,7 @@ if (!Gtk.init_check()) {
     assert(!refresh.get_sensitive(), 'Refresh control allowed concurrent requests');
     await service.refresh({ force: true });
     assert(requests === 1 && refresh.get_sensitive(), 'Manual refresh did not finish once');
-    assert(status.get_subtitle().includes('Revision 2'), 'Status did not show the accepted revision');
+    assert(status.get_subtitle().includes(`Revision ${data.revision}`), 'Status did not show the accepted revision');
     assert(store.getProvider('openai').defaultModelId === 'catalog-ui-model', 'Provider settings did not receive the new catalog');
     const providerRow = find(page, widget => widget instanceof Adw.ExpanderRow && widget.get_title() === 'OpenAI');
     const models = find(providerRow, widget => widget instanceof Adw.ComboRow && widget.get_title() === 'Default model');

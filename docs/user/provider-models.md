@@ -55,7 +55,7 @@ support keep the chat picker disabled.
 | Kimi | `kimi-k3` | `kimi-k3` | `Max` |
 | Kimi | `kimi-k3` | `kimi-k2.7-code` | `Auto` |
 | Kimi | `kimi-k3` | `kimi-k2.6` | `Off`, `Auto` |
-| DeepSeek | `deepseek-v4-pro` | `deepseek-v4-pro`, `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp` | `Off`, `Low`, `High`, `Max` |
+| DeepSeek | `deepseek-v4-pro` | `deepseek-v4-pro`, `deepseek-flash` | `Off`, `Low`, `High`, `Max` |
 | Grok | `grok-4.6` | `grok-4.6` | `Low`, `Medium`, `High`, `XHigh` |
 | Grok | `grok-4.6` | `grok-4.5` | `Low`, `Medium`, `High` |
 | Grok | `grok-4.6` | `grok-4.3` | `Off`, `Low`, `Medium`, `High` |
@@ -99,8 +99,7 @@ from the built-in model metadata.
 | Kimi | `kimi-k2.7-code` | 256K tokens |
 | Kimi | `kimi-k2.6` | 256K tokens |
 | DeepSeek | `deepseek-v4-pro` | 1M tokens |
-| DeepSeek | `deepseek-v4-flash` | 1M tokens |
-| DeepSeek | `deepseek-v4-flash-vision-exp` | 1M tokens |
+| DeepSeek | `deepseek-flash` | 1M tokens |
 | Grok | `grok-4.6` | 500K tokens |
 | Grok | `grok-4.5` | 1M tokens |
 | Grok | `grok-4.3` | 1M tokens |
@@ -162,17 +161,23 @@ models that use its OpenAI-compatible image generation endpoint.
   top-level `reasoning_effort` and `max_completion_tokens`, not the K2.x
   `thinking` parameter. Kimi K2.7 Code uses always-on thinking through `Auto`;
   only Kimi K2.6 exposes `Off`.
-- DeepSeek uses `deepseek-v4-pro` as its default and is intentionally limited
-  to that model, `deepseek-v4-flash`, and the experimental
-  `deepseek-v4-flash-vision-exp`. Older persisted models such as
-  `deepseek-v3` are ignored. All three models use DeepSeek's Responses API,
-  have a 1M-token context window and 384K maximum output, support `Off`, `Low`,
-  `High`, and `Max` reasoning, and default to `High`.
-  `deepseek-v4-flash-vision-exp` accepts text plus JPEG, PNG, GIF, and WebP
-  image input and produces text; the Pro and non-vision Flash models remain
-  text-only. In Agent mode, the provider can use native Web Search; Cusco
-  preserves reasoning and function-call history between its stateless
-  Responses requests.
+- DeepSeek uses `deepseek-v4-pro` as its default and offers `deepseek-flash`
+  (currently DeepSeek V4.1 Flash). Both models use the Responses API, have a
+  1M-token context window and 384K maximum output, support `Off`, `Low`, `High`,
+  and `Max` reasoning, and default to `High`. Flash accepts text plus JPEG,
+  PNG, GIF, and WebP images and produces text; Pro remains text-only.
+  The retired `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` IDs resolve
+  to `deepseek-flash` in saved selections and discovery results, without duplicate
+  picker entries. Older unsupported IDs such as `deepseek-v3` are ignored.
+  Flash uses Cusco's configured search fallback because DeepSeek ignores native
+  Responses tools such as `web_search`. Cusco preserves reasoning and
+  function-call history between stateless requests.
+  Flash's verified parameter metadata includes temperature (0–2, non-thinking
+  only), top-p (0.95–1, effective in thinking mode), and tool-choice strings.
+  Parallel tool calling is always enabled by the API; its control is ignored.
+  See [DeepSeek models](https://api-docs.deepseek.com/quick_start/pricing),
+  [vision](https://api-docs.deepseek.com/guides/vision), and
+  [Responses compatibility](https://api-docs.deepseek.com/guides/responses_api).
 - Grok uses xAI's OpenAI-compatible Responses API and is intentionally limited
   to `grok-4.6`, `grok-4.5`, and `grok-4.3`. Grok image generation uses xAI's
   OpenAI-compatible image endpoint with `grok-imagine-image-quality` and
@@ -213,8 +218,7 @@ models that use its OpenAI-compatible image generation endpoint.
 | Kimi | `kimi-k2.7-code` | Kimi coding model with stronger long-context instruction following and higher coding task success. Context 256k. | `Auto` |
 | Kimi | `kimi-k2.6` | Kimi intelligent multimodal model for agent, code, visual understanding, and general tasks with thinking and non-thinking modes. Context 256k. | `Off`, `Auto` |
 | DeepSeek | `deepseek-v4-pro` | DeepSeek reasoning-capable model. | `Off`, `Low`, `High`, `Max` |
-| DeepSeek | `deepseek-v4-flash` | DeepSeek lower-latency model. | `Off`, `Low`, `High`, `Max` |
-| DeepSeek | `deepseek-v4-flash-vision-exp` | Experimental DeepSeek model for visual understanding with text and image input. | `Off`, `Low`, `High`, `Max` |
+| DeepSeek | `deepseek-flash` | DeepSeek V4.1 Flash model with text and image input. | `Off`, `Low`, `High`, `Max` |
 | Grok | `grok-4.6` | xAI frontier model for coding, agentic tasks, and knowledge work. | `Low`, `Medium`, `High`, `XHigh` |
 | Grok | `grok-4.5` | xAI Grok model for frontier chat, coding, and agentic work. | `Low`, `Medium`, `High` |
 | Grok | `grok-4.3` | xAI Grok text and vision model with a 1M token context window. | `Off`, `Low`, `Medium`, `High` |

@@ -17,7 +17,9 @@ function rejects(callback, message) {
     try { callback(); } catch (_) { failed = true; }
     assert(failed, message);
 }
-function catalog(revision = 2, modify = () => {}) {
+const BASE_REVISION = BUNDLED_CATALOG.revision;
+
+function catalog(revision = BASE_REVISION + 1, modify = () => {}) {
     const data = clone(BUNDLED_CATALOG.data);
     data.revision = revision;
     modify(data);
@@ -37,10 +39,10 @@ function service(fetch, storage = new MemoryStorage()) {
     return new CatalogService({ bundled: BUNDLED_CATALOG, schema: CATALOG_SCHEMA,
         validationOptions: CATALOG_OPTIONS, storage, fetch, now: () => 1000000, random: () => 0 });
 }
-function ok(data, etag = '"revision-2"') { return { status: 200, text: JSON.stringify(data), headers: { etag } }; }
+function ok(data, etag = '"updated-catalog"') { return { status: 200, text: JSON.stringify(data), headers: { etag } }; }
 
 equal(BUNDLED_CATALOG.data.providers.length, 7, 'Provider count changed');
-equal(BUNDLED_CATALOG.data.providers.reduce((n, p) => n + p.models.length, 0), 27, 'Chat model count changed');
+equal(BUNDLED_CATALOG.data.providers.reduce((n, p) => n + p.models.length, 0), 26, 'Chat model count changed');
 equal(BUNDLED_CATALOG.data.providers.reduce((n, p) => n + p.imageModels.length, 0), 7, 'Image model count changed');
 equal(BUNDLED_CATALOG.getModel('kimi', 'kimi-k3').thinking.maxOutputTokensParameter,
     'max_completion_tokens', 'Kimi output token parameter was lost');
@@ -70,19 +72,27 @@ for (const mutate of [
     data => { provider(data).models[0].parameters = { temperature: { support: 'supported', type: 'number', runtime: true, minimum: 0, maximum: 1, default: 2 } }; },
     data => { provider(data).models[0].parameters = { temperature: { support: 'supported', type: 'object', runtime: true } }; },
     data => { provider(data).models[0].thinking = JSON.parse('{"api":"openai-responses","levels":["low"],"__proto__":{}}'); },
-]) rejects(() => snapshot(catalog(2, mutate)), 'Invalid or incompatible catalog was accepted');
+]) rejects(() => snapshot(catalog(BASE_REVISION + 1, mutate)), 'Invalid or incompatible catalog was accepted');
 
 // Every pre-migration field is checked against a fixture captured before constants
-// were removed. Expectations are independent of the new catalog/resolver.
+// were removed. Explicitly migrate the two retired Flash entries below; all
+// remaining field expectations stay independent of the catalog/resolver.
 const fixtureFile = Gio.File.new_for_uri(import.meta.url).get_parent().resolve_relative_path('fixtures/model-catalog-baseline.json');
 const [, baselineBytes] = fixtureFile.load_contents(null);
 const baseline = JSON.parse(new TextDecoder().decode(baselineBytes));
+for (const model of baseline.find(item => item.id === 'deepseek').models) {
+    if (['deepseek-v4-flash', 'deepseek-v4-flash-vision-exp'].includes(model.id)) {
+        model.id = 'deepseek-flash';
+        model.name = 'DeepSeek Flash';
+        model.description = 'DeepSeek V4.1 Flash model with text and image input.';
+    }
+}
 const defaults = new ProviderConfigStore(undefined, { settings: null, apiKeyStore: new MemoryApiKeyStore(), envLookup: () => '' });
 for (const oldProvider of baseline) {
     const current = defaults.getProvider(oldProvider.id);
     for (const [key, expected] of Object.entries(oldProvider)) {
         if (['models', 'imageModels'].includes(key)) {
-            equal(current[key].map(model => model.id), expected.map(model => model.id), `${oldProvider.id} order`);
+            equal(current[key].map(model => model.id), [...new Set(expected.map(model => model.id))], `${oldProvider.id} order`);
             for (const oldModel of expected) {
                 const model = current[key].find(item => item.id === oldModel.id);
                 for (const [field, value] of Object.entries(oldModel))
@@ -98,7 +108,7 @@ const storage = new MemoryStorage();
 const updates = service(async ({ etag }) => {
     calls++;
     if (calls === 1) return ok(catalog());
-    assert(etag === '"revision-2"', 'Accepted payload ETag was not reused');
+    assert(etag === '"updated-catalog"', 'Accepted payload ETag was not reused');
     return { status: 304, headers: {} };
 }, storage);
 assert(calls === 0 && storage.state === null, 'Constructor performed network or writes');
@@ -107,13 +117,13 @@ updates.subscribe((_status, changed) => { if (changed) changes++; });
 const first = updates.refresh();
 assert(updates.refresh() === first, 'Concurrent checks did not share one promise');
 assert((await first).updated && changes === 1 && calls === 1, 'Valid update was not applied once');
-assert(storage.cache.current.etag === '"revision-2"', 'ETag was not committed with payload');
+assert(storage.cache.current.etag === '"updated-catalog"', 'ETag was not committed with payload');
 assert(!(await updates.refresh()).updated && calls === 1, 'Daily check interval was ignored');
 assert(!(await updates.refresh({ force: true })).updated && changes === 1 && calls === 2, '304 changed the catalog');
 const offline = service(async () => { throw new Error('Offline'); }, storage);
-assert(offline.snapshot.revision === 2, 'Offline startup lost cached catalog');
+assert(offline.snapshot.revision === BASE_REVISION + 1, 'Offline startup lost cached catalog');
 await offline.refresh({ force: true });
-assert(offline.snapshot.revision === 2 && offline.getStatus().error === 'Offline', 'Offline failure replaced cached catalog');
+assert(offline.snapshot.revision === BASE_REVISION + 1 && offline.getStatus().error === 'Offline', 'Offline failure replaced cached catalog');
 assert(offline.getStatus().nextAttemptAt > 1000000, 'Retry backoff was not persisted');
 offline.setEnabled(false);
 const disabled = service(async () => { throw new Error('Must not request'); }, storage);
@@ -123,9 +133,9 @@ assert(disabled.getStatus().error === 'Offline', 'Disabled updater made a reques
 
 for (const response of [
     { status: 200, text: '{', headers: {} },
-    ok(catalog(1)),
-    ok(catalog(2, data => { provider(data).models[0].name = 'Changed without revision'; })),
-    ok(catalog(3, data => { data.minAppVersion = '99.0.0'; })),
+    ok(catalog(BASE_REVISION)),
+    ok(catalog(BASE_REVISION + 1, data => { provider(data).models[0].name = 'Changed without revision'; })),
+    ok(catalog(BASE_REVISION + 2, data => { data.minAppVersion = '99.0.0'; })),
     { status: 200, text: ' '.repeat(1024 * 1024 + 1), headers: {} },
     { status: 500, headers: {} },
 ]) {
@@ -133,12 +143,12 @@ for (const response of [
     const before = JSON.stringify(storage.cache);
     const result = await failing.refresh({ force: true });
     assert(Boolean(result.error), 'Invalid update did not report an error');
-    assert(failing.snapshot.revision === 2 && JSON.stringify(storage.cache) === before, 'Invalid update modified the accepted cache');
+    assert(failing.snapshot.revision === BASE_REVISION + 1 && JSON.stringify(storage.cache) === before, 'Invalid update modified the accepted cache');
 }
 const disk = new MemoryStorage();
 disk.failCache = true;
 const unwritable = service(async () => ok(catalog()), disk);
-assert((await unwritable.refresh()).error && unwritable.snapshot.revision === 1, 'Failed atomic write published the snapshot');
+assert((await unwritable.refresh()).error && unwritable.snapshot.revision === BASE_REVISION, 'Failed atomic write published the snapshot');
 let rateLimitRequests = 0;
 const rateLimited = service(async () => { rateLimitRequests++; return { status: 429, headers: { 'retry-after': '600' } }; });
 await rateLimited.refresh();
@@ -167,17 +177,17 @@ assert(longLimitCalls === 1 && longLimit._timer > 0, 'Long rate limit stopped au
 longLimit.stop();
 
 const corrupt = new MemoryStorage();
-corrupt.cache = { current: { data: { broken: true } }, previous: { data: catalog(2), etag: 'older' } };
-assert(service(async () => {}, corrupt).snapshot.revision === 2, 'Previous accepted snapshot was not recovered');
-corrupt.cache = { current: { data: catalog(2), etag: 'older' } };
-const newerApp = new CatalogService({ bundled: snapshot(catalog(3)), schema: CATALOG_SCHEMA,
+corrupt.cache = { current: { data: { broken: true } }, previous: { data: catalog(BASE_REVISION + 1), etag: 'older' } };
+assert(service(async () => {}, corrupt).snapshot.revision === BASE_REVISION + 1, 'Previous accepted snapshot was not recovered');
+corrupt.cache = { current: { data: catalog(BASE_REVISION + 1), etag: 'older' } };
+const newerApp = new CatalogService({ bundled: snapshot(catalog(BASE_REVISION + 2)), schema: CATALOG_SCHEMA,
     validationOptions: CATALOG_OPTIONS, storage: corrupt, fetch: async () => {} });
-assert(newerApp.snapshot.revision === 3, 'An old cache replaced a newer bundled revision');
+assert(newerApp.snapshot.revision === BASE_REVISION + 2, 'An old cache replaced a newer bundled revision');
 let missingCalls = 0;
 const missingCache = service(async ({ etag }) => {
     missingCalls++;
     if (missingCalls === 1) { assert(etag === '', 'Missing cache sent an ETag'); return { status: 304 }; }
-    return ok(catalog(3));
+    return ok(catalog(BASE_REVISION + 2));
 }, corrupt);
 corrupt.cache = null;
 assert((await missingCache.refresh({ force: true })).updated && missingCalls === 2, 'Missing-payload 304 did not retry unconditionally');
@@ -189,7 +199,7 @@ await Promise.resolve();
 cancellableUpdate.stop();
 finishDownload(ok(catalog()));
 await pending;
-assert(cancellableUpdate.snapshot.revision === 1, 'Cancelled download published a snapshot');
+assert(cancellableUpdate.snapshot.revision === BASE_REVISION, 'Cancelled download published a snapshot');
 
 class MemorySettings {
     constructor(strings = {}) { this.strings = strings; }
@@ -205,7 +215,7 @@ const settings = new MemorySettings({
 const store = new ProviderConfigStore(undefined, { settings, apiKeyStore: new MemoryApiKeyStore(), envLookup: () => '' });
 store.setProviderCustomEndpoint('openai', 'https://example.invalid/v1');
 const oldRequest = store.forRequest(new Gio.Cancellable());
-const nextData = catalog(2, data => {
+const nextData = catalog(BASE_REVISION + 1, data => {
     const openai = provider(data);
     openai.defaultModelId = 'new-model';
     openai.models.push({ id: 'new-model', name: 'New model', thinking: false, contextWindowTokens: 90000 });
@@ -224,7 +234,7 @@ assert(!store.resolve('openai', 'gpt-5.6-sol').model.obsoleteField, 'Stale resol
 assert(oldRequest.resolve('openai', 'gpt-5.6-sol').model.maxOutputTokens === 128000, 'Active turn snapshot changed');
 assert(store.resolve('openai', 'gpt-5.6-sol').model.maxOutputTokens === 64000, 'New turn did not receive updated limit');
 const removed = clone(nextData);
-removed.revision = 3;
+removed.revision = BASE_REVISION + 2;
 provider(removed).models[0].status = 'retired';
 delete provider(removed).aliases['gpt-5.6'];
 store.applyCatalog(snapshot(removed));
@@ -262,11 +272,11 @@ assert(imageBody.size === '1024x1024', 'Image catalog parameter was dropped');
 const directory = GLib.dir_make_tmp('cusco-catalog-smoke-XXXXXX');
 const files = new FileCatalogStorage(directory);
 try {
-    files.saveCache({ current: { data: catalog(2), etag: '"one"' } });
+    files.saveCache({ current: { data: catalog(BASE_REVISION + 1), etag: '"one"' } });
     files.saveState({ enabled: false });
     assert(files.loadCache().current.etag === '"one"' && !files.loadState().enabled, 'Atomic cache/state round trip failed');
     GLib.file_set_contents(files.cachePath, '{');
-    assert(service(async () => {}, files).snapshot.revision === 1, 'Corrupt disk cache prevented bundled fallback');
+    assert(service(async () => {}, files).snapshot.revision === BASE_REVISION, 'Corrupt disk cache prevented bundled fallback');
 } finally {
     for (const path of [files.cachePath, files.settingsPath])
         Gio.File.new_for_path(path).delete(null);

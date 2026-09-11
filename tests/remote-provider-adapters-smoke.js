@@ -1,5 +1,6 @@
 import GLib from 'gi://GLib?version=2.0';
 import Gio from 'gi://Gio?version=2.0';
+import { BUNDLED_CATALOG } from '../src/providers/catalog.js';
 
 import {
     buildAnthropicMessagesBody,
@@ -412,16 +413,7 @@ const deepSeekResponsesModel = {
         defaultLevel: 'high',
     },
 };
-const deepSeekVisionModel = {
-    id: 'deepseek-v4-flash-vision-exp',
-    supportsImageAttachments: true,
-    supportedImageMimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
-    thinking: {
-        api: 'openai-responses',
-        levels: ['off', 'low', 'high', 'max'],
-        defaultLevel: 'high',
-    },
-};
+const deepSeekVisionModel = BUNDLED_CATALOG.getModel('deepseek', 'deepseek-flash');
 const deepSeekResponsesBody = buildOpenAiResponsesBody(
     deepSeekHistoryMessages,
     'deepseek-v4-pro',
@@ -452,13 +444,14 @@ const deepSeekImageBody = buildOpenAiResponsesBody(imageMessages, 'deepseek-v4-p
 assertEqual(deepSeekImageBody.input[0].content, 'Describe this image', 'DeepSeek omitted image input');
 const deepSeekVisionImageBody = buildOpenAiResponsesBody(
     imageMessages,
-    'deepseek-v4-flash-vision-exp',
+    'deepseek-flash',
     {
         provider: deepSeekResponsesProviderConfig,
         model: deepSeekVisionModel,
     },
 );
 assertEqual(deepSeekVisionImageBody.input[0].content[1].type, 'input_image', 'DeepSeek vision image part');
+assertEqual(deepSeekVisionImageBody.model, 'deepseek-flash', 'DeepSeek canonical Flash request ID');
 assertEqual(
     deepSeekVisionImageBody.input[0].content[1].image_url,
     `data:image/png;base64,${imageData}`,
@@ -466,7 +459,7 @@ assertEqual(
 );
 const deepSeekVisionBmpBody = buildOpenAiResponsesBody(
     bmpImageMessages,
-    'deepseek-v4-flash-vision-exp',
+    'deepseek-flash',
     {
         provider: deepSeekResponsesProviderConfig,
         model: deepSeekVisionModel,
@@ -475,7 +468,7 @@ const deepSeekVisionBmpBody = buildOpenAiResponsesBody(
 assertEqual(deepSeekVisionBmpBody.input[0].content, 'Read this bitmap', 'DeepSeek vision omitted unsupported BMP input');
 const deepSeekVisionOffBody = buildOpenAiResponsesBody(
     messages,
-    'deepseek-v4-flash-vision-exp',
+    'deepseek-flash',
     {
         provider: deepSeekResponsesProviderConfig,
         model: deepSeekVisionModel,
@@ -483,6 +476,15 @@ const deepSeekVisionOffBody = buildOpenAiResponsesBody(
     },
 );
 assertEqual(deepSeekVisionOffBody.reasoning.effort, 'none', 'DeepSeek vision disabled reasoning');
+const deepSeekFlashSearchBody = buildOpenAiResponsesBody(messages, 'deepseek-flash', {
+    provider: deepSeekResponsesProviderConfig,
+    model: deepSeekVisionModel,
+    thinkingLevel: 'high',
+    tools: [searchTool, mcpTool],
+});
+assertEqual(deepSeekFlashSearchBody.tools[0].type, 'function', 'DeepSeek Flash search uses a client tool');
+assertEqual(deepSeekFlashSearchBody.tools[0].name, 'search', 'DeepSeek Flash retains the search fallback');
+assertEqual(deepSeekFlashSearchBody.tools.some(tool => tool.type === 'web_search'), false, 'DeepSeek Flash omits ignored native search');
 const deepSeekToolImageBody = buildOpenAiResponsesBody(nativeToolMessages, 'deepseek-v4-pro', {
     provider: deepSeekResponsesProviderConfig,
 });
@@ -493,7 +495,7 @@ assertEqual(
 );
 const deepSeekVisionToolImageBody = buildOpenAiResponsesBody(
     nativeToolMessages,
-    'deepseek-v4-flash-vision-exp',
+    'deepseek-flash',
     {
         provider: deepSeekResponsesProviderConfig,
         model: deepSeekVisionModel,

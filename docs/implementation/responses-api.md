@@ -32,14 +32,14 @@ DeepSeek's always-stateless endpoint.
 | Concern | OpenAI | DeepSeek | Cusco consequence |
 |---|---|---|---|
 | Endpoint | `POST https://api.openai.com/v1/responses` | `POST https://api.deepseek.com/responses` | The existing URL normalization and bearer authentication can serve both. |
-| Supported models | Current OpenAI Responses-capable models | `deepseek-v4-flash` and `deepseek-v4-pro` | Both built-in DeepSeek models can change wire format together. |
+| Supported models | Current OpenAI Responses-capable models | `deepseek-flash` and `deepseek-v4-pro` | Both built-in DeepSeek models can change wire format together. |
 | State | Responses are stored by default; `store: false`, `previous_response_id`, and Conversations are supported | Always stateless; `store`, `previous_response_id`, and `conversation` are unsupported | Use client-owned history and make OpenAI storage opt-out explicit. |
 | Multi-turn input | A string or typed input Items; when stateless, replay every prior output Item | A string or typed input Items; full history is required on every request | Preserve typed Items rather than rebuilding only text messages. |
 | Streaming | Typed SSE such as `response.output_text.delta`, reasoning deltas, and terminal response events | The same event family, including `response.reasoning_text.delta`; no `[DONE]` marker | The existing Responses stream state is reusable, with provider fixtures for both variants. |
 | Reasoning | `reasoning.effort`, summaries, encrypted reasoning Items in stateless mode, and reasoning context controls | `reasoning.effort`; summary is accepted but no summary is generated; final reasoning is in `reasoning.content[]` | Request only supported fields and extract both summaries and content. |
 | Function tools | Responses-style `function` tools and `function_call` / `function_call_output` Items | The same core shapes are supported; parallel calling is always enabled | Cusco's current Responses function schema and `call_id` mapping can be shared. |
-| Hosted tools | OpenAI web search and other built-in tools | `web_search` is supported; file search, code interpreter, computer use, MCP, and most other hosted tools are ignored | Advertise only tools declared by each provider's capability profile. |
-| Image and file input | Supported by applicable models | Not supported; image parts are silently replaced by placeholder text | Preserve `supportsImageAttachments: false` when DeepSeek changes transport. |
+| Hosted tools | OpenAI web search and other built-in tools | `deepseek-flash` ignores built-in tools, including `web_search` | Flash declares `nativeSearch: false` in the catalog and retains Cusco's client search tool. |
+| Image and file input | Supported by applicable models | `deepseek-flash` accepts JPEG, PNG, GIF, and WebP image parts in user/developer messages and tool outputs; Pro is text-only | Resolve image support from the selected catalog model. |
 | Unsupported fields | Validated according to the OpenAI schema | Many unsupported fields are silently ignored | Body-shape tests are required; a successful request does not prove a control took effect. |
 | Context overflow | Supports API context controls depending on model and request | `truncation` is unsupported and overflow returns HTTP 400 | Keep compaction and capacity decisions in Cusco and provide a clear overflow error. |
 

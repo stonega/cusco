@@ -213,8 +213,8 @@ if (defaultStore.resolve('kimi', 'kimi-k3').model.maxOutputTokens !== 131072)
 if (defaultStore.resolve('deepseek', 'deepseek-v4-pro').model.maxOutputTokens !== 384000)
     throw new Error('DeepSeek V4 Pro output limit should match the model catalog');
 
-if (defaultStore.resolve('deepseek', 'deepseek-v4-flash-vision-exp').model.maxOutputTokens !== 384000)
-    throw new Error('DeepSeek V4 Flash Vision Experimental output limit should match the model catalog');
+if (defaultStore.resolve('deepseek', 'deepseek-flash').model.maxOutputTokens !== 384000)
+    throw new Error('DeepSeek Flash output limit should match the model catalog');
 
 if (defaultStore.getDefaultModel('openai').id !== 'gpt-5.6-sol')
     throw new Error('OpenAI default GPT-5.6 Sol model was not configured');
@@ -350,20 +350,22 @@ if (deepSeekProvider.apiFormat !== 'openai-responses'
 const deepSeekModelIds = deepSeekProvider.models.map((model) => model.id);
 const expectedDeepSeekModelIds = [
     'deepseek-v4-pro',
-    'deepseek-v4-flash',
-    'deepseek-v4-flash-vision-exp',
+    'deepseek-flash',
 ];
 
 if (deepSeekModelIds.join(',') !== expectedDeepSeekModelIds.join(','))
     throw new Error(`DeepSeek model list was not limited to supported models: ${deepSeekModelIds.join(', ')}`);
 
-const deepSeekVisionModel = defaultStore.resolve('deepseek', 'deepseek-v4-flash-vision-exp').model;
+const deepSeekVisionModel = defaultStore.resolve('deepseek', 'deepseek-flash').model;
 
 if (deepSeekVisionModel.contextWindowTokens !== 1000000
     || deepSeekVisionModel.supportsImageAttachments !== true
     || deepSeekVisionModel.supportedImageMimeTypes.join(',') !== 'image/jpeg,image/png,image/gif,image/webp') {
-    throw new Error('DeepSeek V4 Flash Vision Experimental metadata was incomplete');
+    throw new Error('DeepSeek Flash metadata was incomplete');
 }
+
+if (defaultStore.getNativeSearchTools('deepseek', 'deepseek-flash').length !== 0)
+    throw new Error('DeepSeek Flash should use the configured search fallback');
 
 if (defaultStore.getWebSearchProviderId() !== 'duckduckgo'
     || defaultStore.createWebSearchFallbackConfig().apiKeyRequired) {
@@ -891,14 +893,38 @@ if (defaultStore.getThinkingLevels('deepseek', 'deepseek-v4-pro').join(',') !== 
     throw new Error('DeepSeek V4 Pro should expose optional Responses reasoning efforts');
 }
 
-if (defaultStore.getThinkingLevels('deepseek', 'deepseek-v4-flash').join(',') !== 'off,low,high,max'
-    || defaultStore.getDefaultThinkingLevel('deepseek', 'deepseek-v4-flash') !== 'high') {
-    throw new Error('DeepSeek V4 Flash should expose Responses reasoning efforts');
+if (defaultStore.getThinkingLevels('deepseek', 'deepseek-flash').join(',') !== 'off,low,high,max'
+    || defaultStore.getDefaultThinkingLevel('deepseek', 'deepseek-flash') !== 'high') {
+    throw new Error('DeepSeek Flash should expose Responses reasoning efforts');
 }
 
-if (defaultStore.getThinkingLevels('deepseek', 'deepseek-v4-flash-vision-exp').join(',') !== 'off,low,high,max'
-    || defaultStore.getDefaultThinkingLevel('deepseek', 'deepseek-v4-flash-vision-exp') !== 'high') {
-    throw new Error('DeepSeek V4 Flash Vision Experimental should expose Responses reasoning efforts');
+for (const legacyId of ['deepseek-v4-flash', 'deepseek-v4-flash-vision-exp']) {
+    const legacyStore = new ProviderConfigStore(undefined, {
+        settings: new MemorySettings({
+            strings: {
+                'active-provider': 'deepseek',
+                'active-model': legacyId,
+                'provider-default-models': JSON.stringify({ deepseek: legacyId }),
+                'provider-discovered-models': JSON.stringify({ deepseek: [
+                    { id: 'deepseek-v4-flash', supportsImageAttachments: false },
+                    { id: 'deepseek-v4-flash-vision-exp', nativeSearch: { api: 'openai-responses', tools: ['web_search'] } },
+                ] }),
+            },
+            strv: { 'enabled-providers': ['deepseek'] },
+        }),
+        apiKeyStore: new MemoryApiKeyStore({ deepseek: 'deepseek-key' }),
+        envLookup: () => '',
+    });
+    legacyStore.assertModelAvailable('deepseek', legacyId);
+    if (legacyStore.resolve('deepseek', legacyId).model.id !== 'deepseek-flash'
+        || legacyStore.getActiveSelection().model.id !== 'deepseek-flash'
+        || legacyStore.getDefaultModel('deepseek').id !== 'deepseek-flash'
+        || legacyStore.getProvider('deepseek').models.map(model => model.id).join(',') !== expectedDeepSeekModelIds.join(',')
+        || !legacyStore.resolve('deepseek', legacyId).model.supportsImageAttachments
+        || legacyStore.getNativeSearchTools('deepseek', legacyId).length !== 0) {
+        throw new Error(`Legacy DeepSeek selection ${legacyId} did not migrate to the canonical Flash model`);
+    }
+    legacyStore.dispose();
 }
 
 const staleDeepSeekSettings = new MemorySettings({

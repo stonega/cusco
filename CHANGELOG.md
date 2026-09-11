@@ -11,6 +11,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Manage the default chat and image models in a validated JSON catalog, with daily GitHub updates, offline fallback, and manual refresh controls in provider settings.
 
+### Changed
+
+- Replace the two retired DeepSeek Flash entries with `deepseek-flash`, including vision support, and migrate saved selections to the canonical model. Flash uses the configured search fallback because its API ignores native web search.
+
 ### Fixed
 
 - Preserve complete model parameters during catalog updates and prevent stale discovery results from overriding built-in capabilities or hiding new models.
