@@ -28,6 +28,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install GNOME build dependencies
         run: |
@@ -52,8 +54,22 @@ jobs:
             ninja-build \
             xvfb
 
+      - name: Validate catalog revision against the previous version
+        env:
+          CATALOG_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -n "$CATALOG_BASE" ] && git cat-file -e "$CATALOG_BASE:data/model-catalog.v1.json" 2>/dev/null; then
+            git show "$CATALOG_BASE:data/model-catalog.v1.json" > /tmp/cusco-previous-catalog.json
+            gjs -m scripts/validate-model-catalog.js /tmp/cusco-previous-catalog.json
+          else
+            gjs -m scripts/validate-model-catalog.js
+          fi
+
       - name: Run smoke checks and build
         run: scripts/check.sh
+
+      - name: Verify catalog settings with a display
+        run: xvfb-run -a gjs -m tests/model-catalog-settings-smoke.js
 
       - name: Install package build dependencies
         if: startsWith(github.ref, 'refs/tags/')

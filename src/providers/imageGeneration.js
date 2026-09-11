@@ -4,6 +4,7 @@ import Soup from 'gi://Soup?version=3.0';
 
 import { createImageArtifactFromPath } from '../chat/artifacts.js';
 import { TOOL_PERMISSION_ASK } from '../tools/permissions.js';
+import { BUNDLED_CATALOG, IMAGE_PARAMETER_FIELDS, parameterValues } from './catalog.js';
 
 const APP_ID = 'io.github.stonega.Cusco';
 const DEFAULT_IMAGE_TIMEOUT_SECONDS = 90;
@@ -458,13 +459,7 @@ export async function discoverGeminiImageModels(config, options = {}) {
 }
 
 export function discoverZaiImageModels() {
-    return [
-        {
-            id: 'glm-image',
-            name: 'GLM-Image',
-            description: 'Z.ai text-to-image model.',
-        },
-    ];
+    return BUNDLED_CATALOG.listModels('zai', true).map(model => ({ ...model }));
 }
 
 async function readImagePayload(payload, options = {}) {
@@ -513,13 +508,19 @@ export async function generateImageForProvider(providerConfig, imageModel, promp
         timeoutSeconds: options.timeoutSeconds,
     };
     let response;
+    const parameters = parameterValues(imageModel, {
+        ...(options.size && imageModel?.parameters?.size?.runtime ? { size: options.size } : {}),
+        ...options.parameters,
+    }, {
+        fields: IMAGE_PARAMETER_FIELDS[providerConfig.imageApiFormat] ?? {},
+    });
 
     switch (providerConfig.imageApiFormat) {
     case 'openai-images':
         response = await requestJson(
             normalizeUrl(providerConfig.baseUrl, '/images/generations'),
             { Authorization: `Bearer ${providerConfig.apiKey}` },
-            buildOpenAiImageGenerationBody(normalizedPrompt, modelId, options),
+            { ...buildOpenAiImageGenerationBody(normalizedPrompt, modelId, options), ...parameters },
             requestOptions,
         );
         break;
@@ -527,7 +528,7 @@ export async function generateImageForProvider(providerConfig, imageModel, promp
         response = await requestJson(
             `${normalizeUrl(providerConfig.baseUrl, '/interactions')}?key=${encodeURIComponent(providerConfig.apiKey)}`,
             {},
-            buildGeminiImageGenerationBody(normalizedPrompt, modelId),
+            { ...buildGeminiImageGenerationBody(normalizedPrompt, modelId), ...parameters },
             requestOptions,
         );
         break;
@@ -535,7 +536,7 @@ export async function generateImageForProvider(providerConfig, imageModel, promp
         response = await requestJson(
             normalizeUrl(providerConfig.baseUrl, '/images/generations'),
             { Authorization: `Bearer ${providerConfig.apiKey}` },
-            buildZaiImageGenerationBody(normalizedPrompt, modelId, options),
+            { ...buildZaiImageGenerationBody(normalizedPrompt, modelId, options), ...parameters },
             requestOptions,
         );
         break;
@@ -589,7 +590,8 @@ export function createImageGenerationTool(providerConfigs, options = {}) {
         requiresPermission: true,
         concurrencySafe: false,
         run: async (input, runOptions = {}) => {
-            const { provider, model } = providerConfigs.createImageGenerationConfig(
+            const requestConfigs = providerConfigs.forRequest?.(runOptions.cancellable) ?? providerConfigs;
+            const { provider, model } = requestConfigs.createImageGenerationConfig(
                 runOptions.imageProviderId,
                 runOptions.imageModelId,
             );

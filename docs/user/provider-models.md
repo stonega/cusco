@@ -1,7 +1,20 @@
 # Provider Models
 
-This page mirrors Cusco's built-in provider registry in `src/providers/config.js`
-and the thinking-level registry in `src/providers/thinking.js`.
+The default model catalog is managed in `data/model-catalog.v1.json`. This page
+describes the bundled catalog; automatic updates can provide newer model records.
+
+In **Settings → Providers → Model Catalog**, Automatic Updates checks the Cusco
+GitHub repository after startup when due, then daily while the app is running.
+Use **Refresh Now** to check immediately. Catalog Status shows the revision,
+last successful check, and any download error. An offline or failed check keeps
+the saved catalog; the app also bundles a fallback copy.
+
+Catalog updates preserve credentials, custom endpoints, custom APIs, and valid
+model selections. New recommendations apply when no explicit default is saved.
+Running agent turns retain their original model configuration. If a selected
+model is retired without a replacement, choose another model before sending.
+Previously unrecorded parameters stay unknown until verified; a JSON entry does
+not imply Cusco implements every capability described by a provider.
 
 Provider credentials can use an API key or a supported account connection.
 See [Provider authentication](provider-authentication.md) for setup, token
@@ -52,8 +65,8 @@ support keep the chat picker disabled.
 | Z.ai | `glm-5.3` | `glm-5-turbo` | `Off`, `Auto` |
 | Custom APIs | First discovered model | Discovered or user configured | None |
 
-Built-in chat model lists are maintained by Cusco and are not discovered from
-the network in Settings. Each built-in provider's Endpoint row shows its active
+Built-in chat model lists are maintained in Cusco's GitHub catalog. Each built-in
+provider's Endpoint row shows its active
 URL and offers an edit action for advanced custom deployments. Custom
 endpoints receive the provider API key and chat content, and may not provide
 the compatibility, reliability, or experience of the official service. A

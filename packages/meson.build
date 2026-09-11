@@ -20,6 +20,21 @@ provider_runtime_package_sources = files(
   'providerRuntime/README.md',
 )
 
+model_catalog_package_sources = files(
+  'modelCatalog/index.js',
+  'modelCatalog/validation.js',
+  'modelCatalog/snapshot.js',
+  'modelCatalog/parameters.js',
+  'modelCatalog/service.js',
+  'modelCatalog/io.js',
+  'modelCatalog/README.md',
+)
+
+install_data(
+  model_catalog_package_sources,
+  install_dir: pkgdatadir / 'packages' / 'modelCatalog',
+)
+
 provider_auth_package_sources = files(
   'providerAuth/index.js',
   'providerAuth/auth.js',

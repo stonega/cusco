@@ -1,0 +1,1319 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Cusco model catalog v1",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "publishedAt": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+    },
+    "minAppVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "requiredRuntimeFeatures": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 8192
+      },
+      "minItems": 0,
+      "maxItems": 1000,
+      "uniqueItems": true
+    },
+    "providers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/provider"
+      },
+      "minItems": 7,
+      "maxItems": 7
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "revision",
+    "publishedAt",
+    "minAppVersion",
+    "requiredRuntimeFeatures",
+    "providers"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "provider": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "enum": [
+            "openai",
+            "anthropic",
+            "gemini",
+            "kimi",
+            "deepseek",
+            "grok",
+            "zai"
+          ]
+        },
+        "defaultModelId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+        },
+        "defaultImageModelId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+        },
+        "aliases": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+          }
+        },
+        "imageAliases": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+          }
+        },
+        "discovery": {
+          "type": "object",
+          "properties": {
+            "chat": {
+              "enum": [
+                "open",
+                "curated"
+              ]
+            },
+            "image": {
+              "enum": [
+                "open",
+                "curated"
+              ]
+            },
+            "excludedModelIds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "minItems": 0,
+              "maxItems": 1000,
+              "uniqueItems": true
+            },
+            "excludedImageModelIds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "minItems": 0,
+              "maxItems": 1000,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "chat",
+            "image",
+            "excludedModelIds",
+            "excludedImageModelIds"
+          ],
+          "additionalProperties": false
+        },
+        "modelDefaults": {
+          "type": "object",
+          "properties": {
+            "contextWindowTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "maxInputTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "maxOutputTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "requestDefaults": {
+              "type": "object",
+              "properties": {
+                "maxOutputTokens": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            },
+            "thinking": {
+              "$ref": "#/$defs/thinking"
+            },
+            "nativeSearch": {
+              "$ref": "#/$defs/nativeSearch"
+            },
+            "supportsImageAttachments": {
+              "type": "boolean"
+            },
+            "supportedImageMimeTypes": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "minItems": 0,
+              "maxItems": 1000,
+              "uniqueItems": true
+            },
+            "supportsToolStreaming": {
+              "type": "boolean"
+            },
+            "supportsStreamUsageOptions": {
+              "type": "boolean"
+            },
+            "supportsReasoningContentItems": {
+              "type": "boolean"
+            },
+            "supportsFunctionCalling": {
+              "type": "boolean"
+            },
+            "supportsStreaming": {
+              "type": "boolean"
+            },
+            "modalities": {
+              "type": "object",
+              "properties": {
+                "input": {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    },
+                    "image": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    },
+                    "audio": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    },
+                    "video": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    },
+                    "file": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                },
+                "output": {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    },
+                    "image": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    },
+                    "audio": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    },
+                    "video": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    },
+                    "file": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            },
+            "attachmentLimits": {
+              "type": "object",
+              "properties": {
+                "maxCount": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "maxBytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "mimeTypes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  },
+                  "minItems": 0,
+                  "maxItems": 1000,
+                  "uniqueItems": true
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            },
+            "capabilities": {
+              "type": "object",
+              "properties": {
+                "functionCalling": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "parallelToolCalls": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "nativeSearch": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "citations": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "jsonOutput": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "jsonSchemaOutput": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "streaming": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "usageReporting": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "imageEditing": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "thoughtSignatures": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            },
+            "parameters": {
+              "type": "object",
+              "properties": {},
+              "required": [],
+              "additionalProperties": {
+                "$ref": "#/$defs/parameter"
+              }
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "minItems": 0,
+              "maxItems": 1000,
+              "uniqueItems": true
+            },
+            "verifiedAt": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "notes": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "imageModelDefaults": {
+          "type": "object",
+          "properties": {
+            "contextWindowTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "maxInputTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "maxOutputTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "requestDefaults": {
+              "type": "object",
+              "properties": {
+                "maxOutputTokens": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            },
+            "thinking": {
+              "$ref": "#/$defs/thinking"
+            },
+            "nativeSearch": {
+              "$ref": "#/$defs/nativeSearch"
+            },
+            "supportsImageAttachments": {
+              "type": "boolean"
+            },
+            "supportedImageMimeTypes": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "minItems": 0,
+              "maxItems": 1000,
+              "uniqueItems": true
+            },
+            "supportsToolStreaming": {
+              "type": "boolean"
+            },
+            "supportsStreamUsageOptions": {
+              "type": "boolean"
+            },
+            "supportsReasoningContentItems": {
+              "type": "boolean"
+            },
+            "supportsFunctionCalling": {
+              "type": "boolean"
+            },
+            "supportsStreaming": {
+              "type": "boolean"
+            },
+            "modalities": {
+              "type": "object",
+              "properties": {
+                "input": {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    },
+                    "image": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    },
+                    "audio": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    },
+                    "video": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    },
+                    "file": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                },
+                "output": {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    },
+                    "image": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    },
+                    "audio": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    },
+                    "video": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    },
+                    "file": {
+                      "enum": [
+                        "supported",
+                        "unsupported",
+                        "unknown"
+                      ]
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            },
+            "attachmentLimits": {
+              "type": "object",
+              "properties": {
+                "maxCount": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "maxBytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "mimeTypes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  },
+                  "minItems": 0,
+                  "maxItems": 1000,
+                  "uniqueItems": true
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            },
+            "capabilities": {
+              "type": "object",
+              "properties": {
+                "functionCalling": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "parallelToolCalls": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "nativeSearch": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "citations": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "jsonOutput": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "jsonSchemaOutput": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "streaming": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "usageReporting": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "imageEditing": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "thoughtSignatures": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            },
+            "parameters": {
+              "type": "object",
+              "properties": {},
+              "required": [],
+              "additionalProperties": {
+                "$ref": "#/$defs/parameter"
+              }
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "minItems": 0,
+              "maxItems": 1000,
+              "uniqueItems": true
+            },
+            "verifiedAt": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "notes": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/model"
+          },
+          "minItems": 1,
+          "maxItems": 1000
+        },
+        "imageModels": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/model"
+          },
+          "minItems": 0,
+          "maxItems": 1000
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "minItems": 1,
+          "maxItems": 1000,
+          "uniqueItems": true
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        }
+      },
+      "required": [
+        "id",
+        "defaultModelId",
+        "aliases",
+        "discovery",
+        "modelDefaults",
+        "models",
+        "imageModels",
+        "sources"
+      ],
+      "additionalProperties": false
+    },
+    "model": {
+      "type": "object",
+      "properties": {
+        "contextWindowTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "maxInputTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "maxOutputTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "requestDefaults": {
+          "type": "object",
+          "properties": {
+            "maxOutputTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "thinking": {
+          "$ref": "#/$defs/thinking"
+        },
+        "nativeSearch": {
+          "$ref": "#/$defs/nativeSearch"
+        },
+        "supportsImageAttachments": {
+          "type": "boolean"
+        },
+        "supportedImageMimeTypes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "minItems": 0,
+          "maxItems": 1000,
+          "uniqueItems": true
+        },
+        "supportsToolStreaming": {
+          "type": "boolean"
+        },
+        "supportsStreamUsageOptions": {
+          "type": "boolean"
+        },
+        "supportsReasoningContentItems": {
+          "type": "boolean"
+        },
+        "supportsFunctionCalling": {
+          "type": "boolean"
+        },
+        "supportsStreaming": {
+          "type": "boolean"
+        },
+        "modalities": {
+          "type": "object",
+          "properties": {
+            "input": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "image": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "audio": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "video": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "file": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            },
+            "output": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "image": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "audio": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "video": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                },
+                "file": {
+                  "enum": [
+                    "supported",
+                    "unsupported",
+                    "unknown"
+                  ]
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "attachmentLimits": {
+          "type": "object",
+          "properties": {
+            "maxCount": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "maxBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "mimeTypes": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "minItems": 0,
+              "maxItems": 1000,
+              "uniqueItems": true
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "capabilities": {
+          "type": "object",
+          "properties": {
+            "functionCalling": {
+              "enum": [
+                "supported",
+                "unsupported",
+                "unknown"
+              ]
+            },
+            "parallelToolCalls": {
+              "enum": [
+                "supported",
+                "unsupported",
+                "unknown"
+              ]
+            },
+            "nativeSearch": {
+              "enum": [
+                "supported",
+                "unsupported",
+                "unknown"
+              ]
+            },
+            "citations": {
+              "enum": [
+                "supported",
+                "unsupported",
+                "unknown"
+              ]
+            },
+            "jsonOutput": {
+              "enum": [
+                "supported",
+                "unsupported",
+                "unknown"
+              ]
+            },
+            "jsonSchemaOutput": {
+              "enum": [
+                "supported",
+                "unsupported",
+                "unknown"
+              ]
+            },
+            "streaming": {
+              "enum": [
+                "supported",
+                "unsupported",
+                "unknown"
+              ]
+            },
+            "usageReporting": {
+              "enum": [
+                "supported",
+                "unsupported",
+                "unknown"
+              ]
+            },
+            "imageEditing": {
+              "enum": [
+                "supported",
+                "unsupported",
+                "unknown"
+              ]
+            },
+            "thoughtSignatures": {
+              "enum": [
+                "supported",
+                "unsupported",
+                "unknown"
+              ]
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": {
+            "$ref": "#/$defs/parameter"
+          }
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "minItems": 0,
+          "maxItems": 1000,
+          "uniqueItems": true
+        },
+        "verifiedAt": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "status": {
+          "enum": [
+            "available",
+            "deprecated",
+            "retired"
+          ]
+        },
+        "replacementId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "thinking": {
+      "anyOf": [
+        {
+          "const": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "api": {
+              "enum": [
+                "openai-responses",
+                "anthropic-adaptive",
+                "anthropic-budget",
+                "gemini-thinking-level",
+                "kimi-thinking",
+                "kimi-k3-reasoning",
+                "deepseek-thinking",
+                "zai-thinking",
+                "xai-reasoning"
+              ]
+            },
+            "levels": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "off",
+                  "minimal",
+                  "auto",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ]
+              },
+              "minItems": 1,
+              "maxItems": 1000,
+              "uniqueItems": true
+            },
+            "defaultLevel": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "alwaysOn": {
+              "type": "boolean"
+            },
+            "budgets": {
+              "type": "object",
+              "properties": {},
+              "required": [],
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            },
+            "summary": {
+              "enum": [
+                "auto",
+                "concise",
+                "detailed"
+              ]
+            },
+            "display": {
+              "enum": [
+                "summarized",
+                "omitted"
+              ]
+            },
+            "includeThoughts": {
+              "type": "boolean"
+            },
+            "keep": {
+              "enum": [
+                "all"
+              ]
+            },
+            "supportsReasoningEffort": {
+              "type": "boolean"
+            },
+            "offEffort": {
+              "enum": [
+                "none"
+              ]
+            },
+            "maxOutputTokensParameter": {
+              "enum": [
+                "max_tokens",
+                "max_completion_tokens"
+              ]
+            }
+          },
+          "required": [
+            "api",
+            "levels"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "nativeSearch": {
+      "anyOf": [
+        {
+          "const": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "api": {
+              "enum": [
+                "openai-responses",
+                "anthropic-messages",
+                "gemini-generate-content",
+                "zai-chat-completions"
+              ]
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "minItems": 0,
+              "maxItems": 1000,
+              "uniqueItems": true
+            },
+            "includeSources": {
+              "type": "boolean"
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "maxUses": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "searchEngine": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "api",
+            "tools"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "parameter": {
+      "type": "object",
+      "properties": {
+        "support": {
+          "enum": [
+            "supported",
+            "unsupported",
+            "unknown"
+          ]
+        },
+        "type": {
+          "enum": [
+            "number",
+            "integer",
+            "boolean",
+            "string",
+            "array",
+            "object"
+          ]
+        },
+        "runtime": {
+          "type": "boolean"
+        },
+        "default": {},
+        "allowedValues": {
+          "type": "array",
+          "items": {},
+          "minItems": 0,
+          "maxItems": 1000
+        },
+        "minimum": {
+          "type": "number"
+        },
+        "maximum": {
+          "type": "number"
+        },
+        "maxItems": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "onlyWithoutThinking": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "minItems": 0,
+          "maxItems": 1000,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "support",
+        "type",
+        "runtime"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

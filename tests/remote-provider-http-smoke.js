@@ -4,6 +4,7 @@ import Soup from 'gi://Soup?version=3.0';
 
 import {
     AnthropicMessagesProvider,
+    discoverGeminiModels,
     discoverOpenAiCompatibleModels,
     GeminiGenerateContentProvider,
     isNetworkError,
@@ -218,6 +219,17 @@ server.add_handler('/v1/models', (_server, message) => {
     setJsonResponse(message, {
         data: [
             { id: 'local-model', name: 'Local Model' },
+        ],
+    });
+});
+
+server.add_handler('/gemini-discovery/models', (_server, message) => {
+    setJsonResponse(message, {
+        models: [
+            { name: 'models/gemini-catalog-fixture', displayName: 'New Catalog Model',
+                supportedGenerationMethods: ['generateContent'], inputTokenLimit: 50000, outputTokenLimit: 8000 },
+            { name: 'models/gemini-3.1-pro-fixture', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/embedding-fixture', supportedGenerationMethods: ['embedContent'] },
         ],
     });
 });
@@ -553,6 +565,14 @@ if (listening) {
         const models = await discoverOpenAiCompatibleModels(config, { timeoutSeconds: 5 });
         assertEqual(models.length, 1, 'Discovered model count');
         assertEqual(models[0].id, 'local-model', 'Discovered model id');
+
+        const geminiModels = await discoverGeminiModels({
+            ...config, id: 'gemini', baseUrl: `${serverBaseUrl}/gemini-discovery`,
+        }, { timeoutSeconds: 5 });
+        assertEqual(geminiModels.length, 2, 'Gemini discovery accepts new chat models and excludes embeddings');
+        assertEqual(geminiModels[0].id, 'gemini-catalog-fixture', 'Gemini discovery has no hardcoded ID list');
+        assertEqual(geminiModels[0].maxOutputTokens, 8000, 'Gemini discovery preserves API token limits');
+        assertEqual(geminiModels[1].thinking, undefined, 'Gemini discovery does not infer reasoning from model names');
 
         const provider = new OpenAiCompatibleChatProvider(config);
         let text = '';

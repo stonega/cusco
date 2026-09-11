@@ -1255,6 +1255,56 @@ export function createProviderSettingsPage(providerConfigs, onChanged) {
 
     const settingsParent = () => page.get_root() ?? page;
 
+    const catalogService = providerConfigs.getCatalogService?.();
+    if (catalogService) {
+        const catalogGroup = new Adw.PreferencesGroup({ title: 'Model Catalog',
+            description: 'Keep the built-in model list and parameters up to date from the Cusco GitHub repository.' });
+        const automaticRow = new Adw.SwitchRow({ title: 'Automatic Updates',
+            subtitle: 'Check daily while Cusco is running. The saved catalog remains available offline.' });
+        const statusRow = new Adw.ActionRow({ title: 'Catalog Status' });
+        const refreshButton = new Gtk.Button({ label: 'Refresh Now', valign: Gtk.Align.CENTER });
+        statusRow.add_suffix(refreshButton);
+        catalogGroup.add(automaticRow);
+        catalogGroup.add(statusRow);
+        page.add(catalogGroup);
+        let syncing = false;
+        const syncCatalog = () => {
+            const status = catalogService.getStatus();
+            syncing = true;
+            automaticRow.set_active(status.enabled);
+            syncing = false;
+            refreshButton.set_sensitive(!status.updating);
+            const lastUpdated = status.lastSuccessAt
+                ? new Date(status.lastSuccessAt * 1000).toLocaleString() : 'Never checked';
+            statusRow.set_subtitle(status.updating ? 'Checking for updates…'
+                : `Revision ${status.revision} · ${lastUpdated}${status.error ? `\n${status.error}` : ''}`);
+        };
+        automaticRow.connect('notify::active', () => {
+            if (syncing)
+                return;
+            try { catalogService.setEnabled(automaticRow.get_active()); } catch (error) {
+                showProviderMessage(settingsParent(), 'Could Not Save Update Setting', error.message);
+            }
+            syncCatalog();
+        });
+        refreshButton.connect('clicked', async () => {
+            const pending = catalogService.refresh({ force: true });
+            syncCatalog();
+            await pending;
+            syncCatalog();
+            syncAllRows();
+        });
+        let unsubscribe = null;
+        page.connect('map', () => {
+            unsubscribe?.();
+            unsubscribe = catalogService.subscribe(() => { syncCatalog(); syncAllRows(); });
+            syncCatalog();
+            syncAllRows();
+        });
+        page.connect('unmap', () => { unsubscribe?.(); unsubscribe = null; });
+        syncCatalog();
+    }
+
     syncCustomProviderRows = () => {
         const customProviders = providerConfigs.listProviders()
             .filter((provider) => provider.customizable);

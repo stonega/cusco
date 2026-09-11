@@ -6,6 +6,12 @@ configure_file(
   install_dir: datadir / 'applications',
 )
 
+install_data(
+  'model-catalog.v1.json',
+  'model-catalog.schema.json',
+  install_dir: pkgdatadir,
+)
+
 configure_file(
   input: application_id + '.appdata.xml.in',
   output: application_id + '.appdata.xml',

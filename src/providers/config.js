@@ -1,6 +1,9 @@
 import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 
+import { BUNDLED_CATALOG, clone } from './catalog.js';
+import { PROVIDER_DEFINITIONS } from './providerDefinitions.js';
+
 import {
     AnthropicMessagesProvider,
     discoverAnthropicModels,
@@ -13,7 +16,6 @@ import {
 import {
     discoverGeminiImageModels,
     discoverOpenAiImageModels,
-    discoverZaiImageModels,
 } from './imageGeneration.js';
 import {
     getDefaultThinkingLevel,
@@ -403,574 +405,56 @@ function normalizeContextWindowTokens(value) {
     return Math.round(tokens);
 }
 
-const PROVIDER_MODEL_ID_ALIASES = {
-    openai: {
-        'gpt-5.6': 'gpt-5.6-sol',
-    },
-    anthropic: {
-        'claude-haiku-4-5-20251001': 'claude-haiku-4-5',
-    },
-    gemini: {
-        'gemini-3.5-flash': 'gemini-3.7-flash',
-        'gemini-3.1-pro': 'gemini-3.1-pro-preview',
-    },
-    grok: {
-        'grok4.6': 'grok-4.6',
-    },
-    zai: {
-        'glm5.3-flash': 'glm-5.3-flash',
-        'glm5.3': 'glm-5.3',
-        'glm5.2': 'glm-5.2',
-        'glm5-turbo': 'glm-5-turbo',
-    },
-};
-const PROVIDER_SUPPORTED_MODEL_IDS = {
-    anthropic: new Set([
-        'claude-fable-5',
-        'claude-opus-5',
-        'claude-sonnet-5',
-        'claude-haiku-4-5',
-    ]),
-    gemini: new Set([
-        'gemini-3.7-flash',
-        'gemini-3.6-flash',
-        'gemini-3.5-flash-lite',
-        'gemini-3.1-pro-preview',
-    ]),
-    kimi: new Set([
-        'kimi-k3',
-        'kimi-k2.7-code',
-        'kimi-k2.6',
-    ]),
-    deepseek: new Set([
-        'deepseek-v4-pro',
-        'deepseek-v4-flash',
-        'deepseek-v4-flash-vision-exp',
-    ]),
-    grok: new Set([
-        'grok-4.6',
-        'grok-4.5',
-        'grok-4.3',
-    ]),
-    zai: new Set([
-        'glm-5.3',
-        'glm-5.3-flash',
-        'glm-5.2',
-        'glm-5-turbo',
-    ]),
-};
-
-const PROVIDER_SUPPORTED_IMAGE_MODEL_IDS = {
-    gemini: new Set([
-        'gemini-3.1-flash-image',
-        'gemini-3.1-flash-lite-image',
-        'gemini-3-pro-image',
-    ]),
-    zai: new Set([
-        'glm-image',
-    ]),
-    grok: new Set([
-        'grok-imagine-image-quality',
-        'grok-imagine-image',
-    ]),
-};
-const PROVIDER_UNSUPPORTED_IMAGE_MODEL_IDS = {
-    gemini: new Set([
-        'gemini-2.5-flash-image',
-    ]),
-    zai: new Set([
-        'cogview-4-250304',
-    ]),
-};
-
-const IMAGE_MODEL_METADATA = {
-    openai: {
-        'gpt-image-2': {
-            id: 'gpt-image-2',
-            name: 'GPT Image 2',
-            description: 'OpenAI image generation model.',
-        },
-    },
-    gemini: {
-        'gemini-3.1-flash-image': {
-            id: 'gemini-3.1-flash-image',
-            name: 'Gemini 3.1 Flash Image',
-            description: 'Gemini Nano Banana 2 image generation model.',
-        },
-        'gemini-3.1-flash-lite-image': {
-            id: 'gemini-3.1-flash-lite-image',
-            name: 'Gemini 3.1 Flash Lite Image',
-            description: 'Gemini Nano Banana 2 Lite image generation model.',
-        },
-        'gemini-3-pro-image': {
-            id: 'gemini-3-pro-image',
-            name: 'Gemini 3 Pro Image',
-            description: 'Gemini Nano Banana Pro image generation model.',
-        },
-    },
-    zai: {
-        'glm-image': {
-            id: 'glm-image',
-            name: 'GLM-Image',
-            description: 'Z.ai text-to-image model for complex layouts, posters, diagrams, and text-rich images.',
-        },
-    },
-    grok: {
-        'grok-imagine-image-quality': {
-            id: 'grok-imagine-image-quality',
-            name: 'Grok Imagine Image Quality',
-            description: 'xAI Grok Imagine image generation model optimized for higher-quality output.',
-        },
-        'grok-imagine-image': {
-            id: 'grok-imagine-image',
-            name: 'Grok Imagine Image',
-            description: 'xAI Grok Imagine image generation model.',
-        },
-    },
-};
-
-function normalizeProviderModelId(providerId, modelId) {
-    const id = String(modelId ?? '').trim();
-
-    return PROVIDER_MODEL_ID_ALIASES[providerId]?.[id] ?? id;
+function normalizeProviderModelId(providerId, modelId, catalog = BUNDLED_CATALOG) {
+    return catalog.normalizeId(providerId, modelId);
 }
 
-function isProviderModelSupported(providerId, modelId) {
-    const supportedModelIds = PROVIDER_SUPPORTED_MODEL_IDS[providerId];
-
-    return !supportedModelIds || supportedModelIds.has(modelId);
+function isProviderImageModelSupported(providerId, modelId, options = {}, catalog = BUNDLED_CATALOG) {
+    return catalog.isSupported(providerId, modelId, { image: true,
+        custom: options.custom && isCustomProviderId(providerId) });
 }
 
-function isProviderImageModelSupported(providerId, modelId, options = {}) {
-    const id = String(modelId ?? '').trim();
-    const unsupportedModelIds = PROVIDER_UNSUPPORTED_IMAGE_MODEL_IDS[providerId];
-
-    if (unsupportedModelIds?.has(id))
-        return false;
-
-    const supportedModelIds = PROVIDER_SUPPORTED_IMAGE_MODEL_IDS[providerId];
-
-    if (!supportedModelIds)
-        return true;
-
-    return supportedModelIds.has(id) || Boolean(options.custom && isCustomProviderId(providerId));
-}
-
-const OPENAI_GPT_56_THINKING = {
-    api: 'openai-responses',
-    levels: ['off', 'auto', 'low', 'medium', 'high', 'xhigh', 'max'],
-    summary: 'auto',
-};
-const OPENAI_MODEL_METADATA = {
-    'gpt-5.6-sol': {
-        id: 'gpt-5.6-sol',
-        name: 'GPT-5.6 Sol',
-        description: 'Frontier model for complex professional work.',
-        contextWindowTokens: 1050000,
-        maxOutputTokens: 128000,
-        thinking: OPENAI_GPT_56_THINKING,
-    },
-    'gpt-5.6-terra': {
-        id: 'gpt-5.6-terra',
-        name: 'GPT-5.6 Terra',
-        description: 'GPT-5.6 model that balances intelligence and cost.',
-        contextWindowTokens: 1050000,
-        maxOutputTokens: 128000,
-        thinking: OPENAI_GPT_56_THINKING,
-    },
-    'gpt-5.6-luna': {
-        id: 'gpt-5.6-luna',
-        name: 'GPT-5.6 Luna',
-        description: 'GPT-5.6 model optimized for cost-sensitive workloads.',
-        contextWindowTokens: 1050000,
-        maxOutputTokens: 128000,
-        thinking: OPENAI_GPT_56_THINKING,
-    },
-};
-const ANTHROPIC_ADAPTIVE_THINKING = {
-    api: 'anthropic-adaptive',
-    levels: ['off', 'low', 'medium', 'high', 'xhigh', 'max'],
-    defaultLevel: 'high',
-    display: 'summarized',
-};
-const ANTHROPIC_ALWAYS_ON_ADAPTIVE_THINKING = {
-    ...ANTHROPIC_ADAPTIVE_THINKING,
-    levels: ['low', 'medium', 'high', 'xhigh', 'max'],
-    alwaysOn: true,
-};
-const ANTHROPIC_MODEL_METADATA = {
-    'claude-fable-5': {
-        id: 'claude-fable-5',
-        name: 'Claude Fable 5',
-        description: 'Next-generation intelligence for long-running agents.',
-        contextWindowTokens: 1000000,
-        thinking: ANTHROPIC_ALWAYS_ON_ADAPTIVE_THINKING,
-    },
-    'claude-opus-5': {
-        id: 'claude-opus-5',
-        name: 'Claude Opus 5',
-        description: 'For complex agentic coding and enterprise work.',
-        contextWindowTokens: 1000000,
-        thinking: ANTHROPIC_ADAPTIVE_THINKING,
-    },
-    'claude-sonnet-5': {
-        id: 'claude-sonnet-5',
-        name: 'Claude Sonnet 5',
-        description: 'The best combination of speed and intelligence.',
-        contextWindowTokens: 1000000,
-        thinking: ANTHROPIC_ADAPTIVE_THINKING,
-    },
-    'claude-haiku-4-5': {
-        id: 'claude-haiku-4-5',
-        name: 'Claude Haiku 4.5',
-        description: 'Fastest Claude model with near-frontier intelligence.',
-        contextWindowTokens: 200000,
-        thinking: {
-            api: 'anthropic-budget',
-            levels: ['off', 'auto', 'low', 'medium', 'high'],
-            display: 'summarized',
-            budgets: {
-                auto: 2048,
-                low: 1024,
-                medium: 2048,
-                high: 3072,
-            },
-        },
-    },
-};
-const KIMI_MODEL_METADATA = {
-    'kimi-k3': {
-        id: 'kimi-k3',
-        name: 'Kimi K3',
-        description: 'Kimi flagship model for long-horizon coding, knowledge work, reasoning, and visual understanding. Context 1M.',
-        contextWindowTokens: 1000000,
-        maxOutputTokens: 131072,
-        thinking: {
-            api: 'kimi-k3-reasoning',
-            levels: ['max'],
-            defaultLevel: 'max',
-            alwaysOn: true,
-            maxOutputTokensParameter: 'max_completion_tokens',
-        },
-    },
-    'kimi-k2.7-code': {
-        id: 'kimi-k2.7-code',
-        name: 'Kimi K2.7 Code',
-        description: 'Kimi coding model with stronger long-context instruction following and higher coding task success. Context 256k.',
-        contextWindowTokens: 256000,
-        thinking: {
-            api: 'kimi-thinking',
-            levels: ['auto'],
-            keep: 'all',
-            alwaysOn: true,
-        },
-    },
-    'kimi-k2.6': {
-        id: 'kimi-k2.6',
-        name: 'Kimi K2.6',
-        description: 'Kimi intelligent multimodal model for agent, code, visual understanding, and general tasks with thinking and non-thinking modes. Context 256k.',
-        contextWindowTokens: 256000,
-        thinking: {
-            api: 'kimi-thinking',
-            levels: ['off', 'auto'],
-            keep: 'all',
-        },
-    },
-};
-const DEEPSEEK_RESPONSES_THINKING = {
-    api: 'openai-responses',
-    levels: ['off', 'low', 'high', 'max'],
-    defaultLevel: 'high',
-};
-const DEEPSEEK_MODEL_METADATA = {
-    'deepseek-v4-pro': {
-        id: 'deepseek-v4-pro',
-        name: 'DeepSeek V4 Pro',
-        description: 'DeepSeek reasoning-capable model.',
-        contextWindowTokens: 1000000,
-        maxOutputTokens: 384000,
-        thinking: DEEPSEEK_RESPONSES_THINKING,
-    },
-    'deepseek-v4-flash': {
-        id: 'deepseek-v4-flash',
-        name: 'DeepSeek V4 Flash',
-        description: 'DeepSeek lower-latency model.',
-        contextWindowTokens: 1000000,
-        maxOutputTokens: 384000,
-        thinking: DEEPSEEK_RESPONSES_THINKING,
-    },
-    'deepseek-v4-flash-vision-exp': {
-        id: 'deepseek-v4-flash-vision-exp',
-        name: 'DeepSeek V4 Flash Vision Experimental',
-        description: 'Experimental DeepSeek model for visual understanding with text and image input.',
-        contextWindowTokens: 1000000,
-        maxOutputTokens: 384000,
-        supportsImageAttachments: true,
-        supportedImageMimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
-        thinking: DEEPSEEK_RESPONSES_THINKING,
-    },
-};
-const ZAI_MODEL_METADATA = {
-    'glm-5.3': {
-        id: 'glm-5.3',
-        name: 'GLM-5.3',
-        description: 'Z.ai flagship model for complex coding and long-horizon agent tasks.',
-        contextWindowTokens: 1000000,
-        maxOutputTokens: 128000,
-        thinking: {
-            api: 'zai-thinking',
-            levels: ['low', 'high', 'max'],
-            defaultLevel: 'max',
-            alwaysOn: true,
-            supportsReasoningEffort: true,
-        },
-    },
-    'glm-5.3-flash': {
-        id: 'glm-5.3-flash',
-        name: 'GLM-5.3 Flash',
-        description: 'Z.ai cost-efficient native multimodal model for coding, agentic work, and visual understanding.',
-        contextWindowTokens: 1000000,
-        maxOutputTokens: 131072,
-        supportsImageAttachments: true,
-        supportsToolStreaming: true,
-        thinking: {
-            api: 'zai-thinking',
-            levels: ['low', 'high', 'max'],
-            defaultLevel: 'max',
-            alwaysOn: true,
-            supportsReasoningEffort: true,
-        },
-    },
-    'glm-5.2': {
-        id: 'glm-5.2',
-        name: 'GLM-5.2',
-        description: 'Z.ai flagship model for coding and agent applications.',
-        contextWindowTokens: 1000000,
-        thinking: {
-            api: 'zai-thinking',
-            levels: ['off', 'auto', 'high', 'max'],
-            supportsReasoningEffort: true,
-        },
-    },
-    'glm-5-turbo': {
-        id: 'glm-5-turbo',
-        name: 'GLM-5 Turbo',
-        description: 'Z.ai faster GLM-5 series model optimized for agent workflows.',
-        contextWindowTokens: 200000,
-        thinking: {
-            api: 'zai-thinking',
-            levels: ['off', 'auto'],
-        },
-    },
-};
-const GROK_MODEL_METADATA = {
-    'grok-4.6': {
-        id: 'grok-4.6',
-        name: 'Grok 4.6',
-        description: 'xAI frontier model for coding, agentic tasks, and knowledge work.',
-        contextWindowTokens: 500000,
-        thinking: {
-            api: 'xai-reasoning',
-            levels: ['low', 'medium', 'high', 'xhigh'],
-            defaultLevel: 'high',
-        },
-    },
-    'grok-4.5': {
-        id: 'grok-4.5',
-        name: 'Grok 4.5',
-        description: 'xAI Grok model for frontier chat, coding, and agentic work.',
-        contextWindowTokens: 1000000,
-        thinking: {
-            api: 'xai-reasoning',
-            levels: ['low', 'medium', 'high'],
-            defaultLevel: 'high',
-        },
-    },
-    'grok-4.3': {
-        id: 'grok-4.3',
-        name: 'Grok 4.3',
-        description: 'xAI Grok text and vision model with a 1M token context window.',
-        contextWindowTokens: 1000000,
-        thinking: {
-            api: 'xai-reasoning',
-            levels: ['off', 'low', 'medium', 'high'],
-            defaultLevel: 'low',
-            offEffort: 'none',
-        },
-    },
-};
-const PROVIDER_MODEL_METADATA = {
-    openai: OPENAI_MODEL_METADATA,
-    anthropic: ANTHROPIC_MODEL_METADATA,
-    kimi: KIMI_MODEL_METADATA,
-    deepseek: DEEPSEEK_MODEL_METADATA,
-    grok: GROK_MODEL_METADATA,
-    zai: ZAI_MODEL_METADATA,
-};
-const PROVIDER_MODEL_CONTEXT_WINDOW_TOKENS = {
-    openai: {
-        'gpt-5.6-sol': 1050000,
-        'gpt-5.6-terra': 1050000,
-        'gpt-5.6-luna': 1050000,
-        'gpt-5.5': 1000000,
-        'gpt-5.4-mini': 400000,
-        'gpt-4.1': 1000000,
-    },
-    anthropic: {
-        'claude-fable-5': 1000000,
-        'claude-opus-5': 1000000,
-        'claude-sonnet-5': 1000000,
-        'claude-haiku-4-5': 200000,
-    },
-    gemini: {
-        'gemini-3.7-flash': 1048576,
-        'gemini-3.6-flash': 1048576,
-        'gemini-3.5-flash-lite': 1048576,
-        'gemini-3.1-pro-preview': 1048576,
-    },
-    grok: {
-        'grok-4.6': 500000,
-        'grok-4.5': 1000000,
-        'grok-4.3': 1000000,
-    },
-};
-
-function getProviderModelMetadata(providerId, modelId) {
-    const metadata = PROVIDER_MODEL_METADATA[providerId]?.[modelId] ?? null;
-    const contextWindowTokens = PROVIDER_MODEL_CONTEXT_WINDOW_TOKENS[providerId]?.[modelId];
-
-    if (contextWindowTokens === undefined)
-        return metadata;
-
-    return {
-        ...(metadata ?? {}),
-        contextWindowTokens,
-    };
-}
-
-function normalizeStoredThinkingCapability(value) {
-    if (value === false)
-        return false;
-
-    if (!value || typeof value !== 'object' || Array.isArray(value))
-        return undefined;
-
-    const capability = { ...value };
-
-    if (Array.isArray(value.levels))
-        capability.levels = value.levels.map(String);
-
-    if (value.budgets && typeof value.budgets === 'object' && !Array.isArray(value.budgets))
-        capability.budgets = { ...value.budgets };
-
-    return capability;
-}
-
-function normalizeStoredModels(models, providerId = '') {
+function normalizeStoredModels(models, providerId = '', catalog = BUNDLED_CATALOG, image = false) {
     if (!Array.isArray(models))
         return [];
 
     const seenIds = new Set();
     const normalizedModels = [];
-
     for (const model of models) {
         const rawId = String(model?.id ?? model).trim();
-        const id = normalizeProviderModelId(providerId, rawId);
-
-        if (!id || seenIds.has(id) || !isProviderModelSupported(providerId, id))
+        const id = catalog.normalizeId(providerId, rawId, image);
+        if (!id || seenIds.has(id) || !catalog.isSupported(providerId, id, { image }))
             continue;
 
-        const metadata = getProviderModelMetadata(providerId, id);
-        const normalizedModel = {
-            id,
-            name: metadata?.name ?? String(model?.name ?? id).replace(rawId, id),
-            description: metadata?.description ?? String(model?.description ?? 'Discovered model.'),
-        };
-        const contextWindowTokens = normalizeContextWindowTokens(
-            metadata?.contextWindowTokens
-            ?? model?.contextWindowTokens
-            ?? model?.contextLengthTokens
-            ?? model?.contextLength,
-        );
-        const thinking = normalizeStoredThinkingCapability(model?.thinking ?? metadata?.thinking);
-        const supportsImageAttachments = metadata?.supportsImageAttachments
-            ?? model?.supportsImageAttachments;
-        const supportsToolStreaming = metadata?.supportsToolStreaming
-            ?? model?.supportsToolStreaming;
-        const supportedImageMimeTypes = metadata?.supportedImageMimeTypes
-            ?? model?.supportedImageMimeTypes;
-        const maxOutputTokens = normalizeMaxOutputTokens(
-            metadata?.maxOutputTokens
-            ?? model?.maxOutputTokens
-            ?? model?.maxTokens,
-        );
-
-        if (contextWindowTokens !== undefined)
-            normalizedModel.contextWindowTokens = contextWindowTokens;
-
-        normalizedModel.maxOutputTokens = maxOutputTokens;
-
-        if (thinking !== undefined)
-            normalizedModel.thinking = thinking;
-
-        if (typeof supportsImageAttachments === 'boolean')
-            normalizedModel.supportsImageAttachments = supportsImageAttachments;
-
-        if (typeof supportsToolStreaming === 'boolean')
-            normalizedModel.supportsToolStreaming = supportsToolStreaming;
-
-        if (Array.isArray(supportedImageMimeTypes)) {
-            normalizedModel.supportedImageMimeTypes = [...new Set(supportedImageMimeTypes
-                .map((value) => String(value).trim().toLowerCase())
-                .filter(Boolean))];
+        const metadata = catalog.getModel(providerId, id, image);
+        // Known catalog models are complete authoritative records. In particular,
+        // legacy persisted capabilities must not restore a field removed upstream.
+        const normalized = metadata ? clone(metadata)
+            : typeof model === 'object' && model ? clone(model) : {};
+        normalized.id = id;
+        normalized.name = metadata?.name ?? String(model?.name ?? id).replace(rawId, id);
+        normalized.description = metadata?.description ?? String(model?.description ?? 'Discovered model.');
+        if (!image) {
+            const context = normalizeContextWindowTokens(normalized.contextWindowTokens
+                ?? normalized.contextLengthTokens ?? normalized.contextLength);
+            if (context !== undefined)
+                normalized.contextWindowTokens = context;
+            if (metadata?.maxOutputTokens !== undefined)
+                normalized.documentedMaxOutputTokens = metadata.maxOutputTokens;
+            normalized.maxOutputTokens = normalizeMaxOutputTokens(
+                normalized.requestDefaults?.maxOutputTokens ?? normalized.maxOutputTokens ?? normalized.maxTokens);
         }
-
         seenIds.add(id);
-        normalizedModels.push(normalizedModel);
+        normalizedModels.push(normalized);
     }
-
-    const supportedModelIds = PROVIDER_SUPPORTED_MODEL_IDS[providerId];
-
-    if (supportedModelIds) {
-        const modelOrder = [...supportedModelIds];
-        normalizedModels.sort((left, right) => modelOrder.indexOf(left.id) - modelOrder.indexOf(right.id));
-    }
-
+    const order = catalog.listModels(providerId, image).map(model => model.id);
+    const rank = id => order.includes(id) ? order.indexOf(id) : order.length;
+    normalizedModels.sort((a, b) => rank(a.id) - rank(b.id));
     return normalizedModels;
 }
 
-function normalizeStoredImageModels(models, providerId = '') {
-    if (!Array.isArray(models))
-        return [];
-
-    const seenIds = new Set();
-    const normalizedModels = [];
-
-    for (const model of models) {
-        const id = String(model?.id ?? model).trim();
-
-        if (!id || seenIds.has(id) || !isProviderImageModelSupported(providerId, id))
-            continue;
-
-        const metadata = IMAGE_MODEL_METADATA[providerId]?.[id];
-
-        seenIds.add(id);
-        normalizedModels.push({
-            id,
-            name: metadata?.name ?? String(model?.name ?? id),
-            description: metadata?.description ?? String(model?.description ?? 'Discovered image generation model.'),
-            ...(model?.custom ? { custom: true } : {}),
-        });
-    }
-
-    const supportedModelIds = PROVIDER_SUPPORTED_IMAGE_MODEL_IDS[providerId];
-
-    if (supportedModelIds) {
-        const modelOrder = [...supportedModelIds];
-        normalizedModels.sort((left, right) => modelOrder.indexOf(left.id) - modelOrder.indexOf(right.id));
-    }
-
-    return normalizedModels;
+function normalizeStoredImageModels(models, providerId = '', catalog = BUNDLED_CATALOG) {
+    return normalizeStoredModels(models, providerId, catalog, true);
 }
 
 function mergeImageModels(models, customModels = []) {
@@ -993,24 +477,6 @@ function mergeImageModels(models, customModels = []) {
 function parseImageModelSettings(value) {
     return parseDiscoveredModelSettings(value);
 }
-
-const GEMINI_3_LEVEL_THINKING = {
-    api: 'gemini-thinking-level',
-    levels: ['minimal', 'auto', 'low', 'medium', 'high'],
-    includeThoughts: true,
-};
-const GEMINI_37_THINKING = {
-    api: 'gemini-thinking-level',
-    levels: ['low', 'medium', 'high'],
-    defaultLevel: 'medium',
-    alwaysOn: true,
-    includeThoughts: true,
-};
-const GEMINI_3_PRO_LEVEL_THINKING = {
-    api: 'gemini-thinking-level',
-    levels: ['auto', 'low', 'medium', 'high'],
-    includeThoughts: true,
-};
 
 export const EXA_SEARCH_CONFIG = {
     id: 'exa-search',
@@ -1040,271 +506,27 @@ function parseDiscoveredModelSettings(value) {
     return {};
 }
 
-export const DEFAULT_PROVIDER_CONFIGS = [
-    {
-        id: 'openai',
-        name: 'OpenAI',
-        description: 'OpenAI Responses API for GPT models.',
-        themeColor: '#000000',
-        implemented: true,
-        enabled: false,
-        apiFormat: 'openai-responses',
-        imageApiFormat: 'openai-images',
-        apiKeyRequired: true,
-        apiKeyConfigured: false,
-        apiKeyEnvVar: 'OPENAI_API_KEY',
-        baseUrl: 'https://api.openai.com/v1',
-        nativeSearch: {
-            api: 'openai-responses',
-            tools: ['web_search'],
-            includeSources: true,
-        },
-        defaultModelId: 'gpt-5.6-sol',
-        defaultImageModelId: 'gpt-image-2',
-        thinking: {
-            api: 'openai-responses',
-            levels: ['off', 'auto', 'low', 'medium', 'high'],
-            summary: 'auto',
-        },
-        models: [
-            { ...OPENAI_MODEL_METADATA['gpt-5.6-sol'] },
-            { ...OPENAI_MODEL_METADATA['gpt-5.6-terra'] },
-            { ...OPENAI_MODEL_METADATA['gpt-5.6-luna'] },
-            {
-                id: 'gpt-5.5',
-                name: 'GPT-5.5',
-                description: 'Frontier model for complex reasoning and coding.',
-                contextWindowTokens: 1000000,
-            },
-            {
-                id: 'gpt-5.4-mini',
-                name: 'GPT-5.4 mini',
-                description: 'Lower-latency and lower-cost GPT-5.4 variant.',
-                contextWindowTokens: 400000,
-            },
-            {
-                id: 'gpt-4.1',
-                name: 'GPT-4.1',
-                description: 'Smart non-reasoning model.',
-                contextWindowTokens: 1000000,
-                thinking: false,
-            },
-        ],
-        imageModels: [
-            { ...IMAGE_MODEL_METADATA.openai['gpt-image-2'] },
-        ],
-    },
-    {
-        id: 'anthropic',
-        name: 'Anthropic',
-        description: 'Claude Messages API.',
-        themeColor: '#F1F0E8',
-        implemented: true,
-        enabled: false,
-        apiFormat: 'anthropic-messages',
-        apiKeyRequired: true,
-        apiKeyConfigured: false,
-        apiKeyEnvVar: 'ANTHROPIC_API_KEY',
-        baseUrl: 'https://api.anthropic.com/v1',
-        nativeSearch: {
-            api: 'anthropic-messages',
-            version: 'web_search_20250305',
-            tools: ['web_search'],
-            maxUses: 5,
-        },
-        defaultModelId: 'claude-sonnet-5',
-        models: [
-            { ...ANTHROPIC_MODEL_METADATA['claude-fable-5'] },
-            { ...ANTHROPIC_MODEL_METADATA['claude-opus-5'] },
-            { ...ANTHROPIC_MODEL_METADATA['claude-sonnet-5'] },
-            { ...ANTHROPIC_MODEL_METADATA['claude-haiku-4-5'] },
-        ],
-    },
-    {
-        id: 'gemini',
-        name: 'Google Gemini',
-        description: 'Gemini generateContent API.',
-        themeColor: '#3186FF',
-        implemented: true,
-        enabled: false,
-        apiFormat: 'gemini-generate-content',
-        imageApiFormat: 'gemini-interactions',
-        apiKeyRequired: true,
-        apiKeyConfigured: false,
-        apiKeyEnvVar: 'GEMINI_API_KEY',
-        baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-        nativeSearch: {
-            api: 'gemini-generate-content',
-            tools: ['google_search', 'url_context'],
-        },
-        defaultModelId: 'gemini-3.7-flash',
-        defaultImageModelId: 'gemini-3.1-flash-image',
-        models: [
-            {
-                id: 'gemini-3.7-flash',
-                name: 'Gemini 3.7 Flash',
-                description: 'Google\'s most capable Flash model for complex coding and agentic workflows.',
-                contextWindowTokens: 1048576,
-                maxOutputTokens: 65536,
-                thinking: GEMINI_37_THINKING,
-            },
-            {
-                id: 'gemini-3.6-flash',
-                name: 'Gemini 3.6 Flash',
-                description: 'Stable Gemini model balancing speed and intelligence for agentic and multimodal tasks.',
-                contextWindowTokens: 1048576,
-                thinking: GEMINI_3_LEVEL_THINKING,
-            },
-            {
-                id: 'gemini-3.5-flash-lite',
-                name: 'Gemini 3.5 Flash-Lite',
-                description: 'Low-latency, cost-effective multimodal model for high-throughput agentic workflows and document parsing.',
-                contextWindowTokens: 1048576,
-                thinking: GEMINI_3_LEVEL_THINKING,
-            },
-            {
-                id: 'gemini-3.1-pro-preview',
-                name: 'Gemini 3.1 Pro Preview',
-                description: 'Advanced intelligence and agentic coding model.',
-                contextWindowTokens: 1048576,
-                thinking: GEMINI_3_PRO_LEVEL_THINKING,
-            },
-        ],
-        imageModels: [
-            { ...IMAGE_MODEL_METADATA.gemini['gemini-3.1-flash-image'] },
-            { ...IMAGE_MODEL_METADATA.gemini['gemini-3.1-flash-lite-image'] },
-            { ...IMAGE_MODEL_METADATA.gemini['gemini-3-pro-image'] },
-        ],
-    },
-    {
-        id: 'kimi',
-        name: 'Kimi',
-        description: 'Moonshot Kimi OpenAI-compatible API.',
-        themeColor: '#1783FF',
-        implemented: true,
-        enabled: false,
-        apiFormat: 'openai-chat-completions',
-        supportsStreamUsageOptions: true,
-        apiKeyRequired: true,
-        apiKeyConfigured: false,
-        apiKeyEnvVar: 'MOONSHOT_API_KEY',
-        baseUrl: 'https://api.moonshot.ai/v1',
-        defaultEndpointPresetId: 'global',
-        endpointPresetId: 'global',
-        endpointPresets: [
-            {
-                id: 'global',
-                label: 'Global',
-                baseUrl: 'https://api.moonshot.ai/v1',
-            },
-            {
-                id: 'cn',
-                label: 'CN',
-                baseUrl: 'https://api.moonshot.cn/v1',
-            },
-        ],
-        chatPath: '/chat/completions',
-        defaultModelId: 'kimi-k3',
-        models: [
-            { ...KIMI_MODEL_METADATA['kimi-k3'] },
-            { ...KIMI_MODEL_METADATA['kimi-k2.7-code'] },
-            { ...KIMI_MODEL_METADATA['kimi-k2.6'] },
-        ],
-    },
-    {
-        id: 'deepseek',
-        name: 'DeepSeek',
-        description: 'DeepSeek Responses API.',
-        themeColor: '#4D6BFE',
-        implemented: true,
-        enabled: false,
-        apiFormat: 'openai-responses',
-        supportsImageAttachments: false,
-        supportsReasoningContentItems: true,
-        apiKeyRequired: true,
-        apiKeyConfigured: false,
-        apiKeyEnvVar: 'DEEPSEEK_API_KEY',
-        baseUrl: 'https://api.deepseek.com',
-        nativeSearch: {
-            api: 'openai-responses',
-            tools: ['web_search'],
-        },
-        defaultModelId: 'deepseek-v4-pro',
-        models: [
-            { ...DEEPSEEK_MODEL_METADATA['deepseek-v4-pro'] },
-            { ...DEEPSEEK_MODEL_METADATA['deepseek-v4-flash'] },
-            { ...DEEPSEEK_MODEL_METADATA['deepseek-v4-flash-vision-exp'] },
-        ],
-    },
-    {
-        id: 'grok',
-        name: 'Grok',
-        description: 'xAI Grok Responses API.',
-        themeColor: '#111111',
-        implemented: true,
-        enabled: false,
-        apiFormat: 'openai-responses',
-        imageApiFormat: 'openai-images',
-        apiKeyRequired: true,
-        apiKeyConfigured: false,
-        apiKeyEnvVar: 'XAI_API_KEY',
-        baseUrl: 'https://api.x.ai/v1',
-        nativeSearch: {
-            api: 'openai-responses',
-            tools: ['web_search', 'x_search'],
-        },
-        defaultModelId: 'grok-4.6',
-        defaultImageModelId: 'grok-imagine-image-quality',
-        models: [
-            { ...GROK_MODEL_METADATA['grok-4.6'] },
-            { ...GROK_MODEL_METADATA['grok-4.5'] },
-            { ...GROK_MODEL_METADATA['grok-4.3'] },
-        ],
-        imageModels: [
-            { ...IMAGE_MODEL_METADATA.grok['grok-imagine-image-quality'] },
-            { ...IMAGE_MODEL_METADATA.grok['grok-imagine-image'] },
-        ],
-    },
-    {
-        id: 'zai',
-        name: 'Z.ai',
-        description: 'Z.ai GLM OpenAI-compatible API.',
-        themeColor: '#000000',
-        implemented: true,
-        enabled: false,
-        apiFormat: 'openai-chat-completions',
-        supportsImageAttachments: false,
-        supportsModelDiscovery: false,
-        imageApiFormat: 'zai-images',
-        imageModelDiscoveryRequiresApiKey: false,
-        apiKeyRequired: true,
-        apiKeyConfigured: false,
-        apiKeyEnvVar: 'ZAI_API_KEY',
-        baseUrl: 'https://api.z.ai/api/paas/v4',
-        chatPath: '/chat/completions',
-        nativeSearch: {
-            api: 'zai-chat-completions',
-            tools: ['web_search'],
-            searchEngine: 'search-prime',
-            count: 5,
-        },
-        defaultModelId: 'glm-5.3',
-        defaultImageModelId: 'glm-image',
-        models: [
-            { ...ZAI_MODEL_METADATA['glm-5.3'] },
-            { ...ZAI_MODEL_METADATA['glm-5.3-flash'] },
-            { ...ZAI_MODEL_METADATA['glm-5.2'] },
-            { ...ZAI_MODEL_METADATA['glm-5-turbo'] },
-        ],
-        imageModels: [
-            { ...IMAGE_MODEL_METADATA.zai['glm-image'] },
-        ],
-    },
-];
+export function buildDefaultProviderConfigs(catalog = BUNDLED_CATALOG) {
+    return PROVIDER_DEFINITIONS.map(definition => ({
+        ...clone(definition), ...catalog.providerDefaults(definition.id),
+    }));
+}
+
+export const DEFAULT_PROVIDER_CONFIGS = buildDefaultProviderConfigs();
 
 export class ProviderConfigStore {
     constructor(configs = DEFAULT_PROVIDER_CONFIGS, options = {}) {
+        this._catalogService = options.catalogService ?? null;
+        this._catalog = options.catalog ?? this._catalogService?.snapshot ?? BUNDLED_CATALOG;
+        this._catalogListeners = new Set();
+        this._discoveryFacts = {};
+        this._imageDiscoveryFacts = {};
+        this._requestSnapshots = new WeakMap();
+        if (configs === DEFAULT_PROVIDER_CONFIGS)
+            configs = buildDefaultProviderConfigs(this._catalog);
         this._settings = options.settings === undefined ? createDefaultSettings(options.settingsPath) : options.settings;
+        this._explicitDefaultModels = parseDefaultModelSettings(this._settings?.get_string('provider-default-models'));
+        this._explicitDefaultImageModels = parseDefaultModelSettings(this._settings?.get_string('provider-default-image-models'));
         this._apiKeyStore = options.apiKeyStore ?? createDefaultApiKeyStore();
         this._envLookup = options.envLookup ?? GLib.getenv;
         this._authManager = options.authManager ?? createDefaultProviderAuthManager({
@@ -1342,7 +564,7 @@ export class ProviderConfigStore {
             defaultBaseUrl: String(config.defaultBaseUrl ?? config.baseUrl ?? '').trim(),
             usesCustomEndpoint: false,
             endpointPresets: (config.endpointPresets ?? []).map((preset) => ({ ...preset })),
-            models: normalizeStoredModels(config.models, config.id),
+            models: this._normalizeModels(config.models, config.id),
             imageModels: (config.imageModels ?? []).map((model) => ({ ...model })),
             customImageModels: (config.customImageModels ?? []).map((model) => ({ ...model })),
             discoveredImageModels: (config.discoveredImageModels ?? []).map((model) => ({ ...model })),
@@ -1350,6 +572,88 @@ export class ProviderConfigStore {
         this._loadPersistentState();
         this.refreshApiKeyStatus({ autoEnableEnvironmentProviders: true });
         this.refreshAuthenticationStatus();
+        this._unsubscribeCatalog = this._catalogService?.subscribe((_status, changed) => {
+            if (changed)
+                this.applyCatalog(this._catalogService.snapshot);
+        });
+    }
+
+    _normalizeModelId(providerId, modelId) {
+        return normalizeProviderModelId(providerId, modelId, this._catalog);
+    }
+
+    _normalizeModels(models, providerId) {
+        return normalizeStoredModels(models, providerId, this._catalog);
+    }
+
+    _normalizeImageModels(models, providerId) {
+        return normalizeStoredImageModels(models, providerId, this._catalog);
+    }
+
+    getCatalogService() { return this._catalogService; }
+
+    subscribeCatalog(callback) {
+        this._catalogListeners.add(callback);
+        return () => this._catalogListeners.delete(callback);
+    }
+
+    dispose() {
+        this._unsubscribeCatalog?.();
+        this._catalogListeners.clear();
+    }
+
+    applyCatalog(catalog) {
+        const previousCatalog = this._catalog;
+        this._catalog = catalog;
+        this._configs = this._configs.map(provider => {
+            if (provider.customizable || !catalog.getProvider(provider.id))
+                return provider;
+            const previousDefaults = previousCatalog.getProvider(provider.id)?.modelDefaults ?? {};
+            const next = { ...provider };
+            for (const key of Object.keys(previousDefaults))
+                delete next[key];
+            Object.assign(next, catalog.providerDefaults(provider.id));
+            next.models = this._normalizeModels([...next.models, ...(this._discoveryFacts[provider.id] ?? [])], provider.id);
+            next.imageModels = mergeImageModels(this._normalizeImageModels(
+                [...next.imageModels, ...(this._imageDiscoveryFacts[provider.id] ?? [])], provider.id), provider.customImageModels);
+            // Only an explicit saved choice overrides a newly recommended default.
+            const saved = this._explicitDefaultModels[provider.id];
+            const selected = this._normalizeModelId(provider.id, saved);
+            if (next.models.some(model => model.id === selected))
+                next.defaultModelId = selected;
+            const savedImage = this._explicitDefaultImageModels[provider.id];
+            const selectedImage = catalog.normalizeId(provider.id, savedImage, true);
+            if (next.imageModels.some(model => model.id === selectedImage))
+                next.defaultImageModelId = selectedImage;
+            // Keep provider identity for credential/settings operations awaiting I/O.
+            // Active turns already own independent model snapshots via forRequest().
+            for (const key of Object.keys(previousDefaults))
+                delete provider[key];
+            Object.assign(provider, next);
+            return provider;
+        });
+        this._activeModelId = this._normalizeModelId(this._activeProviderId, this._activeModelId);
+        this._defaultImageModelId = catalog.normalizeId(this._defaultImageProviderId, this._defaultImageModelId, true);
+        for (const callback of this._catalogListeners)
+            callback(catalog);
+    }
+
+    // A cancellable is shared by the entire agent turn, including continuations.
+    // Snapshot copies keep catalog updates from changing a running turn's models.
+    forRequest(cancellable) {
+        if (!cancellable || (typeof cancellable !== 'object' && typeof cancellable !== 'function'))
+            return this;
+        let snapshot = this._requestSnapshots.get(cancellable);
+        if (!snapshot) {
+            snapshot = Object.create(this);
+            snapshot._configs = this._configs.map(provider => ({ ...provider,
+                models: provider.models.map(clone), imageModels: (provider.imageModels ?? []).map(clone) }));
+            snapshot._catalog = this._catalog;
+            for (const key of ['_activeProviderId', '_activeModelId', '_defaultImageProviderId', '_defaultImageModelId'])
+                snapshot[key] = this[key];
+            this._requestSnapshots.set(cancellable, snapshot);
+        }
+        return snapshot;
     }
 
     refreshApiKeyStatus({ autoEnableEnvironmentProviders = false } = {}) {
@@ -1898,7 +1202,7 @@ export class ProviderConfigStore {
     }
 
     async discoverModels(providerId, options = {}) {
-        const provider = this.getProvider(providerId);
+        let provider = this.getProvider(providerId);
 
         if (!provider)
             throw new Error(`Provider does not exist: ${providerId}`);
@@ -1924,8 +1228,13 @@ export class ProviderConfigStore {
             cancellable: options.cancellable ?? null,
             timeoutSeconds: options.timeoutSeconds,
         });
-        const models = normalizeStoredModels(
-            PROVIDER_SUPPORTED_MODEL_IDS[provider.id]
+        // Provider settings may change while discovery is awaiting HTTP.
+        provider = this.getProvider(providerId);
+        if (!provider)
+            throw new Error('This provider was removed while discovering models.');
+        this._discoveryFacts[providerId] = clone(discoveredModels);
+        const models = this._normalizeModels(
+            this._catalog.getProvider(provider.id)
                 ? [...provider.models, ...discoveredModels]
                 : discoveredModels,
             provider.id,
@@ -1948,7 +1257,7 @@ export class ProviderConfigStore {
     }
 
     async discoverImageModels(providerId, options = {}) {
-        const provider = this.getProvider(providerId);
+        let provider = this.getProvider(providerId);
 
         if (!provider)
             throw new Error(`Provider does not exist: ${providerId}`);
@@ -1967,10 +1276,17 @@ export class ProviderConfigStore {
         const discoverer = options.discoverer ?? ((config, discoverOptions) => (
             this._discoverImageModelsForProvider(config, discoverOptions)
         ));
-        const discoveredModels = normalizeStoredImageModels(await discoverer(providerConfig, {
+        const facts = await discoverer(providerConfig, {
             cancellable: options.cancellable ?? null,
             timeoutSeconds: options.timeoutSeconds,
-        }), provider.id);
+        });
+        provider = this.getProvider(providerId);
+        if (!provider)
+            throw new Error('This provider was removed while discovering image models.');
+        this._imageDiscoveryFacts[providerId] = clone(facts);
+        const discoveredModels = this._normalizeImageModels([
+            ...this._catalog.listModels(providerId, true), ...facts,
+        ], providerId);
 
         if (discoveredModels.length === 0)
             throw new Error(`${provider.name} did not return any image generation models`);
@@ -2070,7 +1386,7 @@ export class ProviderConfigStore {
 
     resolve(providerId, modelId) {
         const provider = this.getProvider(providerId) ?? this.getDefaultProvider();
-        const normalizedModelId = normalizeProviderModelId(provider?.id, modelId);
+        const normalizedModelId = this._normalizeModelId(provider?.id, modelId);
         const model = provider
             ? provider.models.find((item) => item.id === normalizedModelId) ?? this.getDefaultModel(provider.id)
             : null;
@@ -2078,13 +1394,28 @@ export class ProviderConfigStore {
         return { provider, model };
     }
 
+    assertModelAvailable(providerId, modelId, image = false) {
+        const provider = this.getProvider(providerId);
+        const id = this._catalog.normalizeId(providerId, modelId, image);
+        if (!id || !this._catalog.getProvider(providerId))
+            return;
+        const models = image ? provider?.imageModels : provider?.models;
+        if (models?.some(model => model.id === id))
+            return;
+        const error = new Error(`The selected model (${modelId}) is no longer in the catalog. Choose a model before sending.`);
+        error.code = 'CUSCO_MODEL_UNAVAILABLE';
+        error.userMessage = error.message;
+        error.nonRetryable = true;
+        throw error;
+    }
+
     resolveImageGeneration(providerId, imageModelId = '') {
         const provider = providerId ? this.getProvider(providerId) : this.getDefaultImageProvider();
-        const preferredModelId = String(
+        const preferredModelId = this._catalog.normalizeId(provider?.id, String(
             imageModelId || (!providerId && provider?.id === this._defaultImageProviderId
                 ? this._defaultImageModelId
                 : ''),
-        ).trim();
+        ).trim(), true);
         const model = provider
             ? provider.imageModels?.find((item) => item.id === preferredModelId)
                 ?? this.getDefaultImageModel(provider.id)
@@ -2138,12 +1469,13 @@ export class ProviderConfigStore {
         if (!provider)
             throw new Error(`Provider does not exist: ${providerId}`);
 
-        const normalizedModelId = normalizeProviderModelId(provider.id, modelId);
+        const normalizedModelId = this._normalizeModelId(provider.id, modelId);
 
         if (!provider.models.some((model) => model.id === normalizedModelId))
             throw new Error(`Model does not exist for ${providerId}: ${modelId}`);
 
         provider.defaultModelId = normalizedModelId;
+        this._explicitDefaultModels[provider.id] = normalizedModelId;
         this._persistDefaultModels();
         return this.resolve(provider.id, normalizedModelId);
     }
@@ -2154,12 +1486,13 @@ export class ProviderConfigStore {
         if (!provider)
             throw new Error(`Provider does not exist: ${providerId}`);
 
-        const normalizedModelId = String(modelId ?? '').trim();
+        const normalizedModelId = this._catalog.normalizeId(provider.id, modelId, true);
 
         if (!provider.imageModels?.some((model) => model.id === normalizedModelId))
             throw new Error(`Image model does not exist for ${providerId}: ${modelId}`);
 
         provider.defaultImageModelId = normalizedModelId;
+        this._explicitDefaultImageModels[provider.id] = normalizedModelId;
         this._persistDefaultImageModels();
         if (this._defaultImageProviderId === provider.id) {
             this._defaultImageModelId = normalizedModelId;
@@ -2200,7 +1533,7 @@ export class ProviderConfigStore {
         if (!provider.imageApiFormat)
             throw new Error(`Provider does not support image generation: ${provider.name}`);
 
-        const normalizedModelId = String(modelId ?? '').trim();
+        const normalizedModelId = this._catalog.normalizeId(provider.id, modelId, true);
         const model = provider.imageModels?.find((item) => item.id === normalizedModelId)
             ?? provider.imageModels?.find((item) => item.id === provider.defaultImageModelId)
             ?? provider.imageModels?.[0]
@@ -2212,6 +1545,7 @@ export class ProviderConfigStore {
         provider.defaultImageModelId = model.id;
         this._defaultImageProviderId = provider.id;
         this._defaultImageModelId = model.id;
+        this._explicitDefaultImageModels[provider.id] = model.id;
         this._persistDefaultImageModels();
         this._persistDefaultImageSelection();
         return this.resolveImageGeneration(provider.id, model.id);
@@ -2260,6 +1594,10 @@ export class ProviderConfigStore {
     }
 
     createImageGenerationConfig(providerId, imageModelId = '') {
+        const preferredProvider = providerId || this.getDefaultImageProvider()?.id;
+        const preferredModel = imageModelId || (preferredProvider === this._defaultImageProviderId
+            ? this._defaultImageModelId : '');
+        this.assertModelAvailable(preferredProvider, preferredModel, true);
         const { provider, model } = this.resolveImageGeneration(providerId, imageModelId);
 
         if (!provider)
@@ -2466,7 +1804,7 @@ export class ProviderConfigStore {
             discoveredModels = await discoverGeminiImageModels(providerConfig, options);
             break;
         case 'zai-images':
-            discoveredModels = discoverZaiImageModels();
+            discoveredModels = this._catalog.listModels(providerConfig.id, true);
             break;
         default:
             throw new Error(`Provider image model discovery is not implemented: ${providerConfig.imageApiFormat}`);
@@ -2506,7 +1844,7 @@ export class ProviderConfigStore {
         const defaultModels = parseDefaultModelSettings(this._settings.get_string('provider-default-models'));
 
         for (const provider of this._configs) {
-            const defaultModelId = normalizeProviderModelId(provider.id, defaultModels[provider.id]);
+            const defaultModelId = this._normalizeModelId(provider.id, defaultModels[provider.id]);
 
             if (provider.models.some((model) => model.id === defaultModelId))
                 provider.defaultModelId = defaultModelId;
@@ -2515,14 +1853,14 @@ export class ProviderConfigStore {
         const defaultImageModels = parseImageModelSettings(this._settings.get_string('provider-default-image-models'));
 
         for (const provider of this._configs) {
-            const defaultImageModelId = String(defaultImageModels[provider.id] ?? '').trim();
+            const defaultImageModelId = this._catalog.normalizeId(provider.id, defaultImageModels[provider.id], true);
 
             if (provider.imageModels?.some((model) => model.id === defaultImageModelId))
                 provider.defaultImageModelId = defaultImageModelId;
         }
 
         const imageProviderId = this._settings.get_string('default-image-provider');
-        const imageModelId = this._settings.get_string('default-image-model');
+        const imageModelId = this._catalog.normalizeId(imageProviderId, this._settings.get_string('default-image-model'), true);
         const imageProvider = this.getProvider(imageProviderId);
 
         if (imageProvider?.imageApiFormat) {
@@ -2536,7 +1874,7 @@ export class ProviderConfigStore {
         }
 
         const activeProviderId = this._settings.get_string('active-provider');
-        const activeModelId = normalizeProviderModelId(activeProviderId, this._settings.get_string('active-model'));
+        const activeModelId = this._normalizeModelId(activeProviderId, this._settings.get_string('active-model'));
 
         if (this.getProvider(activeProviderId))
             this._activeProviderId = activeProviderId;
@@ -2554,8 +1892,12 @@ export class ProviderConfigStore {
             if (!provider)
                 continue;
 
-            const normalizedModels = normalizeStoredModels(
-                PROVIDER_SUPPORTED_MODEL_IDS[providerId]
+            if (!Array.isArray(models))
+                continue;
+            this._discoveryFacts[providerId] = clone(models);
+
+            const normalizedModels = this._normalizeModels(
+                this._catalog.getProvider(providerId)
                     ? [...provider.models, ...models]
                     : models,
                 providerId,
@@ -2629,7 +1971,13 @@ export class ProviderConfigStore {
             if (!provider?.imageApiFormat)
                 continue;
 
-            const normalizedModels = normalizeStoredImageModels(models, providerId);
+            if (!Array.isArray(models))
+                continue;
+            this._imageDiscoveryFacts[providerId] = clone(models);
+
+            const normalizedModels = this._normalizeImageModels([
+                ...this._catalog.listModels(providerId, true), ...models,
+            ], providerId);
 
             if (normalizedModels.length > 0) {
                 provider.discoveredImageModels = normalizedModels;
@@ -2768,8 +2116,10 @@ export class ProviderConfigStore {
     _persistDefaultModels() {
         const defaultModels = {};
 
-        for (const provider of this._configs)
-            defaultModels[provider.id] = provider.defaultModelId;
+        for (const provider of this._configs) {
+            if (this._explicitDefaultModels[provider.id])
+                defaultModels[provider.id] = this._explicitDefaultModels[provider.id];
+        }
 
         this._settings?.set_string('provider-default-models', JSON.stringify(defaultModels));
         flushSettings();
@@ -2779,8 +2129,8 @@ export class ProviderConfigStore {
         const defaultImageModels = {};
 
         for (const provider of this._configs) {
-            if (provider.imageApiFormat)
-                defaultImageModels[provider.id] = provider.defaultImageModelId ?? '';
+            if (provider.imageApiFormat && this._explicitDefaultImageModels[provider.id])
+                defaultImageModels[provider.id] = this._explicitDefaultImageModels[provider.id];
         }
 
         this._settings?.set_string('provider-default-image-models', JSON.stringify(defaultImageModels));
@@ -2800,16 +2150,12 @@ export class ProviderConfigStore {
             if (!provider.apiFormat || provider.models.length === 0)
                 continue;
 
-            discoveredModels[provider.id] = provider.models.map((model) => ({
-                id: model.id,
-                name: model.name,
-                description: model.description,
-                ...(model.contextWindowTokens === undefined
-                    ? {}
-                    : { contextWindowTokens: model.contextWindowTokens }),
-                maxOutputTokens: normalizeMaxOutputTokens(model.maxOutputTokens),
-                ...(model.thinking === undefined ? {} : { thinking: model.thinking }),
-            }));
+            const models = provider.customizable ? provider.models : this._discoveryFacts[provider.id] ?? [];
+            discoveredModels[provider.id] = models.map(model => {
+                const id = this._normalizeModelId(provider.id, model?.id ?? model);
+                // Resolved catalog metadata must never become persisted discovery facts.
+                return this._catalog.getModel(provider.id, id) ? { id } : clone(model);
+            });
         }
 
         this._settings?.set_string('provider-discovered-models', JSON.stringify(discoveredModels));
@@ -2839,18 +2185,15 @@ export class ProviderConfigStore {
         const discoveredImageModels = {};
 
         for (const provider of this._configs) {
-            const models = (provider.discoveredImageModels?.length
-                ? provider.discoveredImageModels
-                : provider.imageModels ?? []).filter((model) => !model.custom);
+            const models = (this._imageDiscoveryFacts[provider.id] ?? []).filter((model) => !model.custom);
 
             if (!provider.imageApiFormat || models.length === 0)
                 continue;
 
-            discoveredImageModels[provider.id] = models.map((model) => ({
-                id: model.id,
-                name: model.name,
-                description: model.description,
-            }));
+            discoveredImageModels[provider.id] = models.map(model => {
+                const id = this._catalog.normalizeId(provider.id, model?.id ?? model, true);
+                return this._catalog.getModel(provider.id, id, true) ? { id } : clone(model);
+            });
         }
 
         this._settings?.set_string('provider-discovered-image-models', JSON.stringify(discoveredImageModels));

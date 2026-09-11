@@ -721,8 +721,8 @@ const staleGeminiImageModelIds = staleGeminiImageStore.getProvider('gemini').ima
 if (staleGeminiImageModelIds.includes('gemini-2.5-flash-image'))
     throw new Error('Unsupported Gemini 2.5 image model was loaded from persisted settings');
 
-if (staleGeminiImageStore.getDefaultImageModel('gemini').id !== 'gemini-3-pro-image')
-    throw new Error('Stale Gemini image default should fall back to supported discovered image model');
+if (staleGeminiImageStore.getDefaultImageModel('gemini').id !== 'gemini-3.1-flash-image')
+    throw new Error('Stale image discovery must retain the current catalog default');
 
 const kimiProvider = defaultStore.getProvider('kimi');
 const kimiModelIds = kimiProvider.models.map((model) => model.id);

@@ -114,6 +114,8 @@ debug_sources = files(
 )
 
 provider_sources = files(
+  'providers/catalog.js',
+  'providers/providerDefinitions.js',
   'providers/chatSelection.js',
   'providers/config.js',
   'providers/auth.js',

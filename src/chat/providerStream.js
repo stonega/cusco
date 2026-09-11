@@ -92,6 +92,8 @@ export async function collectProviderResponse(
     onChunk = null,
     collectOptions = {},
 ) {
+    providerConfigs = providerConfigs.forRequest?.(cancellable) ?? providerConfigs;
+    providerConfigs.assertModelAvailable?.(providerId, modelId);
     const activeProvider = providerConfigs.createProvider(providerId);
     const providerConfig = providerConfigs.resolve(providerId, modelId);
     const responseTextParts = [];
@@ -309,7 +311,7 @@ export async function collectProviderResponseWithFallback(
             collectOptions,
         );
     } catch (error) {
-        if (primaryResponseStarted || isOutputCapacityError(error))
+        if (primaryResponseStarted || isOutputCapacityError(error) || error?.code === 'CUSCO_MODEL_UNAVAILABLE')
             throw error;
         const fallback = getFallback(conversation.providerId, error);
         if (!fallback.provider)

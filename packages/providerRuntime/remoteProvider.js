@@ -11,6 +11,7 @@ import {
     resolveEffectiveMaxOutputTokens,
 } from './outputLimits.js';
 import { getThinkingCapability, normalizeThinkingLevel } from './thinking.js';
+import { applyChatParameters } from '../modelCatalog/parameters.js';
 import { normalizeTokenUsage } from './usage.js';
 
 const DISPLAY_STREAM_DELAY_MS = 10;
@@ -40,11 +41,6 @@ const ANTHROPIC_DEFAULT_THINKING_BUDGETS = {
     medium: 2048,
     high: 3072,
 };
-const SUPPORTED_GEMINI_MODEL_IDS = new Set([
-    'gemini-3.6-flash',
-    'gemini-3.5-flash-lite',
-    'gemini-3.1-pro-preview',
-]);
 const MAX_NATIVE_TOOL_DESCRIPTION_CHARS = 1024;
 const IMAGE_MIME_TYPES_BY_EXTENSION = new Map([
     ['.bmp', 'image/bmp'],
@@ -1072,6 +1068,8 @@ function requestOptionsWithEffectiveOutputBudget(messages, options, providerConf
     const toolApiFormat = providerToolApiFormat(provider);
     const requestTools = requestToolConfiguration({ ...options, provider }, toolApiFormat).tools;
     const estimatedInputTokens = estimateRequestInputTokens(messages, requestTools);
+    if (options.model?.maxInputTokens && estimatedInputTokens > options.model.maxInputTokens)
+        throw createOutputCapacityError('This conversation exceeds the selected model’s input limit. Compact it before sending.');
     const maxOutputTokens = resolveEffectiveMaxOutputTokens({
         configuredMaxOutputTokens,
         callMaxOutputTokens: options.maxOutputTokens,
@@ -1887,7 +1885,7 @@ export function openAiMessages(messages, options = {}) {
     const model = options.model ?? null;
     const includeImages = providerSupportsImageAttachments(provider, model);
     const imageMimeTypes = supportedImageMimeTypes(provider, model);
-    const includeReasoning = provider?.supportsReasoningContentItems === true;
+    const includeReasoning = (model?.supportsReasoningContentItems ?? provider?.supportsReasoningContentItems) === true;
     const output = [];
 
     for (const message of providerMessages(messages, {
@@ -2432,7 +2430,7 @@ export function buildOpenAiResponsesBody(messages, modelId, options = {}) {
     if (nativeSearch?.includeSources)
         body.include = ['web_search_call.action.sources'];
 
-    return body;
+    return applyChatParameters(body, 'openai-responses', options);
 }
 
 export function buildOpenAiCompatibleChatBody(messages, modelId, options = {}) {
@@ -2450,7 +2448,7 @@ export function buildOpenAiCompatibleChatBody(messages, modelId, options = {}) {
         stream: options.stream === true,
     };
 
-    if (options.stream === true && provider?.supportsStreamUsageOptions === true)
+    if (options.stream === true && (options.model?.supportsStreamUsageOptions ?? provider?.supportsStreamUsageOptions) === true)
         body.stream_options = { include_usage: true };
 
     body[maxOutputTokensParameter] = normalizeMaxOutputTokens(options.maxOutputTokens);
@@ -2470,7 +2468,7 @@ export function buildOpenAiCompatibleChatBody(messages, modelId, options = {}) {
         }
     }
 
-    return body;
+    return applyChatParameters(body, 'openai-chat-completions', options);
 }
 
 export function buildAnthropicMessagesBody(messages, modelId, options = {}) {
@@ -2513,7 +2511,7 @@ export function buildAnthropicMessagesBody(messages, modelId, options = {}) {
     if (tools.length > 0)
         body.tools = tools;
 
-    return body;
+    return applyChatParameters(body, 'anthropic-messages', options);
 }
 
 export function buildGeminiGenerateContentBody(messages, options = {}) {
@@ -2544,7 +2542,7 @@ export function buildGeminiGenerateContentBody(messages, options = {}) {
         };
     }
 
-    return payload;
+    return applyChatParameters(payload, 'gemini-generate-content', options);
 }
 
 export function extractOpenAiText(response) {
@@ -3311,31 +3309,6 @@ export async function discoverAnthropicModels(config, options = {}) {
     return extractDiscoveredModels(response);
 }
 
-function geminiDiscoveredThinkingCapability(modelId) {
-    const id = String(modelId ?? '').toLowerCase();
-
-    if (!id.startsWith('gemini-'))
-        return null;
-
-    if (id.startsWith('gemini-3.1-pro') || id.startsWith('gemini-3-pro')) {
-        return {
-            api: 'gemini-thinking-level',
-            levels: ['auto', 'low', 'medium', 'high'],
-            includeThoughts: true,
-        };
-    }
-
-    if (id.startsWith('gemini-3.')) {
-        return {
-            api: 'gemini-thinking-level',
-            levels: ['minimal', 'auto', 'low', 'medium', 'high'],
-            includeThoughts: true,
-        };
-    }
-
-    return null;
-}
-
 export async function discoverGeminiModels(config, options = {}) {
     const request = await authorizeProviderRequest(config, {
         operation: 'models',
@@ -3352,13 +3325,9 @@ export async function discoverGeminiModels(config, options = {}) {
         timeoutSeconds: options.timeoutSeconds,
     });
 
-    return extractDiscoveredModels(response)
-        .filter((model) => SUPPORTED_GEMINI_MODEL_IDS.has(model.id))
-        .map((model) => {
-            const thinking = geminiDiscoveredThinkingCapability(model.id);
-
-            return thinking ? { ...model, thinking } : model;
-        });
+    // The catalog/store owns curated IDs and reasoning metadata. Discovery only
+    // returns server facts so a catalog update does not need a runtime release.
+    return extractDiscoveredModels(response);
 }
 
 class RemoteProvider extends ChatProvider {

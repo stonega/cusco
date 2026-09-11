@@ -2,6 +2,9 @@
 set -eu
 
 sh -n scripts/update-computer-use-extension.sh
+gjs -m scripts/validate-model-catalog.js
+gjs -m tests/model-catalog-smoke.js
+gjs -m tests/model-catalog-http-smoke.js
 
 missing_sources=$(
   find src packages -type f -name '*.js' | sort | while IFS= read -r source; do
@@ -94,6 +97,7 @@ gjs -m tests/output-limits-smoke.js
 gjs -m tests/remote-provider-adapters-smoke.js
 gjs -m tests/remote-provider-http-smoke.js
 gjs -m tests/provider-settings-smoke.js
+gjs -m tests/model-catalog-settings-smoke.js
 
 if command -v glib-compile-schemas >/dev/null 2>&1; then
   glib-compile-schemas --strict --dry-run data
@@ -106,4 +110,5 @@ if command -v meson >/dev/null 2>&1; then
     meson setup builddir
   fi
   meson compile -C builddir
+  gjs -m tests/model-catalog-resource-smoke.js
 fi

@@ -8,6 +8,7 @@ import Gtk from 'gi://Gtk?version=4.0';
 import { APP_ID } from './appInfo.js';
 import { CuscoWindow } from './window.js';
 import { installSearchProvider } from './searchProvider.js';
+import { getDefaultCatalogService } from './providers/catalog.js';
 
 export { APP_ID };
 
@@ -77,6 +78,12 @@ class CuscoApplication extends Adw.Application {
         super.vfunc_startup();
         this._installActions();
         this._searchProvider = installSearchProvider(this);
+        getDefaultCatalogService().start();
+    }
+
+    vfunc_shutdown() {
+        getDefaultCatalogService().stop();
+        super.vfunc_shutdown();
     }
 
     vfunc_activate() {

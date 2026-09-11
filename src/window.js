@@ -83,6 +83,7 @@ import { HookManager } from './hooks/manager.js';
 import { MemoryManager } from './memory/memory.js';
 import { McpManager } from './mcp/manager.js';
 import { ProviderConfigStore } from './providers/config.js';
+import { getDefaultCatalogService } from './providers/catalog.js';
 import { ChatSelectionController } from './providers/chatSelection.js';
 import { createImageGenerationTool } from './providers/imageGeneration.js';
 import { ModelPicker } from './providers/modelPicker.js';
@@ -861,7 +862,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._workspace = new WorkspaceManager({ store: new WorkspaceFileStore() });
         this._artifacts = new ArtifactManager();
         this._artifactRenderers = createDefaultArtifactRendererRegistry(this._artifacts);
-        this._providerConfigs = new ProviderConfigStore();
+        this._providerConfigs = new ProviderConfigStore(undefined, { catalogService: getDefaultCatalogService() });
         this._tools = new ToolManager({
             searchConfig: () => this._providerConfigs.createWebSearchFallbackConfig(),
         });
@@ -1108,6 +1109,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
             this._stopAllConversations();
             this._cronConversationSync.dispose();
+            this._providerConfigs.dispose();
             this._composerSuggestions.dispose();
             this._conversationSidebar?.dispose();
 
@@ -1167,6 +1169,20 @@ class CuscoWindow extends Adw.ApplicationWindow {
             return false;
         });
         this._buildUi();
+        this._providerConfigs.subscribeCatalog(() => {
+            this._populateProviderPicker();
+            const conversation = this._conversations.activeConversation;
+            this._syncProviderControls(conversation);
+            this._updateUsageDisplay(conversation);
+            let notice = 'Model catalog updated.';
+            try {
+                if (conversation)
+                    this._providerConfigs.assertModelAvailable(conversation.providerId, conversation.modelId);
+            } catch (error) {
+                notice = error.userMessage;
+            }
+            this._showToast(notice);
+        });
 
         if (this._conversations.storageError) {
             GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
@@ -2785,20 +2801,18 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     async _collectProviderResponse(providerId, modelId, providerMessages, cancellable, onChunk = null, collectOptions = {}) {
+        const requestConfigs = this._providerConfigs.forRequest?.(cancellable) ?? this._providerConfigs;
         return await collectProviderResponse({
-            providerConfigs: this._providerConfigs,
+            providerConfigs: requestConfigs,
             appSettings: this._appSettings,
             conversations: this._conversations,
-            resolveSelectionThinkingLevel: (selectedProviderId, selectedModelId, level) => (
-                this._resolveThinkingLevelForSelection(selectedProviderId, selectedModelId, level)
-            ),
         }, providerId, modelId, providerMessages, cancellable, onChunk, collectOptions);
     }
 
     async _collectProviderResponseWithFallback(conversation, providerMessages, cancellable, onChunk = null, collectOptions = {}) {
         return await collectProviderResponseWithFallback({
             collect: (...args) => this._collectProviderResponse(...args),
-            getFallback: (providerId, error) => this._getProviderFallback(providerId, error),
+            getFallback: (providerId, error) => this._getProviderFallback(providerId, error, cancellable),
             conversations: this._conversations,
             isActiveConversation: (conversationId) => this._isActiveConversationId(conversationId),
             onFallbackSelected: (selectedConversation, isActive) => {
@@ -2861,7 +2875,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     _beginActiveTurn(conversationId = null, cancellable = null, options = {}) {
         this._turnCoordinator ??= createTurnCoordinator(this);
-        return this._turnCoordinator.begin(conversationId, cancellable, options);
+        const turn = this._turnCoordinator.begin(conversationId, cancellable, options);
+        this._providerConfigs?.forRequest?.(turn);
+        return turn;
     }
 
     _finishActiveTurn(cancellable, options = {}) {
@@ -3132,14 +3148,15 @@ class CuscoWindow extends Adw.ApplicationWindow {
             this.remove_css_class('cusco-compact');
     }
 
-    _getProviderFallback(providerId, error) {
+    _getProviderFallback(providerId, error, cancellable = null) {
         if (!this._appSettings.providerFallbackEnabled)
             return { provider: null, model: null };
 
         if (isGioError(error, Gio.IOErrorEnum.CANCELLED))
             return { provider: null, model: null };
 
-        return this._providerConfigs.getFallbackSelection(providerId);
+        const requestConfigs = this._providerConfigs.forRequest?.(cancellable) ?? this._providerConfigs;
+        return requestConfigs.getFallbackSelection(providerId);
     }
 
     _injectMemoryContext(conversation) {

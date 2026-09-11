@@ -7,6 +7,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Manage the default chat and image models in a validated JSON catalog, with daily GitHub updates, offline fallback, and manual refresh controls in provider settings.
+
+### Fixed
+
+- Preserve complete model parameters during catalog updates and prevent stale discovery results from overriding built-in capabilities or hiding new models.
+
 ## [0.5.46] - 2026-09-10
 
 ### Added

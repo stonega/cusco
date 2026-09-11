@@ -1,0 +1,1216 @@
+{
+  "schemaVersion": 1,
+  "revision": 1,
+  "publishedAt": "2026-09-11T00:00:00Z",
+  "minAppVersion": "0.5.46",
+  "requiredRuntimeFeatures": [
+    "model-catalog-v1"
+  ],
+  "providers": [
+    {
+      "id": "openai",
+      "defaultModelId": "gpt-5.6-sol",
+      "defaultImageModelId": "gpt-image-2",
+      "aliases": {
+        "gpt-5.6": "gpt-5.6-sol"
+      },
+      "discovery": {
+        "chat": "open",
+        "image": "open",
+        "excludedModelIds": [],
+        "excludedImageModelIds": []
+      },
+      "modelDefaults": {
+        "thinking": {
+          "api": "openai-responses",
+          "levels": [
+            "off",
+            "auto",
+            "low",
+            "medium",
+            "high"
+          ],
+          "summary": "auto"
+        },
+        "nativeSearch": {
+          "api": "openai-responses",
+          "tools": [
+            "web_search"
+          ],
+          "includeSources": true
+        },
+        "parameters": {
+          "temperature": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "topP": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "topK": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "stop": {
+            "support": "unknown",
+            "type": "array",
+            "runtime": false
+          },
+          "seed": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "frequencyPenalty": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "presencePenalty": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "toolChoice": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "parallelToolCalls": {
+            "support": "unknown",
+            "type": "boolean",
+            "runtime": false
+          },
+          "responseFormat": {
+            "support": "unknown",
+            "type": "object",
+            "runtime": false
+          }
+        }
+      },
+      "sources": [
+        "https://developers.openai.com/api/docs/models"
+      ],
+      "notes": "Migrated from the existing Cusco catalog and docs/user/provider-models.md. Unrecorded parameter support remains unknown; verify official documentation before changing it.",
+      "models": [
+        {
+          "id": "gpt-5.6-sol",
+          "name": "GPT-5.6 Sol",
+          "description": "Frontier model for complex professional work.",
+          "contextWindowTokens": 1050000,
+          "maxOutputTokens": 128000,
+          "thinking": {
+            "api": "openai-responses",
+            "levels": [
+              "off",
+              "auto",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "summary": "auto"
+          }
+        },
+        {
+          "id": "gpt-5.6-terra",
+          "name": "GPT-5.6 Terra",
+          "description": "GPT-5.6 model that balances intelligence and cost.",
+          "contextWindowTokens": 1050000,
+          "maxOutputTokens": 128000,
+          "thinking": {
+            "api": "openai-responses",
+            "levels": [
+              "off",
+              "auto",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "summary": "auto"
+          }
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "name": "GPT-5.6 Luna",
+          "description": "GPT-5.6 model optimized for cost-sensitive workloads.",
+          "contextWindowTokens": 1050000,
+          "maxOutputTokens": 128000,
+          "thinking": {
+            "api": "openai-responses",
+            "levels": [
+              "off",
+              "auto",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "summary": "auto"
+          }
+        },
+        {
+          "id": "gpt-5.5",
+          "name": "GPT-5.5",
+          "description": "Frontier model for complex reasoning and coding.",
+          "contextWindowTokens": 1000000
+        },
+        {
+          "id": "gpt-5.4-mini",
+          "name": "GPT-5.4 mini",
+          "description": "Lower-latency and lower-cost GPT-5.4 variant.",
+          "contextWindowTokens": 400000
+        },
+        {
+          "id": "gpt-4.1",
+          "name": "GPT-4.1",
+          "description": "Smart non-reasoning model.",
+          "contextWindowTokens": 1000000,
+          "thinking": false
+        }
+      ],
+      "imageModels": [
+        {
+          "id": "gpt-image-2",
+          "name": "GPT Image 2",
+          "description": "OpenAI image generation model."
+        }
+      ],
+      "imageModelDefaults": {
+        "parameters": {
+          "size": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "aspectRatio": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "quality": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "outputFormat": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "background": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "imageCount": {
+            "support": "unknown",
+            "type": "integer",
+            "runtime": false
+          }
+        }
+      }
+    },
+    {
+      "id": "anthropic",
+      "defaultModelId": "claude-sonnet-5",
+      "aliases": {
+        "claude-haiku-4-5-20251001": "claude-haiku-4-5"
+      },
+      "discovery": {
+        "chat": "curated",
+        "image": "open",
+        "excludedModelIds": [],
+        "excludedImageModelIds": []
+      },
+      "modelDefaults": {
+        "nativeSearch": {
+          "api": "anthropic-messages",
+          "version": "web_search_20250305",
+          "tools": [
+            "web_search"
+          ],
+          "maxUses": 5
+        },
+        "parameters": {
+          "temperature": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "topP": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "topK": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "stop": {
+            "support": "unknown",
+            "type": "array",
+            "runtime": false
+          },
+          "seed": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "frequencyPenalty": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "presencePenalty": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "toolChoice": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "parallelToolCalls": {
+            "support": "unknown",
+            "type": "boolean",
+            "runtime": false
+          },
+          "responseFormat": {
+            "support": "unknown",
+            "type": "object",
+            "runtime": false
+          }
+        }
+      },
+      "sources": [
+        "https://platform.claude.com/docs/en/about-claude/models/overview"
+      ],
+      "notes": "Migrated from the existing Cusco catalog and docs/user/provider-models.md. Unrecorded parameter support remains unknown; verify official documentation before changing it.",
+      "models": [
+        {
+          "id": "claude-fable-5",
+          "name": "Claude Fable 5",
+          "description": "Next-generation intelligence for long-running agents.",
+          "contextWindowTokens": 1000000,
+          "thinking": {
+            "api": "anthropic-adaptive",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "defaultLevel": "high",
+            "display": "summarized",
+            "alwaysOn": true
+          }
+        },
+        {
+          "id": "claude-opus-5",
+          "name": "Claude Opus 5",
+          "description": "For complex agentic coding and enterprise work.",
+          "contextWindowTokens": 1000000,
+          "thinking": {
+            "api": "anthropic-adaptive",
+            "levels": [
+              "off",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "defaultLevel": "high",
+            "display": "summarized"
+          }
+        },
+        {
+          "id": "claude-sonnet-5",
+          "name": "Claude Sonnet 5",
+          "description": "The best combination of speed and intelligence.",
+          "contextWindowTokens": 1000000,
+          "thinking": {
+            "api": "anthropic-adaptive",
+            "levels": [
+              "off",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "defaultLevel": "high",
+            "display": "summarized"
+          }
+        },
+        {
+          "id": "claude-haiku-4-5",
+          "name": "Claude Haiku 4.5",
+          "description": "Fastest Claude model with near-frontier intelligence.",
+          "contextWindowTokens": 200000,
+          "thinking": {
+            "api": "anthropic-budget",
+            "levels": [
+              "off",
+              "auto",
+              "low",
+              "medium",
+              "high"
+            ],
+            "display": "summarized",
+            "budgets": {
+              "auto": 2048,
+              "low": 1024,
+              "medium": 2048,
+              "high": 3072
+            }
+          }
+        }
+      ],
+      "imageModels": []
+    },
+    {
+      "id": "gemini",
+      "defaultModelId": "gemini-3.7-flash",
+      "defaultImageModelId": "gemini-3.1-flash-image",
+      "aliases": {
+        "gemini-3.5-flash": "gemini-3.7-flash",
+        "gemini-3.1-pro": "gemini-3.1-pro-preview"
+      },
+      "discovery": {
+        "chat": "curated",
+        "image": "curated",
+        "excludedModelIds": [],
+        "excludedImageModelIds": [
+          "gemini-2.5-flash-image"
+        ]
+      },
+      "modelDefaults": {
+        "nativeSearch": {
+          "api": "gemini-generate-content",
+          "tools": [
+            "google_search",
+            "url_context"
+          ]
+        },
+        "parameters": {
+          "temperature": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "topP": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "topK": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "stop": {
+            "support": "unknown",
+            "type": "array",
+            "runtime": false
+          },
+          "seed": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "frequencyPenalty": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "presencePenalty": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "toolChoice": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "parallelToolCalls": {
+            "support": "unknown",
+            "type": "boolean",
+            "runtime": false
+          },
+          "responseFormat": {
+            "support": "unknown",
+            "type": "object",
+            "runtime": false
+          }
+        }
+      },
+      "sources": [
+        "https://ai.google.dev/gemini-api/docs/models"
+      ],
+      "notes": "Migrated from the existing Cusco catalog and docs/user/provider-models.md. Unrecorded parameter support remains unknown; verify official documentation before changing it.",
+      "models": [
+        {
+          "id": "gemini-3.7-flash",
+          "name": "Gemini 3.7 Flash",
+          "description": "Google's most capable Flash model for complex coding and agentic workflows.",
+          "contextWindowTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": {
+            "api": "gemini-thinking-level",
+            "levels": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "defaultLevel": "medium",
+            "alwaysOn": true,
+            "includeThoughts": true
+          }
+        },
+        {
+          "id": "gemini-3.6-flash",
+          "name": "Gemini 3.6 Flash",
+          "description": "Stable Gemini model balancing speed and intelligence for agentic and multimodal tasks.",
+          "contextWindowTokens": 1048576,
+          "thinking": {
+            "api": "gemini-thinking-level",
+            "levels": [
+              "minimal",
+              "auto",
+              "low",
+              "medium",
+              "high"
+            ],
+            "includeThoughts": true
+          }
+        },
+        {
+          "id": "gemini-3.5-flash-lite",
+          "name": "Gemini 3.5 Flash-Lite",
+          "description": "Low-latency, cost-effective multimodal model for high-throughput agentic workflows and document parsing.",
+          "contextWindowTokens": 1048576,
+          "thinking": {
+            "api": "gemini-thinking-level",
+            "levels": [
+              "minimal",
+              "auto",
+              "low",
+              "medium",
+              "high"
+            ],
+            "includeThoughts": true
+          }
+        },
+        {
+          "id": "gemini-3.1-pro-preview",
+          "name": "Gemini 3.1 Pro Preview",
+          "description": "Advanced intelligence and agentic coding model.",
+          "contextWindowTokens": 1048576,
+          "thinking": {
+            "api": "gemini-thinking-level",
+            "levels": [
+              "auto",
+              "low",
+              "medium",
+              "high"
+            ],
+            "includeThoughts": true
+          }
+        }
+      ],
+      "imageModels": [
+        {
+          "id": "gemini-3.1-flash-image",
+          "name": "Gemini 3.1 Flash Image",
+          "description": "Gemini Nano Banana 2 image generation model."
+        },
+        {
+          "id": "gemini-3.1-flash-lite-image",
+          "name": "Gemini 3.1 Flash Lite Image",
+          "description": "Gemini Nano Banana 2 Lite image generation model."
+        },
+        {
+          "id": "gemini-3-pro-image",
+          "name": "Gemini 3 Pro Image",
+          "description": "Gemini Nano Banana Pro image generation model."
+        }
+      ],
+      "imageModelDefaults": {
+        "parameters": {
+          "size": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "aspectRatio": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "quality": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "outputFormat": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "background": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "imageCount": {
+            "support": "unknown",
+            "type": "integer",
+            "runtime": false
+          }
+        }
+      }
+    },
+    {
+      "id": "kimi",
+      "defaultModelId": "kimi-k3",
+      "aliases": {},
+      "discovery": {
+        "chat": "curated",
+        "image": "open",
+        "excludedModelIds": [],
+        "excludedImageModelIds": []
+      },
+      "modelDefaults": {
+        "supportsStreamUsageOptions": true,
+        "parameters": {
+          "temperature": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "topP": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "topK": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "stop": {
+            "support": "unknown",
+            "type": "array",
+            "runtime": false
+          },
+          "seed": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "frequencyPenalty": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "presencePenalty": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "toolChoice": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "parallelToolCalls": {
+            "support": "unknown",
+            "type": "boolean",
+            "runtime": false
+          },
+          "responseFormat": {
+            "support": "unknown",
+            "type": "object",
+            "runtime": false
+          }
+        }
+      },
+      "sources": [
+        "https://platform.moonshot.ai/docs/guide/kimi-k3-quickstart"
+      ],
+      "notes": "Migrated from the existing Cusco catalog and docs/user/provider-models.md. Unrecorded parameter support remains unknown; verify official documentation before changing it.",
+      "models": [
+        {
+          "id": "kimi-k3",
+          "name": "Kimi K3",
+          "description": "Kimi flagship model for long-horizon coding, knowledge work, reasoning, and visual understanding. Context 1M.",
+          "contextWindowTokens": 1000000,
+          "maxOutputTokens": 131072,
+          "thinking": {
+            "api": "kimi-k3-reasoning",
+            "levels": [
+              "max"
+            ],
+            "defaultLevel": "max",
+            "alwaysOn": true,
+            "maxOutputTokensParameter": "max_completion_tokens"
+          }
+        },
+        {
+          "id": "kimi-k2.7-code",
+          "name": "Kimi K2.7 Code",
+          "description": "Kimi coding model with stronger long-context instruction following and higher coding task success. Context 256k.",
+          "contextWindowTokens": 256000,
+          "thinking": {
+            "api": "kimi-thinking",
+            "levels": [
+              "auto"
+            ],
+            "keep": "all",
+            "alwaysOn": true
+          }
+        },
+        {
+          "id": "kimi-k2.6",
+          "name": "Kimi K2.6",
+          "description": "Kimi intelligent multimodal model for agent, code, visual understanding, and general tasks with thinking and non-thinking modes. Context 256k.",
+          "contextWindowTokens": 256000,
+          "thinking": {
+            "api": "kimi-thinking",
+            "levels": [
+              "off",
+              "auto"
+            ],
+            "keep": "all"
+          }
+        }
+      ],
+      "imageModels": []
+    },
+    {
+      "id": "deepseek",
+      "defaultModelId": "deepseek-v4-pro",
+      "aliases": {},
+      "discovery": {
+        "chat": "curated",
+        "image": "open",
+        "excludedModelIds": [],
+        "excludedImageModelIds": []
+      },
+      "modelDefaults": {
+        "nativeSearch": {
+          "api": "openai-responses",
+          "tools": [
+            "web_search"
+          ]
+        },
+        "supportsImageAttachments": false,
+        "supportsReasoningContentItems": true,
+        "parameters": {
+          "temperature": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "topP": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "topK": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "stop": {
+            "support": "unknown",
+            "type": "array",
+            "runtime": false
+          },
+          "seed": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "frequencyPenalty": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "presencePenalty": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "toolChoice": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "parallelToolCalls": {
+            "support": "unknown",
+            "type": "boolean",
+            "runtime": false
+          },
+          "responseFormat": {
+            "support": "unknown",
+            "type": "object",
+            "runtime": false
+          }
+        }
+      },
+      "sources": [
+        "https://api-docs.deepseek.com/quick_start/pricing"
+      ],
+      "notes": "Migrated from the existing Cusco catalog and docs/user/provider-models.md. Unrecorded parameter support remains unknown; verify official documentation before changing it.",
+      "models": [
+        {
+          "id": "deepseek-v4-pro",
+          "name": "DeepSeek V4 Pro",
+          "description": "DeepSeek reasoning-capable model.",
+          "contextWindowTokens": 1000000,
+          "maxOutputTokens": 384000,
+          "thinking": {
+            "api": "openai-responses",
+            "levels": [
+              "off",
+              "low",
+              "high",
+              "max"
+            ],
+            "defaultLevel": "high"
+          }
+        },
+        {
+          "id": "deepseek-v4-flash",
+          "name": "DeepSeek V4 Flash",
+          "description": "DeepSeek lower-latency model.",
+          "contextWindowTokens": 1000000,
+          "maxOutputTokens": 384000,
+          "thinking": {
+            "api": "openai-responses",
+            "levels": [
+              "off",
+              "low",
+              "high",
+              "max"
+            ],
+            "defaultLevel": "high"
+          }
+        },
+        {
+          "id": "deepseek-v4-flash-vision-exp",
+          "name": "DeepSeek V4 Flash Vision Experimental",
+          "description": "Experimental DeepSeek model for visual understanding with text and image input.",
+          "contextWindowTokens": 1000000,
+          "maxOutputTokens": 384000,
+          "supportsImageAttachments": true,
+          "supportedImageMimeTypes": [
+            "image/jpeg",
+            "image/png",
+            "image/gif",
+            "image/webp"
+          ],
+          "thinking": {
+            "api": "openai-responses",
+            "levels": [
+              "off",
+              "low",
+              "high",
+              "max"
+            ],
+            "defaultLevel": "high"
+          }
+        }
+      ],
+      "imageModels": []
+    },
+    {
+      "id": "grok",
+      "defaultModelId": "grok-4.6",
+      "defaultImageModelId": "grok-imagine-image-quality",
+      "aliases": {
+        "grok4.6": "grok-4.6"
+      },
+      "discovery": {
+        "chat": "curated",
+        "image": "curated",
+        "excludedModelIds": [],
+        "excludedImageModelIds": []
+      },
+      "modelDefaults": {
+        "nativeSearch": {
+          "api": "openai-responses",
+          "tools": [
+            "web_search",
+            "x_search"
+          ]
+        },
+        "parameters": {
+          "temperature": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "topP": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "topK": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "stop": {
+            "support": "unknown",
+            "type": "array",
+            "runtime": false
+          },
+          "seed": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "frequencyPenalty": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "presencePenalty": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "toolChoice": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "parallelToolCalls": {
+            "support": "unknown",
+            "type": "boolean",
+            "runtime": false
+          },
+          "responseFormat": {
+            "support": "unknown",
+            "type": "object",
+            "runtime": false
+          }
+        }
+      },
+      "sources": [
+        "https://docs.x.ai/developers/models"
+      ],
+      "notes": "Migrated from the existing Cusco catalog and docs/user/provider-models.md. Unrecorded parameter support remains unknown; verify official documentation before changing it.",
+      "models": [
+        {
+          "id": "grok-4.6",
+          "name": "Grok 4.6",
+          "description": "xAI frontier model for coding, agentic tasks, and knowledge work.",
+          "contextWindowTokens": 500000,
+          "thinking": {
+            "api": "xai-reasoning",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "defaultLevel": "high"
+          }
+        },
+        {
+          "id": "grok-4.5",
+          "name": "Grok 4.5",
+          "description": "xAI Grok model for frontier chat, coding, and agentic work.",
+          "contextWindowTokens": 1000000,
+          "thinking": {
+            "api": "xai-reasoning",
+            "levels": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "defaultLevel": "high"
+          }
+        },
+        {
+          "id": "grok-4.3",
+          "name": "Grok 4.3",
+          "description": "xAI Grok text and vision model with a 1M token context window.",
+          "contextWindowTokens": 1000000,
+          "thinking": {
+            "api": "xai-reasoning",
+            "levels": [
+              "off",
+              "low",
+              "medium",
+              "high"
+            ],
+            "defaultLevel": "low",
+            "offEffort": "none"
+          }
+        }
+      ],
+      "imageModels": [
+        {
+          "id": "grok-imagine-image-quality",
+          "name": "Grok Imagine Image Quality",
+          "description": "xAI Grok Imagine image generation model optimized for higher-quality output."
+        },
+        {
+          "id": "grok-imagine-image",
+          "name": "Grok Imagine Image",
+          "description": "xAI Grok Imagine image generation model."
+        }
+      ],
+      "imageModelDefaults": {
+        "parameters": {
+          "size": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "aspectRatio": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "quality": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "outputFormat": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "background": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "imageCount": {
+            "support": "unknown",
+            "type": "integer",
+            "runtime": false
+          }
+        }
+      }
+    },
+    {
+      "id": "zai",
+      "defaultModelId": "glm-5.3",
+      "defaultImageModelId": "glm-image",
+      "aliases": {
+        "glm5.3-flash": "glm-5.3-flash",
+        "glm5.3": "glm-5.3",
+        "glm5.2": "glm-5.2",
+        "glm5-turbo": "glm-5-turbo"
+      },
+      "discovery": {
+        "chat": "curated",
+        "image": "curated",
+        "excludedModelIds": [],
+        "excludedImageModelIds": [
+          "cogview-4-250304"
+        ]
+      },
+      "modelDefaults": {
+        "nativeSearch": {
+          "api": "zai-chat-completions",
+          "tools": [
+            "web_search"
+          ],
+          "searchEngine": "search-prime",
+          "count": 5
+        },
+        "supportsImageAttachments": false,
+        "parameters": {
+          "temperature": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "topP": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "topK": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "stop": {
+            "support": "unknown",
+            "type": "array",
+            "runtime": false
+          },
+          "seed": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "frequencyPenalty": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "presencePenalty": {
+            "support": "unknown",
+            "type": "number",
+            "runtime": false
+          },
+          "toolChoice": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "parallelToolCalls": {
+            "support": "unknown",
+            "type": "boolean",
+            "runtime": false
+          },
+          "responseFormat": {
+            "support": "unknown",
+            "type": "object",
+            "runtime": false
+          }
+        }
+      },
+      "sources": [
+        "https://docs.z.ai/guides/llm/glm-5"
+      ],
+      "notes": "Migrated from the existing Cusco catalog and docs/user/provider-models.md. Unrecorded parameter support remains unknown; verify official documentation before changing it.",
+      "models": [
+        {
+          "id": "glm-5.3",
+          "name": "GLM-5.3",
+          "description": "Z.ai flagship model for complex coding and long-horizon agent tasks.",
+          "contextWindowTokens": 1000000,
+          "maxOutputTokens": 128000,
+          "thinking": {
+            "api": "zai-thinking",
+            "levels": [
+              "low",
+              "high",
+              "max"
+            ],
+            "defaultLevel": "max",
+            "alwaysOn": true,
+            "supportsReasoningEffort": true
+          }
+        },
+        {
+          "id": "glm-5.3-flash",
+          "name": "GLM-5.3 Flash",
+          "description": "Z.ai cost-efficient native multimodal model for coding, agentic work, and visual understanding.",
+          "contextWindowTokens": 1000000,
+          "maxOutputTokens": 131072,
+          "supportsImageAttachments": true,
+          "supportsToolStreaming": true,
+          "thinking": {
+            "api": "zai-thinking",
+            "levels": [
+              "low",
+              "high",
+              "max"
+            ],
+            "defaultLevel": "max",
+            "alwaysOn": true,
+            "supportsReasoningEffort": true
+          }
+        },
+        {
+          "id": "glm-5.2",
+          "name": "GLM-5.2",
+          "description": "Z.ai flagship model for coding and agent applications.",
+          "contextWindowTokens": 1000000,
+          "thinking": {
+            "api": "zai-thinking",
+            "levels": [
+              "off",
+              "auto",
+              "high",
+              "max"
+            ],
+            "supportsReasoningEffort": true
+          }
+        },
+        {
+          "id": "glm-5-turbo",
+          "name": "GLM-5 Turbo",
+          "description": "Z.ai faster GLM-5 series model optimized for agent workflows.",
+          "contextWindowTokens": 200000,
+          "thinking": {
+            "api": "zai-thinking",
+            "levels": [
+              "off",
+              "auto"
+            ]
+          }
+        }
+      ],
+      "imageModels": [
+        {
+          "id": "glm-image",
+          "name": "GLM-Image",
+          "description": "Z.ai text-to-image model for complex layouts, posters, diagrams, and text-rich images."
+        }
+      ],
+      "imageModelDefaults": {
+        "parameters": {
+          "size": {
+            "support": "supported",
+            "type": "string",
+            "runtime": true,
+            "default": "1280x1280",
+            "notes": "Preserves the existing Cusco image request default; an allowed-size enumeration has not been recorded."
+          },
+          "aspectRatio": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "quality": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "outputFormat": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "background": {
+            "support": "unknown",
+            "type": "string",
+            "runtime": false
+          },
+          "imageCount": {
+            "support": "unknown",
+            "type": "integer",
+            "runtime": false
+          }
+        }
+      }
+    }
+  ]
+}
