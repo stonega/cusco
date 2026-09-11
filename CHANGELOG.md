@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.47] - 2026-09-11
+
 ### Added
 
 - Manage the default chat and image models in a validated JSON catalog, with daily GitHub updates, offline fallback, and manual refresh controls in provider settings.
@@ -509,7 +511,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.46...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.47...HEAD
+[0.5.47]: https://github.com/stonega/cusco/compare/v0.5.46...v0.5.47
 [0.5.46]: https://github.com/stonega/cusco/compare/v0.5.45...v0.5.46
 [0.5.45]: https://github.com/stonega/cusco/compare/v0.5.44...v0.5.45
 [0.5.44]: https://github.com/stonega/cusco/compare/v0.5.43...v0.5.44
