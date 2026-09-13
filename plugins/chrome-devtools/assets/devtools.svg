@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>Chrome DevTools</title>
+  <rect x="3" y="7" width="58" height="50" rx="12" fill="#1A73E8"/>
+  <path d="M3 23h58" stroke="#fff" stroke-opacity=".5" stroke-width="2"/>
+  <g fill="#fff">
+    <circle cx="13" cy="15" r="2"/>
+    <circle cx="21" cy="15" r="2"/>
+    <circle cx="29" cy="15" r="2"/>
+  </g>
+  <g fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m23 32-8 8 8 8m18-16 8 8-8 8m-6-17-6 18"/>
+  </g>
+</svg>

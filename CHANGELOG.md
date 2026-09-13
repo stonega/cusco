@@ -7,6 +7,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Add a predefined Chrome DevTools plugin with the official local MCP server, seven bundled skills, and a helper for creating a named browser tab group per task.
+
+### Fixed
+
+- Include local skill directories in agent context so bundled references and helper assets can be found from any chat working directory.
+
 ## [0.5.47] - 2026-09-11
 
 ### Added

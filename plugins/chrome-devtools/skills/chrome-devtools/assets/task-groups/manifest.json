@@ -1,0 +1,7 @@
+{
+  "manifest_version": 3,
+  "name": "Cusco Task Groups",
+  "version": "1.0.0",
+  "description": "Groups Cusco task tabs using a local extension page.",
+  "permissions": ["tabGroups"]
+}

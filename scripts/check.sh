@@ -60,6 +60,7 @@ gjs -m tests/notion-plugin-smoke.js
 gjs -m tests/slack-plugin-smoke.js
 gjs -m tests/linear-plugin-smoke.js
 gjs -m tests/cloudflare-plugin-smoke.js
+gjs -m tests/chrome-devtools-plugin-smoke.js
 gjs -m tests/compaction-smoke.js
 gjs -m tests/composer-readline-smoke.js
 gjs -m tests/hooks-smoke.js

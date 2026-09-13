@@ -1,0 +1,33 @@
+{
+  "name": "chrome-devtools",
+  "version": "1.9.0",
+  "description": "Control and inspect Chrome with the official Chrome DevTools MCP server and seven bundled debugging and automation skills.",
+  "author": {
+    "name": "Google Chrome"
+  },
+  "homepage": "https://developer.chrome.com/docs/devtools/agents/get-started",
+  "repository": "https://github.com/ChromeDevTools/chrome-devtools-mcp",
+  "license": "Apache-2.0",
+  "keywords": ["chrome", "browser", "devtools", "mcp", "accessibility", "performance", "memory"],
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Chrome DevTools",
+    "shortDescription": "Browse, debug, and audit Chrome with MCP and skills",
+    "longDescription": "Use Chrome's official DevTools MCP server for browser automation, screenshots, network and console inspection, accessibility audits, performance traces, memory analysis, and extension testing. Includes seven skills, their references, and a helper that creates a named tab group for each task. Requires Node.js LTS, npm/npx, and Google Chrome. Starts a separate temporary Chrome profile on first browser use. MCP usage statistics and CrUX URL sharing are disabled by default.",
+    "developerName": "Cusco",
+    "category": "Developer Tools",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "websiteURL": "https://developer.chrome.com/docs/devtools/agents/get-started",
+    "privacyPolicyURL": "https://policies.google.com/privacy",
+    "defaultPrompt": [
+      "Check the performance of my website and explain its LCP bottleneck",
+      "Audit accessibility and keyboard navigation on this page",
+      "Use the Chrome DevTools troubleshooting skill to fix my browser connection"
+    ],
+    "composerIcon": "./assets/devtools.svg",
+    "logo": "./assets/devtools.svg",
+    "logoDark": "./assets/devtools.svg",
+    "brandColor": "#1A73E8"
+  }
+}

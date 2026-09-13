@@ -157,6 +157,9 @@ if (buildSkillContext([], { includeAlwaysAvailable: false }) !== '')
 if (!buildSkillContext([loaded]).includes('Check claims against the available context'))
     throw new Error('Skill context was not built from SKILL.md content');
 
+if (!buildSkillContext([loaded]).includes(`Skill directory: ${loaded.path}`))
+    throw new Error('Skill context did not locate the directory needed for references and assets');
+
 const workspacePath = GLib.build_filenamev([rootPath, 'workspace.json']);
 const workspace = new WorkspaceManager({
     store: new WorkspaceFileStore({ path: workspacePath }),

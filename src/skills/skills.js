@@ -620,6 +620,7 @@ export function buildSkillContext(skills, options = {}) {
     const sections = enabledSkills.map((skill) => [
         `## ${skill.name}`,
         skill.description ? `Description: ${skill.description}` : '',
+        skill.path ? `Skill directory: ${skill.path}\nResolve relative skill references and assets from this directory.` : '',
         skill.content,
     ].filter(Boolean).join('\n\n'));
 

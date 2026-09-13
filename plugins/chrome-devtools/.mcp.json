@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "name": "Chrome DevTools",
+      "namespace": "chrome_devtools",
+      "description": "Chrome's official browser automation and debugging server with extension and memory tools enabled.",
+      "transport": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@1.9.0",
+        "--isolated",
+        "--category-extensions",
+        "--memory-debugging",
+        "--no-usage-statistics",
+        "--no-performance-crux"
+      ],
+      "permissionPolicy": "ask"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+Chrome DevTools MCP skills
+Copyright Google LLC and Chrome DevTools MCP contributors.
+Source: https://github.com/ChromeDevTools/chrome-devtools-mcp
+Tag: chrome-devtools-mcp-v1.9.0
+Commit: 1cec9cd1a3bbf1895c98fa4b4e0e2da5a36e4075
+License: Apache-2.0 (see LICENSE)
+
+Cusco adaptations, 2026-09-13:
+- Added the Cusco manifest, MCP preset, setup guide, and original browser/code icon.
+- Namespaced specialized skills and added a shared Cusco connection reference.
+- Adapted troubleshooting to Cusco's workspace and permission controls.
+- Corrected network filter, reload, and CLI parameter examples against the release.
+- Made optional CLI setup explicit and kept it separate from the MCP connection.
+- Clarified memory investigation and bounded the LCP observer snippet.
+- Added the original Cusco Task Groups extension and per-task grouping workflow.
+
+Cusco-authored files and modifications in this plugin are also provided under
+Apache-2.0. The Chrome DevTools MCP executable is fetched separately by npx;
+it is not vendored in this plugin. Google Chrome is a trademark of Google LLC.
