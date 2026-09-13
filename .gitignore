@@ -4,3 +4,4 @@ builddir/
 .tmp/
 *.pyc
 node_modules/
+plugins/.removed/

@@ -7,6 +7,7 @@ export const {
     CuscoPluginClient,
     CuscoPluginStore,
     DEFAULT_CUSCO_REPOSITORY_ROOT,
+    isPluginRemoved,
     loadPluginManifest,
     normalizePluginEntry,
     parsePluginMarketplaceJson,

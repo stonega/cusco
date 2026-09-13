@@ -18,6 +18,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Preserve bundled plugin sources when removing a plugin, so its skills and MCP configuration remain available for reinstalling.
 - Configure and start local MCP servers when installing plugins, with startup errors available under Plugins → MCP.
 - Include local skill directories in agent context so bundled references and helper assets can be found from any chat working directory.
 

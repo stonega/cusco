@@ -247,6 +247,45 @@ try {
         'Removal left plugin skills discoverable',
     );
     assert(GLib.file_test(plugin.sourcePath, GLib.FileTest.IS_DIR), 'Removal affected the predefined source');
+
+    // Bundled catalogs point at plugins/<name> itself, unlike external sources.
+    await client.install(available.pluginId);
+    const bundledMarketplacePath = GLib.build_filenamev([marketplaceDirectory, 'marketplace.json']);
+    const bundledMarketplace = JSON.stringify({
+        name: 'cusco',
+        plugins: [{ name: plugin.name, source: { source: 'local', path: `./plugins/${plugin.name}` } }],
+    });
+    GLib.file_set_contents(bundledMarketplacePath, bundledMarketplace);
+    const pluginsRootPath = GLib.build_filenamev([temporaryRoot, 'plugins']);
+    const bundledWorkspace = new WorkspaceManager({
+        globalSkillsPath: GLib.build_filenamev([temporaryRoot, 'empty-global-skills']),
+        cuscoSkillsPath: GLib.build_filenamev([temporaryRoot, 'empty-cusco-skills']),
+        cuscoPluginsPath: pluginsRootPath,
+    });
+    for (let cycle = 0; cycle < 2; cycle++) {
+        const removingClient = new CuscoPluginClient({ repositoryRoot: temporaryRoot });
+        await removingClient.uninstall(available.pluginId);
+        const reinstallingClient = new CuscoPluginClient({ repositoryRoot: temporaryRoot });
+        const removedPlugin = (await reinstallingClient.listPlugins())[0];
+        assert(!removedPlugin.installed && !removedPlugin.enabled
+            && removedPlugin.displayName === 'Chrome DevTools' && removedPlugin.connectors.length === 1,
+            'Removing a bundled plugin must persist its available state and retain catalog metadata');
+        assert(readText(GLib.build_filenamev([installed.path, '.mcp.json']))
+            === readText(GLib.build_filenamev([plugin.sourcePath, '.mcp.json']))
+            && readText(bundledMarketplacePath) === bundledMarketplace,
+            'Removing a bundled plugin damaged its source or rewrote the marketplace');
+        assert(discoverPluginSkills({ pluginsRootPath }).length === 0
+            && bundledWorkspace.refreshInstalledSkills().length === 0,
+            'A removed bundled plugin must not expose retained skills in the workspace');
+        configureAutomaticPluginServers([removedPlugin], {
+            listServers: () => [],
+            addWorkspaceServer: () => { throw new Error('Removed plugins must not reactivate MCP servers'); },
+        });
+        await reinstallingClient.install(removedPlugin.pluginId);
+        assert((await reinstallingClient.listPlugins())[0].installed
+            && bundledWorkspace.refreshInstalledSkills().length === expectedSkills.length,
+            'Reinstalling a bundled plugin did not restore installed state and all seven skills');
+    }
 } finally {
     removeDirectory(Gio.File.new_for_path(temporaryRoot));
 }

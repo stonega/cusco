@@ -5,7 +5,12 @@ Reusable, standalone plugin discovery and lifecycle support for Cusco.
 `client.js` reads `$REPO_ROOT/.agents/plugins/marketplace.json` directly and
 enriches each entry from its plugin manifest. Installation is Cusco-owned: the
 complete selected plugin is copied into `$REPO_ROOT/plugins/<name>/` and
-validated before activation. Removal affects only that repository-local copy.
+validated before activation. Removal deletes only installed copies that are
+separate from their marketplace source. When a bundled directory is also its
+catalog source, removal preserves its files and writes a local marker under
+`plugins/.removed/`. Plugin and skill discovery honor that marker; reinstalling
+validates the retained manifest and clears it. These markers are excluded from
+Git and packaged builds. Connector and credential removal still runs normally.
 The Plugins page configures and starts declared local STDIO MCP servers as part
 of installation. A startup failure leaves the plugin installed; the next agent
 turn retries discovery, and Plugins → MCP offers manual refresh and diagnostics.

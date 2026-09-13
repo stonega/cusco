@@ -1,5 +1,6 @@
 import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
+import { isPluginRemoved } from '../plugins/client.js';
 
 export const SKILL_FILE_NAME = 'SKILL.md';
 const moduleDirectory = Gio.File.new_for_uri(import.meta.url).get_parent();
@@ -585,7 +586,8 @@ export function discoverPluginSkills({
         let info = enumerator.next_file(null);
 
         while (info) {
-            if (info.get_file_type() === Gio.FileType.DIRECTORY && !info.get_name().startsWith('.')) {
+            if (info.get_file_type() === Gio.FileType.DIRECTORY && !info.get_name().startsWith('.')
+                && !isPluginRemoved(normalizedRoot, info.get_name())) {
                 const pluginSkillsPath = GLib.build_filenamev([
                     normalizedRoot,
                     info.get_name(),

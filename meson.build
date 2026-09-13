@@ -31,6 +31,7 @@ install_subdir(
 install_subdir(
   'plugins',
   install_dir: pkgdatadir,
+  exclude_directories: ['.removed'],
 )
 
 gnome.post_install(

@@ -536,6 +536,14 @@ function localPluginEntry(pluginPath, manifest) {
     }, manifest);
 }
 
+function pluginRemovalMarker(pluginsRoot, name) {
+    return Gio.File.new_for_path(GLib.build_filenamev([pluginsRoot, '.removed', name]));
+}
+
+export function isPluginRemoved(pluginsRoot, name) {
+    return pluginRemovalMarker(pluginsRoot, name).query_exists(null);
+}
+
 export class CuscoPluginStore {
     constructor({ repositoryRoot = DEFAULT_CUSCO_REPOSITORY_ROOT } = {}) {
         const repositoryPath = String(repositoryRoot ?? '').trim();
@@ -574,7 +582,7 @@ export class CuscoPluginStore {
                     const name = info.get_name();
                     const pluginPath = GLib.build_filenamev([this.pluginsRoot, name]);
 
-                    if (!name.startsWith('.')) {
+                    if (!name.startsWith('.') && !isPluginRemoved(this.pluginsRoot, name)) {
                         try {
                             const manifest = loadPluginManifest(pluginPath);
 
@@ -621,7 +629,9 @@ export class CuscoPluginStore {
 
         if (!source.query_exists(cancellable))
             throw new Error(`Plugin source is unavailable: ${plugin?.displayName || name}`);
-        if (destination.query_exists(cancellable))
+        const removalMarker = pluginRemovalMarker(this.pluginsRoot, name);
+        const retainedSource = source.equal(destination) && removalMarker.query_exists(cancellable);
+        if (destination.query_exists(cancellable) && !retainedSource)
             throw new Error(`${plugin?.displayName || name} is already installed in Cusco.`);
 
         const sourceManifest = loadPluginManifest(sourcePath);
@@ -630,6 +640,11 @@ export class CuscoPluginStore {
             throw new Error(`Plugin source is missing ${PLUGIN_MANIFEST_PATH} or a compatible ported manifest.`);
         if (ensurePluginName(sourceManifest.name) !== name)
             throw new Error('Plugin manifest name does not match its catalog entry.');
+
+        if (retainedSource) {
+            removalMarker.delete(cancellable);
+            return { pluginId: plugin.pluginId, path: destinationPath, success: true };
+        }
 
         GLib.mkdir_with_parents(this.pluginsRoot, 0o755);
         const stagingPath = GLib.build_filenamev([
@@ -647,6 +662,8 @@ export class CuscoPluginStore {
                 throw new Error('Copied plugin failed manifest validation.');
 
             staging.move(destination, Gio.FileCopyFlags.NONE, cancellable, null);
+            if (removalMarker.query_exists(cancellable))
+                removalMarker.delete(cancellable);
         } catch (error) {
             if (staging.query_exists(null)) {
                 try {
@@ -668,6 +685,21 @@ export class CuscoPluginStore {
 
         if (!destination.query_exists(cancellable))
             return { pluginId: plugin.pluginId, path: destinationPath, success: true };
+
+        const isMarketplaceSource = this._readMarketplace().plugins.some((entry) => {
+            const sourcePath = String(entry?.source?.path ?? '').trim();
+            if (!sourcePath)
+                return false;
+
+            const source = Gio.File.new_for_path(GLib.canonicalize_filename(sourcePath, this.repositoryRoot));
+            return source.equal(destination) || source.has_prefix(destination);
+        });
+        if (isMarketplaceSource) {
+            const marker = pluginRemovalMarker(this.pluginsRoot, name);
+            GLib.mkdir_with_parents(marker.get_parent().get_path(), 0o700);
+            marker.replace_contents('', null, false, Gio.FileCreateFlags.PRIVATE, cancellable);
+            return { pluginId: plugin.pluginId, path: destinationPath, success: true };
+        }
 
         const stagingPath = GLib.build_filenamev([
             this.pluginsRoot,
