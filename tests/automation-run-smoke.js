@@ -98,6 +98,7 @@ const tool = {
 };
 let toolsRefreshed = 0;
 let connectorsRefreshed = 0;
+let toolsPrepared = 0;
 let skillLoads = 0;
 const toolManager = {
     listTools: () => toolsRefreshed ? [tool] : [],
@@ -161,8 +162,14 @@ const runner = new AssistantStreamRunner({
     appSettings: { responseTimeoutSeconds: 30 },
     conversations,
     tools: toolManager,
-    mcp: { refreshTools: async () => { toolsRefreshed += 1; } },
-    connectors: { refreshTools: async () => { connectorsRefreshed += 1; } },
+    mcp: { refreshTools: async () => {
+        assert(toolsPrepared === toolsRefreshed + 1, 'Plugin MCP configuration must precede tool discovery');
+        toolsRefreshed += 1;
+    } },
+    connectors: {
+        prepareTools: async () => { await Promise.resolve(); toolsPrepared += 1; },
+        refreshTools: async () => { connectorsRefreshed += 1; },
+    },
     hooks: {
         dispatch: async (event) => event === 'Stop' && continuationCount++ === 0
             ? { shouldContinue: true, continuationReasons: ['Verify this run'] }

@@ -167,6 +167,7 @@ export class AssistantStreamRunner {
             const activeSkills = this._injectSkillContext(conversation);
 
             if (conversation.agentModeEnabled) {
+                await this._connectors?.prepareTools?.();
                 const toolRefreshes = [this._mcp.refreshTools(this._tools, {
                     timeoutSeconds: this._appSettings.responseTimeoutSeconds,
                     cancellable,

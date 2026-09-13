@@ -363,6 +363,17 @@ export class McpManager {
         return added;
     }
 
+    setWorkspaceServerArguments(key, args) {
+        const server = this._servers.find((candidate) => candidate.key === key);
+        if (!server || server.source !== 'workspace')
+            throw createUserVisibleError('Only workspace MCP server arguments can be updated here.');
+
+        const updated = this._workspaceManager.updateMcpServer(server.id, { args });
+        this.disconnectServer(key);
+        this.reloadConfig();
+        return updated;
+    }
+
     upsertFileServer(server) {
         const name = String(server?.name ?? '').trim();
 

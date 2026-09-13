@@ -15,9 +15,11 @@ Use the live tool schema when an upstream example differs.
 
 ## Core Concepts
 
-**Browser lifecycle**: Browser starts automatically on first browser tool call.
-Cusco's preset uses a temporary isolated profile; upstream's default without
-`--isolated` uses a persistent profile. Inspect configuration options with
+**Browser lifecycle**: The first browser tool attaches to the user's running,
+signed-in Chrome profile using `--auto-connect`. Chrome must have remote debugging
+enabled and the user must accept its Allow prompt. Keep task tabs in that same
+profile; do not use `isolatedContext` unless a clean-session test is requested.
+Inspect configuration options with
 `npx -y chrome-devtools-mcp@1.9.0 --help`.
 The Cusco preset already enables these additional categories:
 
@@ -61,8 +63,8 @@ Extension tools (`install_extension`, `list_extensions`, etc.) require
 `--category-extensions`, which is included in the preset. If they are missing,
 inspect the saved server's flags and tool allowlist using the connection guide.
 Preserve its other arguments when enabling a category, then restart Cusco.
-Use a server-launched browser for extension testing; the extension directory
-must be within a configured filesystem root.
+Use Chrome 149+ for extension testing through auto-connect; the extension
+directory must be within a configured filesystem root.
 
 1. **Install**: Use `install_extension` with the path to the unpacked extension.
 2. **Identify**: Get the extension ID from the response or by calling `list_extensions`.

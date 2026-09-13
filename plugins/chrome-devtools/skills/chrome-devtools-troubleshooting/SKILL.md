@@ -52,9 +52,9 @@ inspect the specific timeout or sandbox error before changing connection modes.
 
 #### Symptom: Server starts but creates a new empty profile
 
-An empty temporary profile is expected with the Cusco preset. Only investigate
-this as a connection problem when the user intended to attach to an existing
-Chrome instance. Check whether the saved arguments actually enable auto-connect.
+The Cusco preset should attach to the user's running Chrome profile. Check the
+saved arguments for an old `--isolated` flag or a custom profile. Use
+`--auto-connect` for existing logins and avoid `isolatedContext` on task tabs.
 
 - **Check for flag typos:** For example, `--autoBronnect` instead of `--autoConnect`.
 - **Verify the configuration:** Ensure the arguments match the expected flags exactly.
@@ -74,7 +74,7 @@ change the permission policy to allow or bypass a denied tool through the CLI.
 If the tools related to extensions (like `install_extension`) are not available, or if the extensions you load are not functioning:
 
 1. **Check for the `--categoryExtensions` flag**: Ensure this flag is passed in the MCP server configuration to enable the extension category tools.
-2. **Make sure the MCP server in configured to launch Chrome instead of connecting to an instance**: Chrome before 149 is not able to load extensions when connecting to an existing instance (`--auto-connect`, `--browserUrl`).
+2. **Check Chrome is 149 or newer**: Earlier versions cannot load extensions when connecting to an existing instance (`--auto-connect`, `--browserUrl`). Update Chrome for the preset's signed-in profile and task-group workflow. Do not switch to a blank profile without the user's request.
 
 #### Other Common Errors
 
@@ -103,7 +103,8 @@ Based on the exact error and the user's environment (OS, MCP client), formulate 
 - Enable remote debugging in Chrome (`chrome://inspect/#remote-debugging`) and accept the connection prompt. **Ask the user to verify this is enabled if using `--autoConnect`.**
 - Add `--logFile <absolute_path_to_log_file>` to capture debug logs for analysis.
 - If the first connection times out while npx downloads the package, finish the
-  pinned `--help` diagnostic below and retry Connect. Cusco does not use Codex settings.
+  pinned `--help` diagnostic below and refresh Plugins → MCP or call
+  `mcp_server_connect`. Cusco does not use Codex settings.
 
 If a configuration detail remains unknown, ask for that specific non-secret setting.
 

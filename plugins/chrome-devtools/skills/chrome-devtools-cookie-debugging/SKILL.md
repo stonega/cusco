@@ -28,6 +28,12 @@ Cookies marked `HttpOnly` cannot be accessed or modified by client-side JavaScri
 
 ### Session Strategy: Live Tab vs Isolated Context
 
+In Cusco, use the signed-in profile and a new task-group tab by default. The
+clean-slate examples below apply only when the user requests a fresh-session or
+consent test. Do not discard the user's logins for ordinary cookie debugging.
+Keep the shared task-group requirement; if a clean context cannot load the
+helper, report that limitation before creating ungrouped target tabs.
+
 Choose the right session environment to avoid state contamination (e.g., residual analytics or auth tokens):
 
 | Strategy                            | When to Use                                                                   | Setup / Teardown                                                                                              |

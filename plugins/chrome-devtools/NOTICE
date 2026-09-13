@@ -13,6 +13,7 @@ Cusco adaptations, 2026-09-13:
 - Made optional CLI setup explicit and kept it separate from the MCP connection.
 - Clarified memory investigation and bounded the LCP observer snippet.
 - Added the original Cusco Task Groups extension and per-task grouping workflow.
+- Use automatic MCP setup and attach to the signed-in Chrome profile by default.
 
 Cusco-authored files and modifications in this plugin are also provided under
 Apache-2.0. The Chrome DevTools MCP executable is fetched separately by npx;

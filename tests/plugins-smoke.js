@@ -9,10 +9,12 @@ import {
 import { presentAddMcpServerDialog } from '../src/settings/mcpSettings.js';
 import { presentSkillDetailsDialog } from '../src/settings/workspaceSettings.js';
 import {
+    configureAutomaticPluginServers,
     CuscoPluginClient,
     loadPluginManifest,
     normalizePluginEntry,
     parsePluginMarketplaceJson,
+    pluginConnectorNeedsAuthentication,
     validatePluginSelector,
 } from '../src/plugins/client.js';
 
@@ -372,7 +374,7 @@ assert(installedLocal.installed && !installedLocal.connectors[0].connected
 assert(lifecycleChanges.at(-1).action === 'install'
     && lifecycleToasts.at(-1).includes('Installed Chrome DevTools')
     && lifecycleToasts.at(-1).includes('npx is unavailable')
-    && lifecycleToasts.at(-1).includes('Use Connect to retry')
+    && lifecycleToasts.at(-1).includes('Retry from Plugins → MCP')
     && !lifecyclePage._busyPluginActions.has(localPlugin.pluginId),
     'A startup failure must notify installation success and allow retry');
 startupError = null;
@@ -384,6 +386,55 @@ assert(installedLocal.connectors[0].connected && lifecycleServers.length === 1
 await lifecyclePage._runAction('uninstall', installedLocal);
 await lifecyclePage._runAction('uninstall', remotePlugin);
 lifecyclePage.dispose();
+
+const automaticServers = [];
+const chromePlugin = bundledCatalog.find((plugin) => plugin.name === 'chrome-devtools');
+let migratedArguments = 0;
+const automaticManager = {
+    listServers: () => automaticServers,
+    addWorkspaceServer: (server) => {
+        const added = { ...server, source: 'workspace', key: `workspace:${server.id}` };
+        automaticServers.push(added);
+        return added;
+    },
+    setWorkspaceServerArguments: (key, args) => {
+        automaticServers.find((server) => server.key === key).args = [...args];
+        migratedArguments += 1;
+    },
+};
+configureAutomaticPluginServers(bundledCatalog, automaticManager);
+configureAutomaticPluginServers(bundledCatalog, automaticManager);
+assert(automaticServers.length === 1 && automaticServers[0].id === chromePlugin.connectors[0].id,
+    'Installed Chrome must be configured without a Connect click; auth plugins must remain untouched');
+automaticServers[0].args = chromePlugin.manifest.cusco.previousMcpArgs['Chrome DevTools'];
+automaticServers[0].permissionPolicy = 'deny';
+automaticServers[0].enabled = false;
+configureAutomaticPluginServers(bundledCatalog, automaticManager);
+assert(migratedArguments === 1 && automaticServers[0].args.includes('--auto-connect')
+    && automaticServers[0].permissionPolicy === 'deny' && !automaticServers[0].enabled,
+    'The original Chrome preset must migrate without changing permissions or enabled state');
+automaticServers[0].args = [...chromePlugin.manifest.cusco.previousMcpArgs['Chrome DevTools'], '--headless'];
+configureAutomaticPluginServers(bundledCatalog, automaticManager);
+assert(migratedArguments === 1 && automaticServers[0].args.includes('--headless'),
+    'Preset migration must preserve custom arguments');
+automaticServers.length = 0;
+configureAutomaticPluginServers([{ ...chromePlugin, installed: false }, { ...chromePlugin, enabled: false }], automaticManager);
+assert(automaticServers.length === 0, 'Available or disabled plugins must not configure a server');
+const publicConnector = {
+    ...chromePlugin.connectors[0],
+    id: 'public-mcp',
+    server: {
+        id: 'public-mcp', transport: 'streamable-http', url: 'https://public.example.test/mcp', enabled: true,
+    },
+};
+configureAutomaticPluginServers([{ ...chromePlugin, connectors: [publicConnector] }], automaticManager);
+assert(automaticServers.length === 1 && !pluginConnectorNeedsAuthentication(publicConnector),
+    'Public HTTP MCP connectors must not require a Connect click');
+assert(!pluginConnectorNeedsAuthentication(chromePlugin.connectors[0])
+    && pluginConnectorNeedsAuthentication(bundledGithub.connectors[0])
+    && pluginConnectorNeedsAuthentication(bundledMail.connectors[0])
+    && pluginConnectorNeedsAuthentication({ ...chromePlugin.connectors[0], status: 'auth_required' }),
+    'Connection controls must distinguish no-auth, token, online-account, and discovered OAuth connectors');
 
 if (Gtk.init_check()) {
     let backCount = 0;
@@ -709,6 +760,41 @@ if (Gtk.init_check()) {
     page._backButton.emit('clicked');
     assert(backCount === 1, 'Plugins page back button did not return to chat');
     const installedConnector = parsed.find((plugin) => plugin.installed && plugin.hasApps);
+    for (const state of ['idle', 'connected', 'error']) {
+        const localRow = page._createPluginRow({
+            ...chromePlugin,
+            connectors: chromePlugin.connectors.map((connector) => ({
+                ...connector, status: state, connected: state === 'connected',
+            })),
+        });
+        const buttons = [];
+        walkWidgets(localRow, (widget) => {
+            if (widget instanceof Gtk.Button)
+                buttons.push(widget.get_label());
+        });
+        assert(buttons.includes('Remove') && !buttons.includes('Connect') && !buttons.includes('Connected'),
+            `Chrome plugin must not expose a Connect button in ${state} state`);
+    }
+    for (const name of ['github', 'cloudflare', 'gmail', 'mail', 'notion', 'slack', 'linear']) {
+        const authRow = page._createPluginRow(bundledCatalog.find((plugin) => plugin.name === name));
+        const buttons = [];
+        walkWidgets(authRow, (widget) => {
+            if (widget instanceof Gtk.Button)
+                buttons.push(widget.get_label());
+        });
+        assert(buttons.includes('Connect'), `${name} must retain its authentication Connect action`);
+    }
+    const setupRow = page._createPluginRow({
+        ...installedConnector,
+        connectors: [{ id: 'app-only', type: 'mcp', server: null }],
+    });
+    const setupButtons = [];
+    walkWidgets(setupRow, (widget) => {
+        if (widget instanceof Gtk.Button)
+            setupButtons.push(widget.get_label());
+    });
+    assert(setupButtons.includes('Set up') && !setupButtons.includes('Connect'),
+        'An unknown app endpoint must offer setup instead of an authentication Connect action');
     const connectorRow = page._createPluginRow(installedConnector);
     const connectorButtonLabels = [];
     const connectorLabelTexts = [];

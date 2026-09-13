@@ -14,9 +14,9 @@ tool during the same turn, for example:
 ```
 
 Installing the plugin from **Plugins → Chrome DevTools** also configures and
-connects its local MCP server. For an already installed plugin with no server,
-use **Connect**. If the server exists but is disconnected, use
-`mcp_server_connect` or the native Connect action.
+connects its local MCP server. Already installed plugins are configured when the
+catalog opens or an agent turn starts. There is no plugin Connect button.
+If the server is disconnected, use `mcp_server_connect` or refresh **Plugins → MCP**.
 Keep Agent Mode and the needed plugin skills enabled. The STDIO server does not
 use an API key or OAuth. `mcp_server_configure` supports HTTP servers and is not
 the setup tool for this plugin.
@@ -26,13 +26,15 @@ the setup tool for this plugin.
 - Before the first target navigation, follow [task tab groups](task-groups.md) to
   create a new named group for this task. Add later task tabs to that same group;
   preserve other tasks' groups and the user's existing tabs.
-- The preset uses Chrome DevTools MCP 1.9.0 with an isolated temporary profile,
-  extension tools, and memory tools. Chrome opens on first browser use.
+- The preset uses Chrome DevTools MCP 1.9.0 with `--auto-connect`, extension tools,
+  and memory tools. It attaches to the running Chrome Stable profile and shares
+  its logins. Require Chrome 149+ for the task-group helper.
 - Call `list_pages` or `new_page` to obtain a real page ID, then pass `pageId` to
   every page-scoped call. Get element UIDs from a fresh snapshot.
-- Distinguish the server-launched test browser from the user's normal Chrome
-  session. Auto-connect is an explicit configuration choice requiring Chrome's
-  remote-debugging setting and Allow dialog.
+- On first browser use, Chrome requires remote debugging enabled at
+  `chrome://inspect/#remote-debugging` and its Allow prompt accepted by the user.
+  If unavailable, report the required Chrome setup; do not silently launch a
+  different profile or use `isolatedContext`, which loses the user's logins.
 - Use the live tool schema. In this release, Lighthouse uses `device` and
   `mode`; reload is `navigate_page` with `type: "reload"`; network resource types
   are lowercase. Lighthouse excludes performance; use performance traces for CWV.
@@ -47,7 +49,8 @@ the setup tool for this plugin.
 ## Configuration and files
 
 The plugin template is copied into a workspace server during installation or
-when first connected for an already installed plugin.
+automatic setup. The original unchanged `--isolated` arguments migrate to the
+new `--auto-connect` preset; custom argument lists remain unchanged.
 Inspect **Plugins → MCP** before changing arguments. Workspace servers are saved
 in `$XDG_DATA_HOME/io.github.stonega.Cusco/workspace.json` (normally
 `~/.local/share/io.github.stonega.Cusco/workspace.json`). Quit Cusco before editing

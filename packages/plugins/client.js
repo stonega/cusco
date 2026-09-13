@@ -410,6 +410,52 @@ export function normalizePluginEntry(entry, manifest = null) {
     };
 }
 
+export function pluginConnectorNeedsAuthentication(connector) {
+    const server = connector?.server;
+    return connector?.type === 'gnome-online-accounts'
+        || connector?.status === 'auth_required'
+        || server?.status?.state === 'auth_required'
+        || Boolean(server?.bearerTokenEnvVar || server?.authenticated)
+        || Object.values(server?.oauth ?? {}).some((value) => (
+            Array.isArray(value) ? value.length > 0 : Boolean(value)
+        ))
+        || [...Object.keys(server?.headers ?? {}), ...Object.keys(server?.headerEnv ?? {})]
+            .some((name) => name.toLowerCase() === 'authorization');
+}
+
+export function configureAutomaticPluginServers(plugins, mcpManager) {
+    if (!mcpManager)
+        return;
+
+    const configuredServers = new Map(mcpManager.listServers().map((server) => [server.id, server]));
+    for (const plugin of plugins) {
+        if (!plugin.installed || !plugin.enabled)
+            continue;
+
+        for (const connector of plugin.connectors ?? []) {
+            if (connector.type !== 'mcp' || !connector.server
+                || connector.server.enabled === false
+                || pluginConnectorNeedsAuthentication(connector)) {
+                continue;
+            }
+
+            const existing = configuredServers.get(connector.id);
+            if (existing) {
+                const previousArgs = plugin.manifest?.cusco?.previousMcpArgs?.[connector.server.name];
+                if (existing.source === 'workspace' && existing.transport === 'stdio'
+                    && existing.command === connector.server.command
+                    && Array.isArray(previousArgs)
+                    && JSON.stringify(existing.args) === JSON.stringify(previousArgs)) {
+                    mcpManager.setWorkspaceServerArguments(existing.key, connector.server.args);
+                }
+                continue;
+            }
+
+            configuredServers.set(connector.id, mcpManager.addWorkspaceServer(connector.server));
+        }
+    }
+}
+
 export function parsePluginMarketplaceJson(contents, options = {}) {
     const parsed = JSON.parse(String(contents ?? '{}'));
     const manifestLoader = options.manifestLoader ?? loadPluginManifest;

@@ -13,6 +13,7 @@ import {
     presentSkillDetailsDialog,
 } from '../settings/workspaceSettings.js';
 import { presentDetailDialog } from '../detailDialog.js';
+import { configureAutomaticPluginServers, pluginConnectorNeedsAuthentication } from '../plugins/client.js';
 
 const BUNDLED_PLUGIN_DEVELOPER = 'Cusco';
 
@@ -376,6 +377,7 @@ export class PluginsPage {
                 return;
 
             this._plugins = plugins;
+            configureAutomaticPluginServers(plugins, this._mcpManager);
 
             await this._refreshGoaAccounts(cancellable);
 
@@ -805,19 +807,28 @@ export class PluginsPage {
             row.add_suffix(state);
         }
 
-        if (plugin.installed && plugin.connectors?.length) {
-            const connected = plugin.connectors?.length > 0
-                && plugin.connectors.every((connector) => connector.connected);
-            const hasGoaConnector = plugin.connectors.some((connector) => (
+        const interactiveConnectors = (plugin.connectors ?? []).filter((connector) => {
+            const server = this._mcpManager?.listServers?.()
+                .find((candidate) => candidate.id === connector.id) ?? connector.server;
+            return pluginConnectorNeedsAuthentication({ ...connector, server })
+                || pluginConnectorNeedsSetup({ ...connector, server });
+        });
+        if (plugin.installed && interactiveConnectors.length) {
+            const connected = interactiveConnectors.every((connector) => connector.connected);
+            const needsEndpoint = interactiveConnectors.some((connector) => (
+                connector.type === 'mcp' && !connector.server && !connector.serverKey
+            ));
+            const hasGoaConnector = interactiveConnectors.some((connector) => (
                 connector.type === 'gnome-online-accounts'
             ));
             const connectButton = new Gtk.Button({
-                label: connected && hasGoaConnector ? 'Change account' : connected ? 'Connected' : 'Connect',
+                label: connected && hasGoaConnector ? 'Change account'
+                    : connected ? 'Connected' : needsEndpoint ? 'Set up' : 'Connect',
                 tooltip_text: connected
                     ? hasGoaConnector
                         ? `Change the online account used by ${plugin.displayName}`
                         : `${plugin.displayName} is connected`
-                    : `Connect ${plugin.displayName}`,
+                    : needsEndpoint ? `Set up ${plugin.displayName}` : `Connect ${plugin.displayName}`,
                 valign: Gtk.Align.CENTER,
                 sensitive: (!connected || hasGoaConnector) && !busyAction,
             });
@@ -829,7 +840,7 @@ export class PluginsPage {
                 connectButton.set_child(spinner);
             }
 
-            connectButton.connect('clicked', () => this._connectPlugin(plugin));
+            connectButton.connect('clicked', () => this._connectPlugin(plugin, interactiveConnectors));
             row.add_suffix(connectButton);
         }
 
@@ -861,7 +872,7 @@ export class PluginsPage {
         return row;
     }
 
-    async _connectPlugin(plugin) {
+    async _connectPlugin(plugin, connectors = plugin.connectors ?? []) {
         if (this._busyPluginActions.has(plugin.pluginId))
             return;
 
@@ -870,8 +881,7 @@ export class PluginsPage {
 
         try {
             this._syncConnectorStates();
-            const connector = plugin.connectors?.find((candidate) => !candidate.connected)
-                ?? plugin.connectors?.[0];
+            const connector = connectors.find((candidate) => !candidate.connected) ?? connectors[0];
 
             if (!connector)
                 throw new Error(`${plugin.displayName} does not declare a connector.`);
@@ -1069,7 +1079,8 @@ export class PluginsPage {
         const failures = [];
 
         for (const connector of plugin.connectors ?? []) {
-            if (connector.type !== 'mcp' || connector.server?.transport !== 'stdio')
+            if (connector.type !== 'mcp' || connector.server?.transport !== 'stdio'
+                || pluginConnectorNeedsAuthentication(connector))
                 continue;
 
             try {
@@ -1079,7 +1090,8 @@ export class PluginsPage {
                 let server = this._mcpManager.listServers()
                     .find((candidate) => candidate.id === connector.id);
 
-                if (server && server.transport !== 'stdio')
+                if (server && (server.transport !== 'stdio'
+                    || pluginConnectorNeedsAuthentication({ ...connector, server })))
                     continue;
                 if (server?.status?.state === 'connected')
                     continue;
@@ -1147,7 +1159,7 @@ export class PluginsPage {
 
             const pastTense = action === 'install' ? 'Installed' : 'Removed';
             this._onToast(connectionFailures.length
-                ? `Installed ${plugin.displayName}, but connection failed: ${connectionFailures.join('; ')} Use Connect to retry.`
+                ? `Installed ${plugin.displayName}, but connection failed: ${connectionFailures.join('; ')} Retry from Plugins → MCP.`
                 : `${pastTense} ${plugin.displayName}`);
             this._onChanged({ action, plugin });
             await this.refresh();

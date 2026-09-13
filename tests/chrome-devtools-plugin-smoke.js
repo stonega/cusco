@@ -2,9 +2,11 @@ import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 
 import { pluginConnectorNeedsSetup } from '../src/chat/pluginsPage.js';
-import { CuscoPluginClient } from '../src/plugins/client.js';
+import { configureAutomaticPluginServers, CuscoPluginClient, pluginConnectorNeedsAuthentication } from '../src/plugins/client.js';
 import { discoverPluginSkills } from '../src/skills/skills.js';
 import { McpClient } from '../packages/mcp/client.js';
+import { McpManager } from '../packages/mcp/manager.js';
+import { WorkspaceManager } from '../src/workspace/workspace.js';
 
 function assert(condition, message) {
     if (!condition)
@@ -29,7 +31,13 @@ function removeDirectory(file) {
 }
 
 async function checkLiveTaskGroups(server, pluginPath) {
-    const client = new McpClient({ ...server, args: [...server.args, '--headless'] });
+    const profilePath = GLib.dir_make_tmp('cusco-chrome-attached-XXXXXX');
+    const browser = Gio.Subprocess.new([
+        'google-chrome', '--headless=new', `--user-data-dir=${profilePath}`,
+        '--remote-debugging-port=0', '--no-first-run', '--no-default-browser-check', 'about:blank',
+    ], Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE);
+    const config = { ...server, args: [...server.args, `--user-data-dir=${profilePath}`] };
+    let client = new McpClient(config);
     const call = async (name, args = {}) => {
         const result = await client.callTool(name, args, { timeoutSeconds: 45 });
         assert(!result.isError, `${name} failed: ${JSON.stringify(result)}`);
@@ -45,6 +53,14 @@ async function checkLiveTaskGroups(server, pluginPath) {
         return JSON.parse(json[1]);
     };
     try {
+        const portPath = GLib.build_filenamev([profilePath, 'DevToolsActivePort']);
+        for (let attempt = 0; attempt < 100 && !GLib.file_test(portPath, GLib.FileTest.IS_REGULAR); attempt++) {
+            await new Promise((resolve) => GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+                resolve();
+                return GLib.SOURCE_REMOVE;
+            }));
+        }
+        assert(GLib.file_test(portPath, GLib.FileTest.IS_REGULAR), 'Test Chrome did not start its debugging endpoint');
         await client.connect({ timeoutSeconds: 45 });
         const tools = await client.listTools();
         assert(tools.some((tool) => tool.name === 'install_extension'), 'Live server lacked extension tools');
@@ -66,6 +82,7 @@ async function checkLiveTaskGroups(server, pluginPath) {
         const unrelated = await evaluate(unrelatedPage, 'await chrome.tabs.getCurrent()');
         const firstPage = await newTab();
         const first = await assign(firstPage, { title: 'Layout check' });
+        await evaluate(firstPage, '(localStorage.setItem("cusco-session-check", "retained"), true)');
         const retry = await assign(firstPage, { title: 'Layout check' });
         assert(retry.groupId === first.groupId, 'A retry created a duplicate task group');
         await call('navigate_page', { pageId: firstPage, url: 'about:blank' });
@@ -88,9 +105,23 @@ async function checkLiveTaskGroups(server, pluginPath) {
         assert(rejected, 'The helper accepted a mismatched task title');
         const group = await evaluate(followupPage, `await chrome.tabGroups.get(${first.groupId})`);
         assert(group.title === 'Cusco · Layout check' && !group.collapsed, 'Task group was not visibly named and expanded');
-        print(`Chrome task groups live check passed (${tools.length} MCP tools)`);
+        client.disconnect();
+        client = new McpClient(config);
+        await client.connect({ timeoutSeconds: 45 });
+        const reconnectedPage = await newTab();
+        assert(await evaluate(reconnectedPage, 'localStorage.getItem("cusco-session-check")') === 'retained',
+            'Reconnecting lost the existing browser profile state');
+        const retainedGroup = await evaluate(reconnectedPage, `await chrome.tabGroups.get(${first.groupId})`);
+        assert(retainedGroup.title === group.title, 'Disconnecting closed the existing browser task group');
+        print(`Chrome attached-profile task groups live check passed (${tools.length} MCP tools)`);
     } finally {
         client.disconnect();
+        browser.force_exit();
+        await new Promise((resolve) => browser.wait_async(null, (process, result) => {
+            process.wait_finish(result);
+            resolve();
+        }));
+        removeDirectory(Gio.File.new_for_path(profilePath));
     }
 }
 
@@ -108,6 +139,7 @@ const connector = plugin.connectors[0];
 const server = connector.server;
 assert(
     connector.type === 'mcp' && !pluginConnectorNeedsSetup(connector)
+    && !pluginConnectorNeedsAuthentication(connector)
     && server.transport === 'stdio' && server.command === 'npx'
     && server.namespace === 'chrome_devtools'
     && server.args.includes(`chrome-devtools-mcp@${plugin.version}`)
@@ -115,10 +147,10 @@ assert(
     'Chrome DevTools cannot connect using its pinned local server and normal permission controls',
 );
 assert(
-    ['--isolated', '--category-extensions', '--memory-debugging',
+    ['--auto-connect', '--category-extensions', '--memory-debugging',
         '--no-usage-statistics', '--no-performance-crux'].every((flag) => server.args.includes(flag))
-    && !server.args.includes('--slim') && !server.args.includes('--auto-connect'),
-    'Chrome DevTools defaults did not preserve its isolated browser and full skill capabilities',
+    && !server.args.includes('--slim') && !server.args.includes('--isolated'),
+    'Chrome DevTools defaults did not attach to the existing profile with full skill capabilities',
 );
 
 const expectedSkills = [
@@ -144,6 +176,26 @@ try {
     const installed = await client.install(available.pluginId);
     const installedPlugin = (await client.listPlugins())[0];
     assert(installedPlugin.installed, 'Plugin installation did not update catalog state');
+    const workspace = new WorkspaceManager({ autoDiscoverSkills: false });
+    const manager = new McpManager({
+        workspaceManager: workspace,
+        configPath: GLib.build_filenamev([temporaryRoot, 'empty-mcp.json']),
+        tokenStore: null,
+    });
+    manager.addWorkspaceServer({
+        ...server,
+        args: plugin.manifest.cusco.previousMcpArgs['Chrome DevTools'],
+        enabled: false,
+        permissionPolicy: 'deny',
+    });
+    configureAutomaticPluginServers([installedPlugin], manager);
+    configureAutomaticPluginServers([installedPlugin], manager);
+    assert(workspace.mcpServers.length === 1 && workspace.mcpServers[0].id === server.id
+        && workspace.mcpServers[0].args.includes('--auto-connect')
+        && !workspace.mcpServers[0].args.includes('--isolated')
+        && !workspace.mcpServers[0].enabled && workspace.mcpServers[0].permissionPolicy === 'deny',
+        'Existing preset migration did not persist safely through the native MCP manager');
+    manager.shutdown();
     const skills = discoverPluginSkills({ pluginsRootPath: GLib.build_filenamev([temporaryRoot, 'plugins']) });
     assert(
         JSON.stringify(skills.map((skill) => skill.name).sort()) === JSON.stringify(expectedSkills)

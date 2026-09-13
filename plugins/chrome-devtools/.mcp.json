@@ -9,7 +9,7 @@
       "args": [
         "-y",
         "chrome-devtools-mcp@1.9.0",
-        "--isolated",
+        "--auto-connect",
         "--category-extensions",
         "--memory-debugging",
         "--no-usage-statistics",

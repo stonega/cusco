@@ -89,7 +89,7 @@ import { createImageGenerationTool } from './providers/imageGeneration.js';
 import { ModelPicker } from './providers/modelPicker.js';
 import { createMessage } from './providers/provider.js';
 import { AppSettingsStore } from './settings/appSettings.js';
-import { CuscoPluginClient } from './plugins/client.js';
+import { configureAutomaticPluginServers, CuscoPluginClient } from './plugins/client.js';
 import { presentArchivedChatsWindow } from './settings/archivedChats.js';
 import { presentProviderSettingsDialog } from './settings/providerSettings.js';
 import { ConversationFileStore } from './storage/conversationStore.js';
@@ -920,6 +920,13 @@ class CuscoWindow extends Adw.ApplicationWindow {
             ['mail-goa', this._mailConnector],
         ]);
         this._pluginConnectors = {
+            prepareTools: async () => {
+                try {
+                    configureAutomaticPluginServers(await this._pluginClient.listPlugins(), this._mcp);
+                } catch (error) {
+                    logError(error, 'Failed to configure installed plugin MCP servers');
+                }
+            },
             refreshTools: async (tools, options = {}) => {
                 const enabledPlugins = new Set();
 
