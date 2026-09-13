@@ -1036,7 +1036,7 @@ export class PluginsPage {
             .find((candidate) => candidate.key === server.key) ?? server;
     }
 
-    async _connectMcpServer(plugin, server) {
+    async _connectMcpServer(plugin, server, { notify = true } = {}) {
         if (!server)
             throw new Error(`Could not create the ${plugin.displayName} connector.`);
 
@@ -1057,11 +1057,47 @@ export class PluginsPage {
         if (connected?.status?.state === 'connected'
             || this._mcpManager.listServers().find((candidate) => candidate.id === server.id)
                 ?.status?.state === 'connected') {
-            this._onToast(`${plugin.displayName} connected`);
+            if (notify)
+                this._onToast(`${plugin.displayName} connected`);
             return;
         }
 
         throw new Error(`${plugin.displayName} did not finish connecting.`);
+    }
+
+    async _connectInstalledLocalServers(plugin) {
+        const failures = [];
+
+        for (const connector of plugin.connectors ?? []) {
+            if (connector.type !== 'mcp' || connector.server?.transport !== 'stdio')
+                continue;
+
+            try {
+                if (!this._mcpManager)
+                    throw new Error('MCP management is not available.');
+
+                let server = this._mcpManager.listServers()
+                    .find((candidate) => candidate.id === connector.id);
+
+                if (server && server.transport !== 'stdio')
+                    continue;
+                if (server?.status?.state === 'connected')
+                    continue;
+
+                if (!server) {
+                    const added = this._mcpManager.addWorkspaceServer(connector.server);
+                    server = this._mcpManager.listServers()
+                        .find((candidate) => candidate.id === added.id);
+                }
+
+                await this._connectMcpServer(plugin, server, { notify: false });
+            } catch (error) {
+                logError(error, `Failed to start installed plugin connector ${connector.id}`);
+                failures.push(error?.userMessage || error?.message || `Could not start ${connector.name}`);
+            }
+        }
+
+        return failures;
     }
 
     _confirmUninstall(plugin) {
@@ -1088,9 +1124,12 @@ export class PluginsPage {
         this._renderList();
 
         try {
-            if (action === 'install')
+            let connectionFailures = [];
+
+            if (action === 'install') {
                 await this._client.install(plugin.pluginId);
-            else {
+                connectionFailures = await this._connectInstalledLocalServers(plugin);
+            } else {
                 await this._client.uninstall(plugin.pluginId);
                 for (const connector of plugin.connectors ?? []) {
                     if (connector.type === 'gnome-online-accounts') {
@@ -1107,7 +1146,9 @@ export class PluginsPage {
             }
 
             const pastTense = action === 'install' ? 'Installed' : 'Removed';
-            this._onToast(`${pastTense} ${plugin.displayName}`);
+            this._onToast(connectionFailures.length
+                ? `Installed ${plugin.displayName}, but connection failed: ${connectionFailures.join('; ')} Use Connect to retry.`
+                : `${pastTense} ${plugin.displayName}`);
             this._onChanged({ action, plugin });
             await this.refresh();
         } catch (error) {

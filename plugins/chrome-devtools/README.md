@@ -8,8 +8,9 @@ and all seven upstream skills. The server and skills are pinned to **1.9.0**.
 1. Install a supported Node.js LTS release, npm (including `npx`), and current
    stable Google Chrome. Version 1.9.0 declares Node.js support as
    `^20.19.0 || ^22.12.0 || >=23`; prefer a maintained LTS release.
-2. Open **Plugins → Chrome DevTools** and select **Connect**. If the plugin is
-   listed as available, select **Install** first.
+2. Open **Plugins → Chrome DevTools** and select **Install**. Installation also
+   configures and connects the MCP server. If the plugin is already installed
+   but disconnected, select **Connect** to start it or retry a failed connection.
 3. Enable **Agent Mode** and **Skills** in the chat. Ask Cusco to inspect a URL
    or check its performance.
 
@@ -71,8 +72,8 @@ See its bundled installation reference before using it.
 
 ## Customize the connection
 
-The plugin's `.mcp.json` supplies defaults when **Connect** creates the workspace
-server. Existing connections retain their saved configuration. Use **Plugins →
+The plugin's `.mcp.json` supplies defaults when **Install** or **Connect** creates
+the workspace server. Existing connections retain their saved configuration. Use **Plugins →
 MCP** to inspect the connection. Quit Cusco before editing its saved workspace at
 `$XDG_DATA_HOME/io.github.stonega.Cusco/workspace.json` (normally
 `~/.local/share/io.github.stonega.Cusco/workspace.json`). Edit only that server's

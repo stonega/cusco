@@ -13,8 +13,10 @@ tool during the same turn, for example:
 {"server":"Chrome DevTools","tool":"list_pages","arguments":{}}
 ```
 
-If no server is configured, use **Plugins → Chrome DevTools → Connect**. If it
-exists but is disconnected, use `mcp_server_connect` or the native Connect action.
+Installing the plugin from **Plugins → Chrome DevTools** also configures and
+connects its local MCP server. For an already installed plugin with no server,
+use **Connect**. If the server exists but is disconnected, use
+`mcp_server_connect` or the native Connect action.
 Keep Agent Mode and the needed plugin skills enabled. The STDIO server does not
 use an API key or OAuth. `mcp_server_configure` supports HTTP servers and is not
 the setup tool for this plugin.
@@ -44,7 +46,8 @@ the setup tool for this plugin.
 
 ## Configuration and files
 
-The plugin template is copied into a workspace server when first connected.
+The plugin template is copied into a workspace server during installation or
+when first connected for an already installed plugin.
 Inspect **Plugins → MCP** before changing arguments. Workspace servers are saved
 in `$XDG_DATA_HOME/io.github.stonega.Cusco/workspace.json` (normally
 `~/.local/share/io.github.stonega.Cusco/workspace.json`). Quit Cusco before editing

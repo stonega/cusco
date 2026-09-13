@@ -270,6 +270,121 @@ try {
 
 assert(unsafeSelectorRejected, 'Unsafe plugin selectors must be rejected');
 
+// Exercise installation and startup without requiring a GTK display or running npx.
+const lifecycleRoot = GLib.build_filenamev([
+    GLib.get_tmp_dir(),
+    `cusco-plugin-lifecycle-${GLib.uuid_string_random()}`,
+]);
+writeJson(GLib.build_filenamev([lifecycleRoot, '.agents', 'plugins', 'marketplace.json']), {
+    name: 'test-market',
+    plugins: [marketplace.plugins[0], {
+        name: 'chrome-devtools',
+        source: {
+            source: 'local',
+            path: GLib.build_filenamev([GLib.get_current_dir(), 'plugins', 'chrome-devtools']),
+        },
+        policy: { installation: 'AVAILABLE', authentication: 'ON_USE' },
+    }],
+});
+const lifecycleClient = new CuscoPluginClient({ repositoryRoot: lifecycleRoot });
+const lifecycleServers = [];
+const lifecycleToasts = [];
+const lifecycleChanges = [];
+let startupCount = 0;
+let startupError = null;
+let releaseStartup;
+let reportStartup;
+const startupGate = new Promise((resolve) => { releaseStartup = resolve; });
+const startupStarted = new Promise((resolve) => { reportStartup = resolve; });
+const lifecycleManager = {
+    listServers: () => lifecycleServers,
+    addWorkspaceServer(server) {
+        assert(GLib.file_test(
+            GLib.build_filenamev([lifecycleRoot, 'plugins', 'chrome-devtools', '.mcp.json']),
+            GLib.FileTest.IS_REGULAR,
+        ), 'MCP activation started before plugin installation completed');
+        const added = { ...server, key: `workspace:${server.id}`, source: 'workspace', status: { state: 'idle' } };
+        lifecycleServers.push(added);
+        return added;
+    },
+    async connectServer(key) {
+        startupCount += 1;
+        const server = lifecycleServers.find((candidate) => candidate.key === key);
+        server.status = { state: 'connecting' };
+        reportStartup();
+        await startupGate;
+        if (startupError) {
+            server.status = { state: 'error', message: startupError.message };
+            throw startupError;
+        }
+        server.status = { state: 'connected' };
+        return server;
+    },
+    deleteServer(key) {
+        const index = lifecycleServers.findIndex((server) => server.key === key);
+        if (index >= 0)
+            lifecycleServers.splice(index, 1);
+    },
+};
+const lifecyclePage = new PluginsPage({
+    client: lifecycleClient,
+    mcpManager: lifecycleManager,
+    onToast: (message) => lifecycleToasts.push(message),
+    onChanged: (change) => lifecycleChanges.push(change),
+    presentBearerCredential: () => { throw new Error('Installation must not prompt for remote credentials'); },
+});
+lifecyclePage._renderList = () => {};
+lifecyclePage.refresh = async () => {
+    lifecyclePage._plugins = await lifecycleClient.listPlugins();
+    lifecyclePage._syncConnectorStates();
+};
+await lifecyclePage.refresh();
+const localPlugin = lifecyclePage._plugins.find((plugin) => plugin.name === 'chrome-devtools');
+const localInstall = lifecyclePage._runAction('install', localPlugin);
+await startupStarted;
+await lifecyclePage._runAction('install', localPlugin);
+await lifecyclePage._connectPlugin(localPlugin);
+assert(startupCount === 1, 'Repeated clicks started duplicate plugin connections');
+releaseStartup();
+await localInstall;
+let installedLocal = lifecyclePage._plugins.find((plugin) => plugin.name === 'chrome-devtools');
+assert(installedLocal.installed && installedLocal.connectors[0].connected,
+    'Installing a local plugin did not configure and connect its MCP server');
+assert(lifecycleServers.length === 1 && lifecycleServers[0].command === 'npx',
+    'Installation did not use the plugin MCP declaration');
+assert(lifecycleToasts.length === 1 && lifecycleToasts[0] === 'Installed Chrome DevTools',
+    'Installation should finish with a single success notification');
+
+const remotePlugin = lifecyclePage._plugins.find((plugin) => plugin.name === 'design-tools');
+await lifecyclePage._runAction('install', remotePlugin);
+assert(startupCount === 1 && lifecycleServers.length === 1,
+    'Installing a remote plugin must leave connection and authentication to Connect');
+assert(lifecyclePage._plugins.find((plugin) => plugin.name === 'design-tools').installed,
+    'Remote plugins should still install their files');
+
+await lifecyclePage._runAction('uninstall', installedLocal);
+startupError = new Error('npx is unavailable');
+await lifecyclePage._runAction('install', localPlugin);
+installedLocal = lifecyclePage._plugins.find((plugin) => plugin.name === 'chrome-devtools');
+assert(installedLocal.installed && !installedLocal.connectors[0].connected
+    && installedLocal.connectors[0].status === 'error',
+    'A startup failure must preserve the installed plugin and its failed connector');
+assert(lifecycleChanges.at(-1).action === 'install'
+    && lifecycleToasts.at(-1).includes('Installed Chrome DevTools')
+    && lifecycleToasts.at(-1).includes('npx is unavailable')
+    && lifecycleToasts.at(-1).includes('Use Connect to retry')
+    && !lifecyclePage._busyPluginActions.has(localPlugin.pluginId),
+    'A startup failure must notify installation success and allow retry');
+startupError = null;
+lifecycleServers[0].args = [...lifecycleServers[0].args, '--headless'];
+await lifecyclePage._connectPlugin(installedLocal);
+assert(installedLocal.connectors[0].connected && lifecycleServers.length === 1
+    && lifecycleServers[0].args.includes('--headless'),
+    'Connect retry must reuse the saved server configuration');
+await lifecyclePage._runAction('uninstall', installedLocal);
+await lifecyclePage._runAction('uninstall', remotePlugin);
+lifecyclePage.dispose();
+
 if (Gtk.init_check()) {
     let backCount = 0;
     let mcpRefreshCount = 0;

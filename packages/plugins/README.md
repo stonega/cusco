@@ -6,6 +6,10 @@ Reusable, standalone plugin discovery and lifecycle support for Cusco.
 enriches each entry from its plugin manifest. Installation is Cusco-owned: the
 complete selected plugin is copied into `$REPO_ROOT/plugins/<name>/` and
 validated before activation. Removal affects only that repository-local copy.
+The Plugins page configures and starts declared local STDIO MCP servers as part
+of installation. A startup failure leaves the plugin installed and offers
+Connect for retry. Remote connectors still use Connect for credentials or account
+setup; installing their files does not start an authentication flow.
 
 Connector declarations are matched to plugin-provided MCP server definitions.
 Cusco also discovers a root `.mcp.json` in compatible ported plugins when the

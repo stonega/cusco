@@ -13,6 +13,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Configure and start local MCP servers when installing plugins, with Connect available to retry if startup fails.
 - Include local skill directories in agent context so bundled references and helper assets can be found from any chat working directory.
 
 ## [0.5.47] - 2026-09-11
