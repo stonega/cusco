@@ -697,7 +697,8 @@ export class CuscoPluginStore {
         if (isMarketplaceSource) {
             const marker = pluginRemovalMarker(this.pluginsRoot, name);
             GLib.mkdir_with_parents(marker.get_parent().get_path(), 0o700);
-            marker.replace_contents('', null, false, Gio.FileCreateFlags.PRIVATE, cancellable);
+            // Older GJS versions marshal an empty string as a null byte buffer.
+            marker.replace_contents('removed\n', null, false, Gio.FileCreateFlags.PRIVATE, cancellable);
             return { pluginId: plugin.pluginId, path: destinationPath, success: true };
         }
 

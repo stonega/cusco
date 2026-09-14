@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.48] - 2026-09-14
+
 ### Added
 
 - Render inline and display LaTeX math in chat messages, tables, and Markdown document previews, with offline native GTK display and copyable TeX source.
@@ -21,7 +23,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Keep the transcript in place after scrolling up during a response, including later streamed updates and response completion; resume following when returning to the bottom.
 - Warn about response delays only after provider inactivity, resetting on streamed updates and suppressing warnings during tool execution or approval waits.
-- Preserve bundled plugin sources when removing a plugin, so its skills and MCP configuration remain available for reinstalling.
+- Preserve bundled plugin sources when removing a plugin, so its skills and MCP configuration remain available for reinstalling, and reliably save removal state on Ubuntu.
 - Configure and start local MCP servers when installing plugins, with startup errors available under Plugins → MCP.
 - Include local skill directories in agent context so bundled references and helper assets can be found from any chat working directory.
 
@@ -529,7 +531,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.47...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.48...HEAD
+[0.5.48]: https://github.com/stonega/cusco/compare/v0.5.47...v0.5.48
 [0.5.47]: https://github.com/stonega/cusco/compare/v0.5.46...v0.5.47
 [0.5.46]: https://github.com/stonega/cusco/compare/v0.5.45...v0.5.46
 [0.5.45]: https://github.com/stonega/cusco/compare/v0.5.44...v0.5.45
