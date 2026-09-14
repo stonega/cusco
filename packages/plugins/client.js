@@ -536,12 +536,45 @@ function localPluginEntry(pluginPath, manifest) {
     }, manifest);
 }
 
-function pluginRemovalMarker(pluginsRoot, name) {
-    return Gio.File.new_for_path(GLib.build_filenamev([pluginsRoot, '.removed', name]));
+function pluginStateFile(pluginsRoot, name) {
+    const rootId = GLib.compute_checksum_for_string(
+        GLib.ChecksumType.SHA256,
+        GLib.canonicalize_filename(pluginsRoot, null),
+        -1,
+    );
+    return Gio.File.new_for_path(GLib.build_filenamev([
+        GLib.get_user_data_dir(),
+        'io.github.stonega.Cusco',
+        'plugin-state',
+        rootId,
+        name,
+    ]));
+}
+
+function setPluginRemoved(pluginsRoot, name, removed, cancellable) {
+    const state = pluginStateFile(pluginsRoot, name);
+    const parent = state.get_parent();
+    try {
+        parent.make_directory_with_parents(cancellable);
+    } catch (error) {
+        if (!error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.EXISTS))
+            throw error;
+    }
+    // Persist both states so reinstalls can override read-only legacy markers.
+    // Nonempty contents also work on older GJS versions.
+    state.replace_contents(removed ? 'removed\n' : 'installed\n', null, false,
+        Gio.FileCreateFlags.PRIVATE, cancellable);
 }
 
 export function isPluginRemoved(pluginsRoot, name) {
-    return pluginRemovalMarker(pluginsRoot, name).query_exists(null);
+    const state = pluginStateFile(pluginsRoot, name);
+    if (state.query_exists(null)) {
+        const [, contents] = state.load_contents(null);
+        return new TextDecoder().decode(contents).trim() === 'removed';
+    }
+    // Keep removals made by older versions until this user changes the state.
+    return Gio.File.new_for_path(GLib.build_filenamev([pluginsRoot, '.removed', name]))
+        .query_exists(null);
 }
 
 export class CuscoPluginStore {
@@ -629,8 +662,8 @@ export class CuscoPluginStore {
 
         if (!source.query_exists(cancellable))
             throw new Error(`Plugin source is unavailable: ${plugin?.displayName || name}`);
-        const removalMarker = pluginRemovalMarker(this.pluginsRoot, name);
-        const retainedSource = source.equal(destination) && removalMarker.query_exists(cancellable);
+        const removed = isPluginRemoved(this.pluginsRoot, name);
+        const retainedSource = source.equal(destination) && removed;
         if (destination.query_exists(cancellable) && !retainedSource)
             throw new Error(`${plugin?.displayName || name} is already installed in Cusco.`);
 
@@ -642,7 +675,7 @@ export class CuscoPluginStore {
             throw new Error('Plugin manifest name does not match its catalog entry.');
 
         if (retainedSource) {
-            removalMarker.delete(cancellable);
+            setPluginRemoved(this.pluginsRoot, name, false, cancellable);
             return { pluginId: plugin.pluginId, path: destinationPath, success: true };
         }
 
@@ -662,8 +695,8 @@ export class CuscoPluginStore {
                 throw new Error('Copied plugin failed manifest validation.');
 
             staging.move(destination, Gio.FileCopyFlags.NONE, cancellable, null);
-            if (removalMarker.query_exists(cancellable))
-                removalMarker.delete(cancellable);
+            if (removed)
+                setPluginRemoved(this.pluginsRoot, name, false, cancellable);
         } catch (error) {
             if (staging.query_exists(null)) {
                 try {
@@ -695,10 +728,7 @@ export class CuscoPluginStore {
             return source.equal(destination) || source.has_prefix(destination);
         });
         if (isMarketplaceSource) {
-            const marker = pluginRemovalMarker(this.pluginsRoot, name);
-            GLib.mkdir_with_parents(marker.get_parent().get_path(), 0o700);
-            // Older GJS versions marshal an empty string as a null byte buffer.
-            marker.replace_contents('removed\n', null, false, Gio.FileCreateFlags.PRIVATE, cancellable);
+            setPluginRemoved(this.pluginsRoot, name, true, cancellable);
             return { pluginId: plugin.pluginId, path: destinationPath, success: true };
         }
 

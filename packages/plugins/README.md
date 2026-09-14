@@ -7,10 +7,15 @@ enriches each entry from its plugin manifest. Installation is Cusco-owned: the
 complete selected plugin is copied into `$REPO_ROOT/plugins/<name>/` and
 validated before activation. Removal deletes only installed copies that are
 separate from their marketplace source. When a bundled directory is also its
-catalog source, removal preserves its files and writes a local marker under
-`plugins/.removed/`. Plugin and skill discovery honor that marker; reinstalling
-validates the retained manifest and clears it. These markers are excluded from
-Git and packaged builds. Connector and credential removal still runs normally.
+catalog source, removal preserves its files and saves per-user state under
+`$XDG_DATA_HOME/io.github.stonega.Cusco/plugin-state/` (defaulting to
+`~/.local/share/io.github.stonega.Cusco/plugin-state/`), scoped by a hash of the
+plugin root path. Plugin and skill discovery honor that state; reinstalling
+validates the retained manifest and restores activation. Bundled plugins can
+therefore be removed and restored from read-only system installations, including
+RPM packages. Legacy `plugins/.removed/` markers remain effective until overridden
+by per-user state; they are never modified and remain excluded from Git and
+packaged builds. Connector and credential removal still runs normally.
 The Plugins page configures and starts declared local STDIO MCP servers as part
 of installation. A startup failure leaves the plugin installed; the next agent
 turn retries discovery, and Plugins → MCP offers manual refresh and diagnostics.

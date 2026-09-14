@@ -58,6 +58,7 @@ gjs -m tests/usage-smoke.js
 gjs -m tests/usage-page-smoke.js
 gjs -m tests/plugin-branding-smoke.js
 gjs -m tests/plugins-smoke.js
+gjs -m tests/plugin-state-smoke.js
 gjs -m tests/gmail-goa-smoke.js
 gjs -m tests/mail-goa-smoke.js
 gjs -m tests/gnome-extension-plugin-smoke.js

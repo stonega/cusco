@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Save bundled plugin removal state per user so removing and reinstalling plugins works in RPM and other read-only system installations.
+
 ## [0.5.48] - 2026-09-14
 
 ### Added
