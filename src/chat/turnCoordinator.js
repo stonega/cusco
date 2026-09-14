@@ -73,6 +73,7 @@ export class TurnCoordinator {
         const finishedConversationId = runtimeEntry?.[0] ?? null;
         const runtime = runtimeEntry?.[1] ?? null;
 
+        this._stopLongResponseNotification(cancellable);
         if (finishedConversationId)
             this.turns.delete(finishedConversationId);
         runtime?.resolveFinished?.();
@@ -100,6 +101,7 @@ export class TurnCoordinator {
         if (!cancellable)
             return false;
 
+        this._stopLongResponseNotification(cancellable);
         if (!isCancelled(cancellable))
             cancellable.cancel();
 

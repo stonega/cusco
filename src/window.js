@@ -387,7 +387,7 @@ function createTranscriptRenderer(window) {
         isActiveConversationId: (conversationId) => window._isActiveConversationId(conversationId),
         isConversationBusy: (conversationId) => window._isConversationBusy(conversationId),
         setComposerBusy: (busy) => window._setComposerBusy(busy),
-        setFollowLatestMessage: (enabled) => window._setFollowLatestMessage(enabled),
+        setFollowLatestMessage: (enabled, options) => window._setFollowLatestMessage(enabled, options),
         addMessage: (...args) => window._addMessage(...args),
         updateUsageDisplay: (conversation) => window._updateUsageDisplay(conversation),
         scrollToBottom: (options) => window._scrollToBottom(options),
@@ -560,8 +560,6 @@ export function createAssistantStreamRunner(window) {
         scrollToBottom: call('_scrollToBottom'),
         sendQueuedUserMessages: call('_sendQueuedUserMessages'),
         setFollowLatestMessage: call('_setFollowLatestMessage'),
-        startLongResponseNotification: call('_startLongResponseNotification'),
-        stopLongResponseNotification: call('_stopLongResponseNotification'),
         turnHookContext: call('_turnHookContext'),
         updateUsageDisplay: call('_updateUsageDisplay'),
     });
@@ -2809,11 +2807,21 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     async _collectProviderResponse(providerId, modelId, providerMessages, cancellable, onChunk = null, collectOptions = {}) {
         const requestConfigs = this._providerConfigs.forRequest?.(cancellable) ?? this._providerConfigs;
-        return await collectProviderResponse({
-            providerConfigs: requestConfigs,
-            appSettings: this._appSettings,
-            conversations: this._conversations,
-        }, providerId, modelId, providerMessages, cancellable, onChunk, collectOptions);
+        // Watch provider inactivity, excluding turn setup, tools, and approvals.
+        this._startLongResponseNotification(cancellable);
+        try {
+            return await collectProviderResponse({
+                providerConfigs: requestConfigs,
+                appSettings: this._appSettings,
+                conversations: this._conversations,
+            }, providerId, modelId, providerMessages, cancellable, (text, chunk, state) => {
+                // These callbacks reflect provider updates, not the UI reveal animation.
+                this._startLongResponseNotification(cancellable);
+                onChunk?.(text, chunk, state);
+            }, collectOptions);
+        } finally {
+            this._stopLongResponseNotification(cancellable);
+        }
     }
 
     async _collectProviderResponseWithFallback(conversation, providerMessages, cancellable, onChunk = null, collectOptions = {}) {
@@ -3090,17 +3098,22 @@ class CuscoWindow extends Adw.ApplicationWindow {
         const [conversationId, runtime] = runtimeEntry;
         const notificationId = `long-response-${conversationId}`;
         this._stopLongResponseNotification(cancellable);
+        if (isCancellableCancelled(cancellable))
+            return;
+
         runtime.longResponseNotificationSent = false;
         runtime.longResponseTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, LONG_RESPONSE_NOTIFICATION_DELAY_MS, () => {
-            if (this._shouldSendLongResponseNotification()) {
+            runtime.longResponseTimeoutId = 0;
+            if (this._activeTurnEntryForCancellable(cancellable)?.[1] === runtime
+                && !isCancellableCancelled(cancellable)
+                && this._shouldSendLongResponseNotification()) {
                 const notification = new Gio.Notification();
-                notification.set_title('Cusco is still responding');
-                notification.set_body('The current response is taking longer than usual.');
+                notification.set_title('Cusco is waiting for a response');
+                notification.set_body('The provider has not sent an update for 10 seconds.');
                 this.get_application()?.send_notification(notificationId, notification);
                 runtime.longResponseNotificationSent = true;
             }
 
-            runtime.longResponseTimeoutId = 0;
             return GLib.SOURCE_REMOVE;
         });
     }
@@ -3748,9 +3761,9 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._appendMessageBottomSpacer();
     }
 
-    _setFollowLatestMessage(enabled) {
+    _setFollowLatestMessage(enabled, options = {}) {
         this._scrollController ??= createTranscriptScrollController(this);
-        return this._scrollController.setFollowLatest(enabled);
+        return this._scrollController.setFollowLatest(enabled, options);
     }
 
     _stopScrollToBottomAnimation() {

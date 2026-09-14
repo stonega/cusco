@@ -4,6 +4,7 @@ import GObject from 'gi://GObject?version=2.0';
 import Graphene from 'gi://Graphene?version=1.0';
 import Gtk from 'gi://Gtk?version=4.0';
 import Pango from 'gi://Pango?version=1.0';
+import { MathLabel } from './math.js';
 
 import {
     normalizeStreamAnimationStyle,
@@ -224,7 +225,7 @@ export function animationByteRangeGroup(
 }
 
 export const AnimatedMarkdownLabel = GObject.registerClass(
-class AnimatedMarkdownLabel extends Gtk.Label {
+class AnimatedMarkdownLabel extends MathLabel {
     _init(properties = {}) {
         super._init(properties);
         this._animationStyle = 'none';
@@ -276,7 +277,7 @@ class AnimatedMarkdownLabel extends Gtk.Label {
             || previousPlainText.trim() === '';
         const animationStartText = previousPlainText.trim() === '' ? '' : previousPlainText;
 
-        this.set_markup(model?.markup || ' ');
+        this.setMathModel(model);
         this._plainText = nextPlainText;
 
         if (!options.animate
@@ -443,6 +444,7 @@ class AnimatedMarkdownLabel extends Gtk.Label {
             snapshot.pop();
             snapshot.restore();
         }
+        this.snapshotMath(snapshot);
     }
 });
 

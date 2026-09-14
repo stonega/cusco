@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "esbuild mathjax-entry.js --bundle --format=esm --platform=neutral --main-fields=module,main --minify --outfile=mathjax.js"
+  },
+  "dependencies": {
+    "esbuild": "0.25.12",
+    "mathjax-full": "3.2.2"
+  }
+}

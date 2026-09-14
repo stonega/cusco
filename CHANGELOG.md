@@ -9,6 +9,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Render inline and display LaTeX math in chat messages, tables, and Markdown document previews, with offline native GTK display and copyable TeX source.
 - Add a predefined Chrome DevTools plugin with the official local MCP server, seven bundled skills, and a helper for creating a named browser tab group per task.
 
 ### Changed
@@ -18,6 +19,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Keep the transcript in place after scrolling up during a response, including later streamed updates and response completion; resume following when returning to the bottom.
+- Warn about response delays only after provider inactivity, resetting on streamed updates and suppressing warnings during tool execution or approval waits.
 - Preserve bundled plugin sources when removing a plugin, so its skills and MCP configuration remain available for reinstalling.
 - Configure and start local MCP servers when installing plugins, with startup errors available under Plugins → MCP.
 - Include local skill directories in agent context so bundled references and helper assets can be found from any chat working directory.

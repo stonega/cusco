@@ -195,6 +195,7 @@ export function extractArtifactsFromMarkdown(markdown, options = {}) {
     const artifacts = [];
 
     parseMarkdownBlocks(markdown).forEach((block, index) => {
+        const sourceBlockIndex = block.sourceBlockIndex ?? index;
         const kind = artifactKindForCodeBlock(block);
 
         if (!kind)
@@ -213,7 +214,7 @@ export function extractArtifactsFromMarkdown(markdown, options = {}) {
                 filename,
                 entrypoint: filename,
                 preferredPresentation: options.preferredPresentation ?? (kind === 'html' ? 'panel' : 'inline'),
-                sourceBlockIndex: index,
+                sourceBlockIndex,
                 sourceLanguage: block.language,
                 generatedBy: options.generatedBy,
             }, {
@@ -224,7 +225,7 @@ export function extractArtifactsFromMarkdown(markdown, options = {}) {
         } else {
             artifact = saveTextArtifact(kind, block.content, {
                 ...options,
-                sourceBlockIndex: index,
+                sourceBlockIndex,
                 sourceLanguage: block.language,
                 title: kind === 'svg' ? 'SVG artifact' : 'HTML artifact',
             });
@@ -240,7 +241,8 @@ export function extractArtifactsFromMarkdown(markdown, options = {}) {
 export function artifactForCodeBlock(artifacts, blockIndex, block) {
     const normalizedArtifacts = normalizeArtifacts(artifacts);
 
-    return normalizedArtifacts.find((artifact) => artifact.sourceBlockIndex === blockIndex)
+    const sourceBlockIndex = block?.sourceBlockIndex ?? blockIndex;
+    return normalizedArtifacts.find((artifact) => artifact.sourceBlockIndex === sourceBlockIndex)
         ?? normalizedArtifacts.find((artifact) => {
             const kind = artifactKindForCodeBlock(block);
             return kind && artifact.kind === kind && artifact.sourceBlockIndex < 0;

@@ -348,7 +348,7 @@ export class TranscriptRenderer {
         const conversation = this._conversations.activeConversation;
 
         if ((conversation?.id ?? null) !== this.renderedConversationId)
-            this._setFollowLatestMessage(false);
+            this._setFollowLatestMessage(false, { resetUserPause: true });
 
         this._prepareConversation(conversation);
         this._setComposerBusy(this._isConversationBusy(conversation?.id));

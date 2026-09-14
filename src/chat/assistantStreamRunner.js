@@ -60,8 +60,6 @@ export class AssistantStreamRunner {
         scrollToBottom,
         sendQueuedUserMessages,
         setFollowLatestMessage,
-        startLongResponseNotification,
-        stopLongResponseNotification,
         turnHookContext,
         updateUsageDisplay,
     }) {
@@ -93,8 +91,6 @@ export class AssistantStreamRunner {
         this._scrollToBottom = scrollToBottom;
         this._sendQueuedUserMessages = sendQueuedUserMessages;
         this._setFollowLatestMessage = setFollowLatestMessage;
-        this._startLongResponseNotification = startLongResponseNotification;
-        this._stopLongResponseNotification = stopLongResponseNotification;
         this._turnHookContext = turnHookContext;
         this._updateUsageDisplay = updateUsageDisplay;
     }
@@ -150,8 +146,6 @@ export class AssistantStreamRunner {
             assistantView.set_status('Waiting for agent response...');
         else
             assistantView?.set_loading?.();
-
-        this._startLongResponseNotification(cancellable);
 
         try {
             if (!await this._ensureTurnSessionHooks(conversation, cancellable)) {
@@ -381,7 +375,6 @@ export class AssistantStreamRunner {
                 : null;
             options.onPresentationSettling?.(presentationFinished);
             finalAssistantView?.finish_working?.();
-            this._stopLongResponseNotification(cancellable);
             if (this._isActiveConversationId(conversation.id))
                 this._setFollowLatestMessage(false);
 

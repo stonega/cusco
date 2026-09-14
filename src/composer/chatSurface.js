@@ -293,7 +293,9 @@ export class ChatSurfaceBuilder {
         this._scrollToBottomButton.add_css_class('flat');
         this._scrollToBottomButton.add_css_class('circular');
         this._scrollToBottomButton.add_css_class('cusco-scroll-to-bottom-button');
-        this._scrollToBottomButton.connect('clicked', () => this._scrollToBottom({ animate: true }));
+        this._scrollToBottomButton.connect('clicked', () => (
+            this._scrollToBottom({ animate: true, force: true })
+        ));
 
         const initialConversationView = this._createConversationView();
         this._messages = initialConversationView.messages;

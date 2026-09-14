@@ -112,12 +112,25 @@ assert(adjustment.value === 600, 'Resumed bottom pin used stale adjustment geome
 assert(scrollButton.visible === false, 'Pinned transcript left the scroll-to-bottom button visible');
 
 controller.followLatest = true;
+measuredHeight = adjustment.upper;
+controller.scrollToBottom({ passes: 3 });
 assert(controller.handleUserScroll(-1), 'Upward user input did not pause transcript following');
 adjustment.value = 520;
 assert(!controller.handleAdjustmentValueChanged(), 'Transcript following resumed before reaching the bottom');
 assert(
     !controller.followLatest && controller._pausedByUser && scrollButton.visible,
     'Paused transcript following did not preserve the viewport or reveal its return control',
+);
+controller.scrollToBottom();
+assert(!controller.preflightBottom(), 'Paused stream preflight moved the viewport');
+assert(!controller.pinToBottom(), 'Paused layout pinning moved the viewport');
+batchRendering = true;
+controller.scrollToBottom({ passes: 3 });
+batchRendering = false;
+await delay(20);
+assert(
+    adjustment.value === 520 && controller._scrollSourceId === 0 && controller._scrollPasses === 0,
+    'A streamed update overrode the user scroll pause',
 );
 adjustment.value = 600;
 assert(controller.handleAdjustmentValueChanged(), 'Returning to the bottom did not resume following');
@@ -126,9 +139,33 @@ assert(controller.followLatest && !controller._pausedByUser, 'Resumed following 
 adjustment.value = 500;
 assert(controller.handleUserScroll(-1), 'A second upward scroll did not pause following');
 controller.setFollowLatest(false);
+controller.scrollToBottom();
+controller.setFollowLatest(false);
+controller.scrollToBottom({ passes: 3 });
+await delay(20);
 assert(
-    adjustment.value === 500 && controller._scrollSourceId === 0,
+    adjustment.value === 500 && controller._scrollSourceId === 0 && controller._pausedByUser,
     'Response completion pulled a user-paused transcript back to the bottom',
+);
+
+controller.setFollowLatest(false, { resetUserPause: true });
+controller.scrollToBottom();
+await delay(20);
+assert(
+    adjustment.value === 600 && !controller._pausedByUser,
+    'Switching conversations retained the previous transcript pause',
+);
+controller.setFollowLatest(true);
+controller.setFollowLatest(false);
+assert(controller.handleUserScroll(-1), 'Upward input did not cancel final bottom passes');
+adjustment.value = 500;
+await delay(20);
+assert(adjustment.value === 500, 'A pending completion pass overrode upward input');
+controller.setFollowLatest(true);
+await delay(20);
+assert(
+    adjustment.value === 600 && controller.followLatest && !controller._pausedByUser,
+    'Starting a new response did not reset the transcript pause',
 );
 
 adjustment.upper = 1000;
@@ -217,6 +254,7 @@ if (Gtk.init_check()) {
         if (anchoredY !== null)
             changedPositions.push(boundsY(working, gtkScroller));
     });
+    gtkAdjustment.connect('value-changed', () => gtkController.handleAdjustmentValueChanged());
     window.present();
     await delay(50);
     gtkController.setFollowLatest(true);
@@ -234,6 +272,52 @@ if (Gtk.init_check()) {
     assert(
         Math.abs(boundsY(working, gtkScroller) - anchoredY) <= 1,
         'The streamed Working footer did not retain its viewport position',
+    );
+
+    for (const reducedMotionEnabled of [false, true]) {
+        gtkController._appSettings.reducedMotionEnabled = reducedMotionEnabled;
+        gtkController.scrollToBottom({ passes: 3 });
+        gtkController.scrollBy(-2);
+        const pausedValue = gtkAdjustment.get_value();
+
+        for (let chunk = 0; chunk < 3; chunk++) {
+            label.set_label(`${label.get_label()}\n${suffix}`);
+            gtkController.scrollToBottom();
+            await delay(30);
+            assert(
+                Math.abs(gtkAdjustment.get_value() - pausedValue) <= 1 && !gtkController.followLatest,
+                'GTK stream growth moved a user-paused transcript',
+            );
+        }
+
+        gtkController.setFollowLatest(false);
+        label.set_label(`${label.get_label()}\nFinished response`);
+        gtkController.scrollToBottom();
+        await delay(30);
+        assert(
+            Math.abs(gtkAdjustment.get_value() - pausedValue) <= 1,
+            'GTK response finalization moved a user-paused transcript',
+        );
+
+        gtkController.scrollToBottom({ animate: true, force: true });
+        await delay(250);
+        assert(
+            Math.abs(gtkAdjustment.get_value() - gtkController.getBottomValue()) <= 1
+                && gtkController.followLatest && !gtkController._pausedByUser,
+            `Jump to latest did not resume following (reduced motion: ${reducedMotionEnabled})`,
+        );
+    }
+
+    gtkController._appSettings.reducedMotionEnabled = false;
+    gtkController.scrollBy(-4);
+    gtkController.scrollToBottom({ animate: true, force: true });
+    await delay(30);
+    gtkController.scrollBy(-1);
+    const interruptedValue = gtkAdjustment.get_value();
+    await delay(220);
+    assert(
+        Math.abs(gtkAdjustment.get_value() - interruptedValue) <= 1 && !gtkController.followLatest,
+        'Upward input did not cancel the jump-to-latest animation',
     );
 
     gtkController.dispose();

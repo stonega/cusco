@@ -186,8 +186,6 @@ const runner = new AssistantStreamRunner({
         conversation: run, conversations, isActiveConversationId: () => false,
     }),
     isActiveConversationId: () => false,
-    startLongResponseNotification() {},
-    stopLongResponseNotification() {},
     applyHookResult() {},
     appendHookNotice() {},
     turnHookContext: () => ({}),

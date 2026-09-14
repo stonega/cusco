@@ -1,4 +1,5 @@
 import GLib from 'gi://GLib?version=2.0';
+import { mathTokenAt } from './math.js';
 
 const UTF8_ENCODER = new TextEncoder();
 
@@ -48,6 +49,12 @@ function splitTableRow(line) {
 
     for (let index = 0; index < text.length; index++) {
         const char = text[index];
+        const math = mathTokenAt(text, index);
+        if (math) {
+            cell += math.raw;
+            index = math.nextIndex - 1;
+            continue;
+        }
 
         if (char === '\\' && text[index + 1] === '|') {
             cell += '|';
@@ -162,7 +169,7 @@ function matchOpeningFence(line) {
     return String(line ?? '').match(/^```([\w#+.-]*)\s*$/);
 }
 
-export function parseMarkdownBlocks(markdown) {
+export function parseMarkdownBlocks(markdown, options = {}) {
     const lines = String(markdown ?? '').replace(/\r\n/g, '\n').split('\n');
     const blocks = [];
     let paragraphLines = [];
@@ -206,6 +213,20 @@ export function parseMarkdownBlocks(markdown) {
         if (inCodeBlock)
             codeLines.push(line);
         else {
+            if (options.splitMath !== false && /^ {0,3}(?:\$\$|\\\[)/.test(line)) {
+                const remaining = lines.slice(index).join('\n').trimStart();
+                const math = mathTokenAt(remaining, 0);
+                if (math?.display) {
+                    flushParagraph();
+                    blocks.push({ type: 'math', content: math.raw });
+                    const lineCount = math.raw.split('\n').length;
+                    index += lineCount - 1;
+                    const tail = remaining.slice(math.nextIndex).split('\n')[0];
+                    if (tail.trim())
+                        paragraphLines.push(tail);
+                    continue;
+                }
+            }
             const table = parseMarkdownTable(lines, index);
 
             if (table) {
@@ -238,6 +259,17 @@ export function parseMarkdownBlocks(markdown) {
     if (blocks.length === 0)
         blocks.push({ type: 'markdown', content: '' });
 
+    if (blocks.some((block) => block.type === 'math') && blocks.some((block) => block.type === 'code')) {
+        // Saved artifacts refer to block positions from before math was split out.
+        const sourceIndices = parseMarkdownBlocks(markdown, { splitMath: false })
+            .flatMap((block, index) => block.type === 'code' ? [index] : []);
+        let codeIndex = 0;
+        for (const block of blocks) {
+            if (block.type === 'code')
+                block.sourceBlockIndex = sourceIndices[codeIndex++];
+        }
+    }
+
     return blocks;
 }
 
@@ -252,21 +284,34 @@ function streamingMarkdownState(markdown) {
     let lastLinkStart = -1;
     let lastLinkEnd = -1;
     let linkTargetHasContent = false;
+    let mathEnd = 0;
 
     for (let lineStart = 0; lineStart <= source.length;) {
         const newlineIndex = source.indexOf('\n', lineStart);
         const lineEnd = newlineIndex < 0 ? source.length : newlineIndex;
         const line = source.slice(lineStart, lineEnd);
 
-        if (!inCodeBlock && matchOpeningFence(line)) {
+        if (!inCodeBlock && lineStart >= mathEnd && matchOpeningFence(line)) {
             inCodeBlock = true;
         } else if (inCodeBlock && line.trim() === '```') {
             inCodeBlock = false;
         } else if (!inCodeBlock) {
             let backslashRun = 0;
 
-            for (let index = lineStart; index < lineEnd; index++) {
+            for (let index = Math.max(lineStart, mathEnd); index < lineEnd; index++) {
                 const character = source[index];
+
+                if (!inInlineCode) {
+                    const math = mathTokenAt(source, index, { incomplete: true });
+                    if (math) {
+                        if (!math.complete)
+                            return { inMath: true };
+                        // Display formulas can span lines. Resume scanning after them.
+                        mathEnd = math.nextIndex;
+                        index = math.nextIndex - 1;
+                        continue;
+                    }
+                }
 
                 if (character === '\\') {
                     backslashRun++;
@@ -340,6 +385,8 @@ function streamingMarkdownState(markdown) {
 export function stabilizeStreamingMarkdown(markdown) {
     const source = String(markdown ?? '');
     const state = streamingMarkdownState(source);
+    if (state.inMath)
+        return source;
     const hideIncompleteBlockPrefix = (candidate) => {
         const lineStart = candidate.lastIndexOf('\n') + 1;
         const line = candidate.slice(lineStart);
@@ -404,6 +451,7 @@ function emptyRenderModel() {
         markup: '',
         plainText: '',
         excludedAnimationRanges: [],
+        mathRanges: [],
     };
 }
 
@@ -418,6 +466,9 @@ function appendRenderModel(target, source) {
             end: offset + range.end,
         });
     }
+    target.mathRanges ??= [];
+    for (const range of source.mathRanges ?? [])
+        target.mathRanges.push({ ...range, start: offset + range.start, end: offset + range.end });
 
     return target;
 }
@@ -433,7 +484,16 @@ function literalRenderModel(value, markup = null) {
 }
 
 function wrappedInlineRenderModel(text, index, delimiter, openTag, closeTag, options = {}) {
-    const closeIndex = text.indexOf(delimiter, index + delimiter.length);
+    let closeIndex = -1;
+    for (let cursor = index + delimiter.length; cursor < text.length; cursor++) {
+        const math = !options.excludeAnimation && mathTokenAt(text, cursor);
+        if (math) {
+            cursor = math.nextIndex - 1;
+        } else if (text.startsWith(delimiter, cursor)) {
+            closeIndex = cursor;
+            break;
+        }
+    }
 
     if (closeIndex < 0)
         return null;
@@ -443,7 +503,9 @@ function wrappedInlineRenderModel(text, index, delimiter, openTag, closeTag, opt
     if (!inner)
         return null;
 
-    const innerModel = inlineMarkdownToPangoRenderModel(inner);
+    const innerModel = options.excludeAnimation
+        ? literalRenderModel(inner)
+        : inlineMarkdownToPangoRenderModel(inner);
     const excludedAnimationRanges = [...innerModel.excludedAnimationRanges];
 
     if (options.excludeAnimation && innerModel.plainText) {
@@ -455,6 +517,7 @@ function wrappedInlineRenderModel(text, index, delimiter, openTag, closeTag, opt
 
     return {
         model: {
+            ...innerModel,
             markup: `${openTag}${innerModel.markup}${closeTag}`,
             plainText: innerModel.plainText,
             excludedAnimationRanges,
@@ -499,6 +562,23 @@ export function inlineMarkdownToPangoRenderModel(text) {
     while (index < source.length) {
         const char = String.fromCodePoint(source.codePointAt(index));
         let consumed = null;
+        const math = mathTokenAt(source, index);
+
+        if (math) {
+            const literal = literalRenderModel(math.raw.replace(/\n/g, ' '));
+            const range = { start: 0, end: utf8Length(literal.plainText) };
+            literal.mathRanges = [{ ...range, tex: math.tex, display: math.display }];
+            literal.excludedAnimationRanges = [range];
+            appendRenderModel(model, literal);
+            index = math.nextIndex;
+            continue;
+        }
+
+        if (char === '\\' && /[$\\]/.test(source[index + 1] ?? '')) {
+            appendRenderModel(model, literalRenderModel(source[index + 1]));
+            index += 2;
+            continue;
+        }
 
         if (source.startsWith('**', index)) {
             consumed = wrappedInlineRenderModel(source, index, '**', '<b>', '</b>');

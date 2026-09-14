@@ -33,6 +33,7 @@ chat_sources = files(
   'chat/conversationSidebar.js',
   'chat/emptyConversationPresenter.js',
   'chat/markdown.js',
+  'chat/math.js',
   'chat/messageActions.js',
   'chat/messageView.js',
   'chat/messagePresenter.js',

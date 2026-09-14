@@ -9,11 +9,12 @@ import Pango from 'gi://Pango?version=1.0';
 import { createManagedArtifactCard } from '../artifacts/views/artifactCard.js';
 import { artifactForCodeBlock } from './artifacts.js';
 import {
-    inlineMarkdownToPangoMarkup,
+    inlineMarkdownToPangoRenderModel,
     markdownToPangoRenderModel,
     parseMarkdownBlocks,
     stabilizeStreamingMarkdown,
 } from './markdown.js';
+import { createMathBlock, MathLabel } from './math.js';
 import {
     getCodeThemeStyleScheme,
     getCodeThemeVariant,
@@ -308,7 +309,10 @@ export function applyReferenceTextStyles(label, references = [], styles = {}) {
         }
     }
 
-    label?.set_attributes?.(hasAttributes ? attributes : null);
+    if (label?.setReferenceAttributes)
+        label.setReferenceAttributes(hasAttributes ? attributes : null);
+    else
+        label?.set_attributes?.(hasAttributes ? attributes : null);
 }
 
 function getLanguage(languageId) {
@@ -359,18 +363,18 @@ function createTableCell(content, options = {}) {
     const maxWidthChars = options.role === 'user'
         ? Math.max(14, Math.floor(36 / columnCount))
         : Math.max(16, Math.min(36, Math.floor(82 / columnCount) + 8));
-    const label = new Gtk.Label({
+    const label = new MathLabel({
         wrap: true,
         selectable: options.selectable !== false,
         xalign: tableAlignmentXalign(options.alignment),
         max_width_chars: maxWidthChars,
         hexpand: true,
     });
-    const markup = inlineMarkdownToPangoMarkup(content) || ' ';
+    const model = inlineMarkdownToPangoRenderModel(content);
 
     label.set_wrap_mode(Pango.WrapMode.WORD_CHAR);
     label.set_use_markup(true);
-    label.set_markup(options.header ? `<b>${markup}</b>` : markup);
+    label.setMathModel(options.header ? { ...model, markup: `<b>${model.markup || ' '}</b>` } : model);
     label.add_css_class('cusco-table-cell');
 
     if (options.header)
@@ -817,6 +821,8 @@ function messageBlockSignature(block) {
     switch (block?.type) {
     case 'code':
         return `code\u0000${block.language ?? ''}\u0000${block.content ?? ''}`;
+    case 'math':
+        return `math\u0000${block.content ?? ''}`;
     case 'divider':
         return 'divider';
     case 'table':
@@ -852,6 +858,9 @@ export function streamingBlockReusePlan(previousBlocks, nextBlocks) {
 }
 
 function createMessageBlockDescriptor(block, index, options) {
+    if (block.type === 'math')
+        return { artifactKey: null, block, widget: createMathBlock(block.content, options) };
+
     if (block.type === 'code') {
         const artifact = artifactForCodeBlock(options.artifacts, index, block);
 

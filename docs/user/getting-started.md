@@ -37,6 +37,8 @@ Assistant HTML and SVG documents can become durable artifacts. Compact artifacts
 
 GNOME integration includes desktop actions for New Chat and Quick Prompt, shell search over saved conversations, long-response notifications, and shortcuts: Ctrl+N for a new chat, Ctrl+, for Preferences, Ctrl+K for the command palette, and Ctrl+L to focus the composer. High contrast, reduced motion, and response timeout are available in Preferences.
 
+When Cusco is in the background, a response-delay notification appears after 10 seconds without a provider update. Incoming text, reasoning, or status updates reset that timer and dismiss the warning. Tool execution and approval waits do not trigger it.
+
 Select **Plugins** beside **Usage** in the sidebar to browse every installed and
 available plugin in Cusco's configured marketplace. Search by name, description,
 developer, category, capability, or marketplace; filter to installed or

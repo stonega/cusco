@@ -23,20 +23,23 @@ export class TranscriptScrollController {
         this._pausedByUser = false;
     }
 
-    setFollowLatest(enabled) {
+    setFollowLatest(enabled, { resetUserPause = false } = {}) {
         const nextFollowLatest = Boolean(enabled);
         const wasFollowing = this.followLatest;
         const wasPausedByUser = this._pausedByUser;
 
         this.followLatest = nextFollowLatest;
-        this._pausedByUser = false;
+        // Finishing a response must preserve the pause: presentation and
+        // transcript finalization can still request bottom passes afterward.
+        if (nextFollowLatest || resetUserPause)
+            this._pausedByUser = false;
 
         if (nextFollowLatest) {
             this.scrollToBottom({ passes: 3 });
             return;
         }
 
-        if (wasFollowing && !wasPausedByUser) {
+        if (wasFollowing && !wasPausedByUser && !resetUserPause) {
             this.scrollToBottom({ passes: 2 });
             return;
         }
@@ -73,7 +76,7 @@ export class TranscriptScrollController {
     }
 
     preflightBottom() {
-        if (this._isBatchRendering())
+        if (this._pausedByUser || this._isBatchRendering())
             return false;
 
         const scroller = this._getScroller();
@@ -113,6 +116,9 @@ export class TranscriptScrollController {
     }
 
     pinToBottom() {
+        if (this._pausedByUser)
+            return false;
+
         if (this._isBatchRendering()) {
             this._scrollPasses = Math.max(this._scrollPasses, 1);
             return false;
@@ -138,13 +144,16 @@ export class TranscriptScrollController {
     handleUserScroll(delta) {
         const scroller = this._getScroller();
 
-        if (!this.followLatest || !scroller || !Number.isFinite(delta) || delta >= 0)
+        if (!scroller || !Number.isFinite(delta) || delta >= 0)
+            return false;
+
+        if (!this.followLatest && !this._animationSourceId && !this._scrollPasses)
             return false;
 
         const adjustment = scroller.get_vadjustment();
         const lower = adjustment.get_lower?.() ?? 0;
 
-        if (adjustment.get_value() <= lower + 0.5)
+        if (this.getBottomValue() <= lower + 0.5)
             return false;
 
         this.followLatest = false;
@@ -203,10 +212,10 @@ export class TranscriptScrollController {
         return true;
     }
 
-    animateToBottom() {
+    animateToBottom(options = {}) {
         const scroller = this._getScroller();
         if (!scroller || this._appSettings.reducedMotionEnabled) {
-            this.scrollToBottom({ passes: 2 });
+            this.scrollToBottom({ ...options, animate: false, passes: 2 });
             return;
         }
 
@@ -274,6 +283,11 @@ export class TranscriptScrollController {
         if (!this._getScroller())
             return;
 
+        // Only an explicit jump may override a user's pause. Stream updates,
+        // tool messages and final rendering all use this same entry point.
+        if (this._pausedByUser && !options.force)
+            return;
+
         if (this._isBatchRendering()) {
             const passes = Math.max(1, Math.round(options.passes ?? 1));
             this._scrollPasses = Math.max(this._scrollPasses, passes);
@@ -284,7 +298,7 @@ export class TranscriptScrollController {
             this.preflightBottom();
 
         if (options.animate && !this.followLatest) {
-            this.animateToBottom();
+            this.animateToBottom(options);
             return;
         }
 

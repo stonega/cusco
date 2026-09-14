@@ -425,6 +425,7 @@ const deferredFinishHarness = {
     _conversations: { activeConversation: runningConversation },
     _conversationStack: {},
     _activeTurnEntryForCancellable: windowPrototype._activeTurnEntryForCancellable,
+    _stopLongResponseNotification: windowPrototype._stopLongResponseNotification,
     _isActiveConversationId: windowPrototype._isActiveConversationId,
     _isConversationBusy: windowPrototype._isConversationBusy,
     _setComposerBusy() {},
@@ -491,8 +492,6 @@ const settledRunner = new AssistantStreamRunner({
     scrollToBottom() {},
     sendQueuedUserMessages: async () => false,
     setFollowLatestMessage() {},
-    startLongResponseNotification() {},
-    stopLongResponseNotification() {},
     turnHookContext: () => ({}),
     updateUsageDisplay() {},
 });
@@ -585,8 +584,6 @@ const agentPreflightRunner = new AssistantStreamRunner({
     scrollToBottom() {},
     sendQueuedUserMessages: async () => false,
     setFollowLatestMessage() {},
-    startLongResponseNotification() {},
-    stopLongResponseNotification() {},
     turnHookContext: () => ({}),
     updateUsageDisplay() {},
 });

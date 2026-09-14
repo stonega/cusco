@@ -9,6 +9,10 @@ gjs -m tests/model-catalog-http-smoke.js
 missing_sources=$(
   find src packages -type f -name '*.js' | sort | while IFS= read -r source; do
     case "$source" in
+      packages/nativeMath/mathjax-entry.js)
+        # Development-only bundler entry; the app loads nativeMath/mathjax.js.
+        continue
+        ;;
       src/*)
         relative=${source#src/}
         source_manifest=src/meson.build
@@ -44,6 +48,7 @@ gjs -m tests/artifact-tools-smoke.js
 gjs -m tests/artifact-workspace-smoke.js
 gjs -m tests/attachments-smoke.js
 gjs -m tests/markdown-smoke.js
+gjs -m tests/math-smoke.js
 gjs -m tests/message-view-smoke.js
 gjs -m tests/streaming-text-smoke.js
 gjs -m tests/stream-animation-smoke.js
@@ -75,6 +80,7 @@ gjs -m tests/automation-smoke.js
 gjs -m tests/automation-run-smoke.js
 gjs -m tests/window-background-sync-smoke.js
 gjs -m tests/window-provider-fallback-smoke.js
+gjs -m tests/long-response-notification-smoke.js
 gjs -m tests/agent-mode-smoke.js
 gjs -m tests/ask-user-smoke.js
 gjs -m tests/accessibility-smoke.js

@@ -87,7 +87,17 @@ tool_runtime_package_sources = files(
 markdown_pango_package_sources = files(
   'markdownPango/index.js',
   'markdownPango/markdown.js',
+  'markdownPango/math.js',
   'markdownPango/README.md',
+)
+
+install_data(
+  'nativeMath/label.js',
+  'nativeMath/render.js',
+  'nativeMath/mathjax.js',
+  'nativeMath/LICENSE.mathjax',
+  'nativeMath/README.md',
+  install_dir: pkgdatadir / 'packages' / 'nativeMath',
 )
 
 streaming_text_package_sources = files(

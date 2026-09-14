@@ -4,10 +4,11 @@ import Gtk from 'gi://Gtk?version=4.0';
 import GtkSource from 'gi://GtkSource?version=5';
 
 import {
-    inlineMarkdownToPangoMarkup,
-    markdownToPangoMarkup,
+    inlineMarkdownToPangoRenderModel,
+    markdownToPangoRenderModel,
     parseMarkdownBlocks,
 } from '../../chat/markdown.js';
+import { createMathBlock, MathLabel } from '../../chat/math.js';
 
 const INLINE_PREVIEW_HEIGHT = 260;
 const SOURCE_LANGUAGE_ALIASES = {
@@ -204,7 +205,7 @@ function markdownTableXalign(alignment) {
 }
 
 function createMarkdownDocumentLabel(content) {
-    const label = new Gtk.Label({
+    const label = new MathLabel({
         selectable: true,
         wrap: true,
         xalign: 0,
@@ -212,14 +213,14 @@ function createMarkdownDocumentLabel(content) {
         hexpand: true,
     });
     label.set_use_markup(true);
-    label.set_markup(markdownToPangoMarkup(content) || ' ');
+    label.setMathModel(markdownToPangoRenderModel(content));
     label.add_css_class('cusco-message-markdown');
     return label;
 }
 
 function createMarkdownDocumentTableCell(content, options = {}) {
     const columnCount = Math.max(1, options.columnCount ?? 1);
-    const label = new Gtk.Label({
+    const label = new MathLabel({
         selectable: true,
         wrap: true,
         xalign: markdownTableXalign(options.alignment),
@@ -227,10 +228,10 @@ function createMarkdownDocumentTableCell(content, options = {}) {
         hexpand: true,
         max_width_chars: Math.max(12, Math.min(36, Math.floor(82 / columnCount) + 8)),
     });
-    const markup = inlineMarkdownToPangoMarkup(content) || ' ';
+    const model = inlineMarkdownToPangoRenderModel(content);
 
     label.set_use_markup(true);
-    label.set_markup(options.header ? `<b>${markup}</b>` : markup);
+    label.setMathModel(options.header ? { ...model, markup: `<b>${model.markup || ' '}</b>` } : model);
     label.add_css_class('cusco-table-cell');
 
     if (options.header)
@@ -314,6 +315,8 @@ function createMarkdownDocumentContent(source) {
             content.append(createMarkdownDocumentDivider());
         else if (block.type === 'code')
             content.append(createMarkdownDocumentCodeBlock(block));
+        else if (block.type === 'math')
+            content.append(createMathBlock(block.content));
         else
             content.append(createMarkdownDocumentLabel(block.content));
     }
