@@ -17,7 +17,7 @@ import {
 const DEFAULT_MCP_TIMEOUT_SECONDS = 30;
 const MCP_CLIENT_INFO = Object.freeze({
     name: 'Cusco',
-    version: '0.5.48',
+    version: '0.5.49',
 });
 const MCP_CLIENT_CAPABILITIES = Object.freeze({
     roots: {

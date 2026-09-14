@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.49] - 2026-09-14
+
 ### Fixed
 
 - Save bundled plugin removal state per user so removing and reinstalling plugins works in RPM and other read-only system installations.
@@ -535,7 +537,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.48...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.49...HEAD
+[0.5.49]: https://github.com/stonega/cusco/compare/v0.5.48...v0.5.49
 [0.5.48]: https://github.com/stonega/cusco/compare/v0.5.47...v0.5.48
 [0.5.47]: https://github.com/stonega/cusco/compare/v0.5.46...v0.5.47
 [0.5.46]: https://github.com/stonega/cusco/compare/v0.5.45...v0.5.46
