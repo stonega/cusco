@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix the computer-use GNOME Shell extension failing to enable on GNOME 51 after removal of the legacy Clutter backend API, while retaining support for GNOME 45–50.
+
 ## [0.5.49] - 2026-09-14
 
 ### Fixed

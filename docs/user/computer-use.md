@@ -13,7 +13,7 @@ grant only the access needed for a task.
 ## Requirements
 
 - Linux with GNOME Shell on Wayland
-- GNOME Shell 45–50
+- GNOME Shell 45–51
 - An installed Cusco build and its `cusco-computer-use@stonega` Shell extension
 - A vision-capable model for tasks that use screenshots
 - Agent mode enabled in the current chat

@@ -414,7 +414,7 @@ appear in that row.
 - Virtual keyboard behavior needs broader testing with non-Latin input methods
   and custom keyboard layouts.
 - The bridge uses GNOME Shell/Mutter extension APIs, so every new GNOME major
-  release must be compatibility-tested. Metadata currently declares 45–50.
+  release must be compatibility-tested. Metadata currently declares 45–51.
 - Flatpak packaging needs a separate Shell-extension delivery and D-Bus
   permission design.
 - Screenshot-only actions cannot confirm which application element received an

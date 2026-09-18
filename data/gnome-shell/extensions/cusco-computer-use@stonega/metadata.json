@@ -2,7 +2,7 @@
   "uuid": "cusco-computer-use@stonega",
   "name": "Cusco Computer Use",
   "description": "GNOME Wayland bridge and emergency stop indicator for Cusco.",
-  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "shell-version": ["45", "46", "47", "48", "49", "50", "51"],
   "url": "https://github.com/stonega/cusco",
-  "version": 7
+  "version": 8
 }
