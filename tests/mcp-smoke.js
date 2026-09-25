@@ -170,6 +170,20 @@ const manager = new McpManager({
 });
 if (manager.listServers().find((server) => server.name === 'local-mcp')?.envPassthrough?.[0] !== 'PATH')
     throw new Error('Workspace MCP environment passthrough was not retained');
+const unavailableTokenStore = {
+    lookup() {
+        throw new Error('The name is not activatable');
+    },
+};
+const managerWithoutSecretService = new McpManager({
+    workspaceManager: workspace,
+    configPath,
+    tokenStore: unavailableTokenStore,
+});
+const localServerWithoutSecretService = managerWithoutSecretService.listServers()
+    .find((server) => server.name === 'local-mcp');
+if (!localServerWithoutSecretService)
+    throw new Error('Unavailable Secret Service prevented MCP manager startup');
 const tools = new ToolManager();
 const httpServer = new Soup.Server();
 let httpListening = false;
@@ -409,6 +423,12 @@ try {
 }
 
 try {
+    await managerWithoutSecretService.refreshServer(localServerWithoutSecretService.key);
+    if (managerWithoutSecretService.listServers()
+        .find((server) => server.key === localServerWithoutSecretService.key)?.status.state !== 'connected') {
+        throw new Error('Local MCP server did not connect without Secret Service');
+    }
+
     let fileServer = manager.listServers().find((server) => server.source === 'file' && server.name === 'file-mcp');
 
     if (!fileServer)
@@ -427,6 +447,28 @@ try {
         throw new Error('MCP config file server was not disabled through manager');
 
     if (httpListening) {
+        const publicHttpManager = new McpManager({
+            workspaceManager: {
+                mcpServers: [{
+                    name: 'public-mcp',
+                    url: `${oauthBaseUrl()}/versioned-mcp`,
+                }],
+            },
+            configPath,
+            tokenStore: unavailableTokenStore,
+        });
+        try {
+            const publicServer = publicHttpManager.listServers()
+                .find((server) => server.name === 'public-mcp');
+            await publicHttpManager.refreshServer(publicServer.key);
+            if (publicHttpManager.listServers()
+                .find((server) => server.key === publicServer.key)?.status.state !== 'connected') {
+                throw new Error('Public HTTP MCP server did not connect without Secret Service');
+            }
+        } finally {
+            publicHttpManager.shutdown();
+        }
+
         const oauthTokenStore = new MemoryMcpTokenStore();
         const oauthServer = {
             key: 'test:oauth-mcp',
@@ -708,6 +750,7 @@ try {
     print('Cusco MCP smoke passed');
 } finally {
     manager.shutdown();
+    managerWithoutSecretService.shutdown();
     httpServer.disconnect();
 
     if (GLib.file_test(configPath, GLib.FileTest.EXISTS))

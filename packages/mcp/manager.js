@@ -331,7 +331,7 @@ export class McpManager {
 
     listServers() {
         return this._servers.map((server) => {
-            const token = this._tokenStore?.lookup?.(server.key);
+            const token = this._lookupOptionalToken(server);
             const environmentToken = server.bearerTokenEnvVar
                 ? String(GLib.getenv(server.bearerTokenEnvVar) ?? '').trim()
                 : '';
@@ -727,7 +727,7 @@ export class McpManager {
 
     async _clientFor(server, options = {}) {
         let client = this._clients.get(server.key);
-        let token = this._tokenStore?.lookup?.(server.key);
+        let token = this._lookupOptionalToken(server);
 
         if (token && shouldRefreshMcpToken(token)) {
             if (token.refreshToken) {
@@ -775,6 +775,19 @@ export class McpManager {
         }
 
         return client;
+    }
+
+    _lookupOptionalToken(server) {
+        if (server.transport !== MCP_TRANSPORT_HTTP)
+            return null;
+
+        try {
+            return this._tokenStore?.lookup?.(server.key) ?? null;
+        } catch (_error) {
+            // A missing Secret Service must not prevent public or environment-authenticated
+            // MCP servers from connecting, or local servers from appearing at startup.
+            return null;
+        }
     }
 
     async _tryList(callback) {
