@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.50] - 2026-09-25
+
 ### Fixed
 
 - Open Cusco and connect local or unauthenticated MCP servers when GNOME Keyring's Secret Service is unavailable.
@@ -542,7 +544,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.49...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.50...HEAD
+[0.5.50]: https://github.com/stonega/cusco/compare/v0.5.49...v0.5.50
 [0.5.49]: https://github.com/stonega/cusco/compare/v0.5.48...v0.5.49
 [0.5.48]: https://github.com/stonega/cusco/compare/v0.5.47...v0.5.48
 [0.5.47]: https://github.com/stonega/cusco/compare/v0.5.46...v0.5.47
