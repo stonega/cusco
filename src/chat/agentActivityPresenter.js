@@ -163,7 +163,7 @@ export function createAgentWorkingRow(options = {}) {
         updateElapsed();
         elapsedSourceId = GLib.timeout_add(
             GLib.PRIORITY_DEFAULT,
-            1000,
+            100,
             () => {
                 updateElapsed();
                 return GLib.SOURCE_CONTINUE;

@@ -51,12 +51,13 @@ export function composerHintPresentation(sendWithEnter, isBusy, computerUseActiv
 }
 
 export function formatRunningTime(elapsedSeconds) {
-    const totalSeconds = Math.max(0, Math.floor(Number(elapsedSeconds) || 0));
+    const durationSeconds = Math.max(0, Number(elapsedSeconds) || 0);
+    if (durationSeconds < 60)
+        return `${(Math.floor(durationSeconds * 10) / 10).toFixed(1)}s`;
+
+    const totalSeconds = Math.floor(durationSeconds);
     const seconds = totalSeconds % 60;
     const totalMinutes = Math.floor(totalSeconds / 60);
-
-    if (totalMinutes === 0)
-        return `${seconds}s`;
 
     const minutes = totalMinutes % 60;
     if (totalMinutes < 60)

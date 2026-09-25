@@ -432,13 +432,17 @@ const queuedIcon = new TextDecoder().decode(queuedIconBytes);
 if (!queuedIcon.includes('fill="#2e3436"') || queuedIcon.includes('currentColor'))
     throw new Error('Queued-message icon does not use GTK-compatible symbolic coloring');
 
-if (formatRunningTime(0) !== '0s'
+if (formatRunningTime(0) !== '0.0s'
+    || formatRunningTime(2.29) !== '2.2s'
+    || formatRunningTime(59.99) !== '59.9s'
+    || formatRunningTime(60) !== '1m 00s'
     || formatRunningTime(65) !== '1m 05s'
     || formatRunningTime(3725) !== '1h 02m 05s') {
     throw new Error('Agent running time formatting changed unexpectedly');
 }
 
 if (messageRunDurationLabel({ metadata: { agentRunDurationMs: 880000 } }) !== 'Worked for 14m 40s'
+    || messageRunDurationLabel({ metadata: { agentRunDurationMs: 1540 } }) !== 'Worked for 1.5s'
     || messageRunDurationLabel({ metadata: { agentRunDurationMs: 65000 } }) !== 'Worked for 1m 05s'
     || messageRunDurationLabel({ metadata: {} }) !== '') {
     throw new Error('Completed Agent run duration presentation changed unexpectedly');

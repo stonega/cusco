@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- Show Agent working time in tenths of a second for runs shorter than one minute.
+
 ## [0.5.50] - 2026-09-25
 
 ### Fixed
