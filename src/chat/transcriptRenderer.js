@@ -30,6 +30,7 @@ export class TranscriptRenderer {
         addMessage,
         updateUsageDisplay,
         scrollToBottom,
+        scrollToTop,
         onStateChanged = () => {},
     }) {
         this._appSettings = appSettings;
@@ -52,6 +53,7 @@ export class TranscriptRenderer {
         this._addMessage = addMessage;
         this._updateUsageDisplay = updateUsageDisplay;
         this._scrollToBottom = scrollToBottom;
+        this._scrollToTop = scrollToTop;
         this._onStateChanged = onStateChanged;
         this._renderSourceId = 0;
         this._pendingView = null;
@@ -138,10 +140,12 @@ export class TranscriptRenderer {
             );
 
             this.messageStartIndexes.set(conversation.id, nextStartIndex);
+            this._scrollToTop();
             this._showConversationLoadingState();
             this.renderActiveConversation({
                 forceRebuild: true,
                 incremental: true,
+                scrollToTop: true,
             });
         });
         return button;
@@ -274,7 +278,7 @@ export class TranscriptRenderer {
         });
     }
 
-    finishConversationViewRender(conversation, entry, staleEntry) {
+    finishConversationViewRender(conversation, entry, staleEntry, { scrollToTop = false } = {}) {
         const current = this._getCurrentViewState();
         entry.lastAssistantMessageView = current.lastAssistantMessageView;
         entry.pendingAssistantActivityEntries = current.pendingAssistantActivityEntries;
@@ -293,10 +297,13 @@ export class TranscriptRenderer {
 
         this.trimConversationViewCache();
         this._updateUsageDisplay(conversation);
-        this._scrollToBottom();
+        if (scrollToTop)
+            this._scrollToTop({ animate: true });
+        else
+            this._scrollToBottom();
     }
 
-    renderConversationMessagesIncrementally(conversation, entry, staleEntry, messages) {
+    renderConversationMessagesIncrementally(conversation, entry, staleEntry, messages, options = {}) {
         const conversationId = conversation?.id ?? null;
         let messageIndex = 0;
 
@@ -329,7 +336,7 @@ export class TranscriptRenderer {
             this._pendingView = null;
             this.isBatchRendering = false;
             this._notifyStateChanged();
-            this.finishConversationViewRender(conversation, entry, staleEntry);
+            this.finishConversationViewRender(conversation, entry, staleEntry, options);
             return GLib.SOURCE_REMOVE;
         };
 
@@ -337,7 +344,7 @@ export class TranscriptRenderer {
             this._pendingView = null;
             this.isBatchRendering = false;
             this._notifyStateChanged();
-            this.finishConversationViewRender(conversation, entry, staleEntry);
+            this.finishConversationViewRender(conversation, entry, staleEntry, options);
             return;
         }
 
@@ -411,6 +418,7 @@ export class TranscriptRenderer {
                 entry,
                 staleEntry,
                 messagesToRender,
+                options,
             );
             return;
         }
@@ -418,7 +426,7 @@ export class TranscriptRenderer {
         for (const message of messagesToRender)
             this._addMessage(message.content, message.role, message);
 
-        this.finishConversationViewRender(conversation, entry, staleEntry);
+        this.finishConversationViewRender(conversation, entry, staleEntry, options);
     }
 
     _notifyStateChanged() {

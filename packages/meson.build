@@ -64,7 +64,11 @@ hooks_package_sources = files(
 computer_use_package_sources = files(
   'computerUse/index.js',
   'computerUse/accessibility.js',
+  'computerUse/backgroundAccessibility.js',
+  'computerUse/backgroundAccessibilityHost.js',
+  'computerUse/backgroundSession.js',
   'computerUse/imageViews.js',
+  'computerUse/manager.js',
   'computerUse/protocol.js',
   'computerUse/service.js',
   'computerUse/README.md',

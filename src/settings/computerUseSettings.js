@@ -3,8 +3,14 @@ import Gtk from 'gi://Gtk?version=4.0';
 
 function statusSubtitle(status) {
     if (status?.available) {
+        if (status.mode === 'background')
+            return status.starting
+                ? 'Starting the independent background desktop…'
+                : status.running
+                ? 'The independent background desktop is running.'
+                : 'Ready to start an independent desktop when an agent uses it.';
         const version = status.shellVersion ? `GNOME ${status.shellVersion}` : 'GNOME Shell';
-        return `${version} integration is ready.`;
+        return `Current desktop: ${version} integration is ready.`;
     }
 
     return status?.reason || 'GNOME Shell integration has not been checked.';
@@ -13,7 +19,7 @@ function statusSubtitle(status) {
 export function createComputerUseSettingsGroup(appSettings, computerUse, onChanged = () => {}) {
     const group = new Adw.PreferencesGroup({
         title: 'Computer Use',
-        description: 'Linux-only control for GNOME on Wayland. Computer-use tools are available only when Agent is enabled for a chat.',
+        description: 'Agents start on a separate background desktop and can use your current desktop when you ask. Computer-use tools require Agent mode.',
     });
     const enabledRow = new Adw.SwitchRow({
         title: 'Enable computer use',
@@ -49,7 +55,7 @@ export function createComputerUseSettingsGroup(appSettings, computerUse, onChang
         digits: 0,
     });
     const statusRow = new Adw.ActionRow({
-        title: 'GNOME Shell integration',
+        title: 'Computer Use integration',
         subtitle: 'Checking…',
     });
     const refreshButton = new Gtk.Button({

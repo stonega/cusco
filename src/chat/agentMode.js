@@ -59,7 +59,9 @@ export function buildAgentModeSystemPrompt(tools, {
             `${TOOL_CALL_OPEN_TAG}{"name":"tool_name","input":"tool input"}${TOOL_CALL_CLOSE_TAG}`,
         ];
     const hasComputerStep = (tools ?? []).some(tool => tool?.name === 'computer_step');
+    const hasComputerList = (tools ?? []).some(tool => tool?.name === 'computer_list');
     const hasComputerAct = (tools ?? []).some(tool => tool?.name === 'computer_act');
+    const hasComputerLaunch = (tools ?? []).some(tool => tool?.name === 'computer_launch');
     const hasComputerExit = (tools ?? []).some(tool => tool?.name === 'computer_exit');
     const hasComputerRegion = (tools ?? []).some(tool => tool?.name === 'computer_observe_region');
     const hasAskUser = (tools ?? []).some(tool => tool?.name === 'ask_user');
@@ -72,13 +74,19 @@ export function buildAgentModeSystemPrompt(tools, {
         : '';
     const computerUseInstruction = hasComputerStep
         ? [
+            hasComputerList
+                ? 'Computer Use starts each new agent turn on the independent Background desktop. Before other computer tools, call computer_list with {} for Background. If the user explicitly asks for the foreground, their current desktop, or an already open physical window, call computer_list with {"mode":"current-desktop"} instead. Subsequent computer tools use the selected desktop for this turn. Current desktop may move the user’s pointer or focus their windows. Never switch to Current desktop merely because Background is unavailable, and do not claim to see a physical window while in Background.'
+                : 'Computer Use starts each new agent turn on the independent Background desktop. Use the physical desktop only when the user explicitly requests it.',
             'For computer use, prefer computer_step after the initial observation. Attached computer screenshots may contain a synthetic coordinate grid that is not part of the application. Coordinates are normalized from 0 to 1000 and computer_step returns the post-action screenshot.',
             'Before coordinate input, computer_step passively verifies that the referenced UI is still visible and focused. If it reports a stale_observation, no coordinate action was dispatched: replan from the attached fresh screenshot and its new observationId.',
             hasAskUser
                 ? 'Before using Google Chrome or Chromium, inspect its visible profile picker or profile menu when the user has not already named a profile. If multiple Chrome or Chromium profiles are available, call ask_user with their visible names and wait for the choice. Never guess, silently select, or switch a Chrome profile.'
                 : '',
+            hasComputerLaunch
+                ? 'Before opening an app, call computer_list and reuse a suitable window if one is already present on the selected desktop. Otherwise call computer_launch with an installed application name or desktop ID, then call computer_list for its window ID. A background app uses a separate session; supported browsers launched through computer_launch use a separate profile.'
+                : '',
             hasComputerAct
-                ? 'Before launching an app, call computer_list and reuse a suitable existing window on its current workspace when one is available; do not create or repeatedly move workspaces for an existing window. Only when a genuinely new app must be launched, call computer_act with create_workspace, remember the returned workspaceIndex, and launch while that empty workspace is active. If an existing window must be isolated on a fresh workspace, use one move_to_new_workspace action instead of creating a workspace and chasing a transient GNOME workspace index. Maximize the target when canMaximize is true.'
+                ? 'Do not create or repeatedly move workspaces for an existing window. If a window must be isolated on a fresh workspace, use one move_to_new_workspace action instead of creating a workspace and chasing a transient GNOME workspace index. Maximize the target when canMaximize is true.'
                 : '',
             hasComputerRegion
                 ? 'For a small visual target, an uncertain point, or a blocked coordinate retry, call computer_observe_region and then use the returned region observation ID. Region coordinates are local and may be any value from 0 to 1000; click the visual center of the target instead of snapping to a grid line or border, and do not manually add the region offset.'
@@ -91,8 +99,8 @@ export function buildAgentModeSystemPrompt(tools, {
             'A keypress keys array is a simultaneous chord, not a sequence. Use separate keypress actions in one computer_step for sequential navigation such as Down followed by Return.',
             'When a coordinate click selects a named item or navigates to another view, include an expect entry for the intended post-action label or state. Treat a coordinate click without a matching expectation as unverified.',
             'coordinateActionVerified null with visualConfirmationRequired true means semantic verification was unavailable, not that the action failed. Continue when the returned screenshot visibly shows the intended state. If a step reports stalled, an explicit expectation fails, preAction.matched is false, text lands in browser chrome instead of the intended field, or the screenshot shows a miss, do not retry the same target or coordinates. Change strategy, using the fresh observation, accessibility, atomic coordinate typing, or Tab navigation. Do not claim completion until the requested final state is visibly verified.',
-            hasComputerAct
-                ? 'Before giving the user your final response, whether the task succeeded or failed, always return to Cusco. Use computer_list to find the Cusco window and its workspaceIndex, call computer_act with switch_workspace for that workspace, then make your last desktop-control action computer_act with focus for the Cusco window.'
+            hasComputerAct && hasComputerList
+                ? 'If this turn used Current desktop, return to Cusco before your final response. Use computer_list to find the Cusco window and its workspaceIndex, call computer_act with switch_workspace for that workspace, then make your last desktop-control action computer_act with focus for the Cusco window.'
                 : '',
             hasComputerExit
                 ? 'After using computer use, once desktop control is no longer needed, call computer_exit automatically as your final computer-use tool. Do not ask the user whether to exit. After computer_exit, do not call another computer-use tool; give the final response.'

@@ -283,13 +283,16 @@ function createDefaultSettingsContext(fallbackPath = null) {
         };
 
     const keys = new Set(PERSISTENT_SETTINGS_KEYS.filter((key) => schema.has_key(key)));
+    const resolvedFallbackPath = fallbackPath ?? defaultFallbackSettingsPath();
 
     return {
         settings: new Gio.Settings({ schema_id: SETTINGS_SCHEMA_ID }),
         keys,
-        fallbackSettings: keys.size === PERSISTENT_SETTINGS_KEYS.length && !fallbackPath
+        fallbackSettings: keys.size === PERSISTENT_SETTINGS_KEYS.length
+            && !fallbackPath
+            && !GLib.file_test(resolvedFallbackPath, GLib.FileTest.EXISTS)
             ? null
-            : new JsonAppSettingsStore(fallbackPath ?? defaultFallbackSettingsPath()),
+            : new JsonAppSettingsStore(resolvedFallbackPath),
     };
 }
 

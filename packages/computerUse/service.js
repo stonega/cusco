@@ -26,7 +26,7 @@ export const COMPUTER_USE_BUS_NAME = 'org.gnome.Shell';
 export const COMPUTER_USE_OBJECT_PATH = '/io/github/stonega/Cusco/ComputerUse';
 export const COMPUTER_USE_INTERFACE = 'io.github.stonega.Cusco.ComputerUse';
 export const COMPUTER_USE_EXTENSION_UUID = 'cusco-computer-use@stonega';
-export const COMPUTER_USE_PROTOCOL_VERSION = 7;
+export const COMPUTER_USE_PROTOCOL_VERSION = 8;
 export const COMPUTER_USE_AGENT_PROTOCOL_VERSION = 4;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -972,7 +972,7 @@ export class ComputerUseService {
         if (this._proxy)
             return this._proxy;
 
-        this._proxy = Gio.DBusProxy.new_for_bus_sync(
+        const proxy = Gio.DBusProxy.new_for_bus_sync(
             Gio.BusType.SESSION,
             Gio.DBusProxyFlags.DO_NOT_AUTO_START,
             null,
@@ -981,15 +981,26 @@ export class ComputerUseService {
             COMPUTER_USE_INTERFACE,
             null,
         );
-        this._proxySignalId = this._proxy.connect('g-signal', (_proxy, _sender, signalName) => {
+        return this._adoptProxy(proxy);
+    }
+
+    _adoptProxy(proxy) {
+        if (this._proxy && this._proxySignalId)
+            this._proxy.disconnect(this._proxySignalId);
+        if (this._proxy && this._proxyOwnerSignalId)
+            this._proxy.disconnect(this._proxyOwnerSignalId);
+
+        this._proxy = proxy;
+        this._registered = false;
+        this._proxySignalId = proxy.connect('g-signal', (_proxy, _sender, signalName) => {
             if (signalName !== 'StopRequested')
                 return;
 
             this.stop();
             this._onStopRequested();
         });
-        this._proxyOwnerSignalId = this._proxy.connect('notify::g-name-owner', () => {
-            if (this._proxy?.get_name_owner())
+        this._proxyOwnerSignalId = proxy.connect('notify::g-name-owner', () => {
+            if (proxy.get_name_owner())
                 return;
 
             this._registered = false;
@@ -998,7 +1009,7 @@ export class ComputerUseService {
                 this._onStopRequested();
             }
         });
-        return this._proxy;
+        return proxy;
     }
 
     async status() {

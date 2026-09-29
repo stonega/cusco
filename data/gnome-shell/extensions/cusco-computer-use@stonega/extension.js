@@ -20,8 +20,9 @@ import {
 import {activateWindowIfNeeded} from './windowFocus.js';
 
 const OBJECT_PATH = '/io/github/stonega/Cusco/ComputerUse';
-const PROTOCOL_VERSION = 7;
+const PROTOCOL_VERSION = 8;
 const CUSCO_DESKTOP_ID = 'io.github.stonega.Cusco.desktop';
+const WINDOW_SESSION_ID = GLib.uuid_string_random();
 const MAX_TYPE_CHARACTERS = 10_000;
 const TEXT_FIELD_FOCUS_SETTLE_MS = 80;
 const CLIPBOARD_SETTLE_MS = 20;
@@ -52,6 +53,9 @@ const INTERFACE_XML = `
     </method>
     <method name="CaptureWindowPassive">
       <arg type="s" name="window_id" direction="in"/>
+      <arg type="s" name="result" direction="out"/>
+    </method>
+    <method name="CaptureDesktop">
       <arg type="s" name="result" direction="out"/>
     </method>
     <method name="PerformAction">
@@ -95,7 +99,7 @@ function returnError(invocation, error) {
 }
 
 function windowId(window) {
-    return String(window.get_id());
+    return `${WINDOW_SESSION_ID}:${window.get_id()}`;
 }
 
 function shellMajorVersion() {
@@ -529,6 +533,28 @@ class ComputerUseBridge {
 
     async CaptureWindowPassiveAsync([id], invocation) {
         await this._captureWindow(id, invocation, {activate: false});
+    }
+
+    async CaptureDesktopAsync(_parameters, invocation) {
+        try {
+            this._requireClient(invocation);
+            const generation = this._generation;
+            const width = global.stage.width;
+            const height = global.stage.height;
+            const stream = Gio.MemoryOutputStream.new_resizable();
+            await new Shell.Screenshot().screenshot_area(0, 0, width, height, stream);
+            stream.close(null);
+            if (generation !== this._generation)
+                throw new Error('Computer use was stopped.');
+            invocation.return_value(responseVariant({
+                width,
+                height,
+                mimeType: 'image/png',
+                imageBase64: GLib.base64_encode(stream.steal_as_bytes().get_data()),
+            }));
+        } catch (error) {
+            returnError(invocation, error);
+        }
     }
 
     _point(window, request, xName = 'x', yName = 'y') {

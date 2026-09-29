@@ -76,7 +76,8 @@ import { ComposerMenus } from './composer/menus.js';
 import { presentAutomationDialog } from './cron/dialog.js';
 import { createAutomationTools, CronJobManager } from './cron/manager.js';
 import { CronConversationSync } from './cron/conversationSync.js';
-import { ComputerUseService } from './computerUse/service.js';
+import { ComputerUseManager } from './computerUse/manager.js';
+import { BackgroundDesktopPreview } from './computerUse/desktopPreview.js';
 import { createComputerUseTools } from './computerUse/tools.js';
 import { HookCoordinator } from './hooks/coordinator.js';
 import { HookManager } from './hooks/manager.js';
@@ -391,6 +392,7 @@ function createTranscriptRenderer(window) {
         addMessage: (...args) => window._addMessage(...args),
         updateUsageDisplay: (conversation) => window._updateUsageDisplay(conversation),
         scrollToBottom: (options) => window._scrollToBottom(options),
+        scrollToTop: (options) => window._scrollToTop(options),
         onStateChanged: (state) => {
             window._isBatchRenderingConversation = state.isBatchRendering;
             window._renderedConversationId = state.renderedConversationId;
@@ -864,7 +866,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
         this._tools = new ToolManager({
             searchConfig: () => this._providerConfigs.createWebSearchFallbackConfig(),
         });
-        this._computerUse = new ComputerUseService({
+        this._computerUse = new ComputerUseManager({
             settings: this._appSettings,
             onActiveChanged: (active) => this._syncComputerUseStatus(active),
             onStopRequested: () => this._stopComputerUseAndReturn(),
@@ -1170,6 +1172,7 @@ class CuscoWindow extends Adw.ApplicationWindow {
             }
 
             this._mcp.shutdown();
+            this._backgroundDesktopPreview?.dispose();
             this._computerUse.shutdown();
             return false;
         });
@@ -1248,6 +1251,22 @@ class CuscoWindow extends Adw.ApplicationWindow {
                 this._openArtifactWorkspace();
         });
         headerBar.pack_end(this._artifactWorkspaceButton);
+        this._computerUseStopAnchor = new Gtk.Box({ visible: false });
+        this._computerUseStopButton = new Gtk.Button({
+            label: 'Stop agent desktop',
+        });
+        this._computerUseStopButton.add_css_class('destructive-action');
+        this._computerUseStopButton.connect('clicked', () => this._stopComputerUseAndReturn());
+        this._computerUseStopAnchor.append(this._computerUseStopButton);
+        headerBar.pack_end(this._computerUseStopAnchor);
+        this._backgroundDesktopPreview = new BackgroundDesktopPreview({
+            anchor: this._computerUseStopAnchor,
+            parentWindow: this,
+            manager: this._computerUse,
+            canPreview: () => this._computerUse.mode === 'background'
+                && this._computerUse.backgroundRunning
+                && this._appSettings.computerUseCaptureEnabled,
+        });
 
         const split = new Gtk.Paned({
             orientation: Gtk.Orientation.HORIZONTAL,
@@ -2071,6 +2090,14 @@ class CuscoWindow extends Adw.ApplicationWindow {
     }
 
     _syncComputerUseStatus(active) {
+        this._backgroundDesktopPreview?.sync();
+        if (this._computerUseStopButton) {
+            this._computerUseStopAnchor.set_visible(Boolean(active)
+                || this._computerUse.backgroundRunning);
+            this._computerUseStopButton.set_label(this._computerUse.mode === 'background'
+                ? 'Stop agent desktop'
+                : 'Stop Computer Use');
+        }
         const conversationId = this._conversations.activeConversation?.id;
         const isBusy = this._isConversationBusy(conversationId);
         this._syncComposerHint(
@@ -3483,18 +3510,19 @@ class CuscoWindow extends Adw.ApplicationWindow {
         return this._transcriptRenderer.scheduleActiveConversationRender(conversation);
     }
 
-    _finishConversationViewRender(conversation, entry, staleEntry) {
+    _finishConversationViewRender(conversation, entry, staleEntry, options = {}) {
         this._transcriptRenderer ??= createTranscriptRenderer(this);
-        return this._transcriptRenderer.finishConversationViewRender(conversation, entry, staleEntry);
+        return this._transcriptRenderer.finishConversationViewRender(conversation, entry, staleEntry, options);
     }
 
-    _renderConversationMessagesIncrementally(conversation, entry, staleEntry, messages) {
+    _renderConversationMessagesIncrementally(conversation, entry, staleEntry, messages, options = {}) {
         this._transcriptRenderer ??= createTranscriptRenderer(this);
         return this._transcriptRenderer.renderConversationMessagesIncrementally(
             conversation,
             entry,
             staleEntry,
             messages,
+            options,
         );
     }
 
@@ -3789,6 +3817,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
     _scrollToBottom(options = {}) {
         this._scrollController ??= createTranscriptScrollController(this);
         return this._scrollController.scrollToBottom(options);
+    }
+
+    _scrollToTop(options = {}) {
+        this._scrollController ??= createTranscriptScrollController(this);
+        return this._scrollController.scrollToTop(options);
     }
 
     _syncScrollToBottomButton() {

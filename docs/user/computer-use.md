@@ -1,7 +1,10 @@
 # Computer use
 
 Computer use lets a Cusco agent see and operate application windows on a
-GNOME Wayland desktop. It can list windows, take a screenshot of one window,
+GNOME Wayland desktop. **Background desktop** runs a separate headless GNOME
+session so the agent does not move your physical pointer or take focus from
+your current windows. Ask the agent to use **Current desktop** when it must
+operate a window you already have open. It can list windows, take a screenshot of one window,
 click, type, scroll, drag, and switch GNOME workspaces.
 It can also create a workspace, move a window there, and maximize supported
 windows.
@@ -10,11 +13,17 @@ The feature is Linux-only and disabled by default. Cusco keeps screen capture,
 input control, and workspace switching behind separate settings so you can
 grant only the access needed for a task.
 
+While the background desktop is running, hover over **Stop agent desktop** in
+Cusco's header to see its live desktop. Select **Open in window** in the preview
+to keep a larger, view-only copy open while the agent works. The preview closes
+when the agent desktop stops and requires **Allow window capture**.
+
 ## Requirements
 
 - Linux with GNOME Shell on Wayland
-- GNOME Shell 45–51
+- GNOME Shell 45–51 for Current desktop; Background has been tested on GNOME 51
 - An installed Cusco build and its `cusco-computer-use@stonega` Shell extension
+- `gnome-shell`, `dbus-daemon`, `gsettings`, and `gtk-launch` commands for Background
 - A vision-capable model for tasks that use screenshots
 - Agent mode enabled in the current chat
 
@@ -52,7 +61,8 @@ or after replacing the extension. Closing Cusco, opening a new terminal, or
 using Alt+F2 `r` does not restart GNOME Shell on Wayland.
 
 After logging back in, turn on Computer Use in Cusco. Cusco automatically
-enables the extension for the current user. You can then verify it with:
+enables the extension for the current user. You can
+then verify it with:
 
 ```sh
 gnome-extensions info cusco-computer-use@stonega
@@ -85,53 +95,69 @@ Computer Use off and on again.
 
 1. Start the installed Cusco application.
 2. Open **Settings → Workspace → Computer Use**.
-3. Turn on **Enable computer use**. Cusco enables its GNOME Shell extension
-   automatically for the current user.
+3. Turn on **Enable computer use**. Each agent turn starts on **Background desktop**.
+   Ask the agent to use your current desktop when a task needs an already open
+   window. That choice applies to the current turn and is not saved as a setting.
 4. Turn on **Allow window capture** if the agent should see windows.
 5. Turn on **Allow pointer and keyboard input** if the agent should interact
    with windows.
 6. Turn on **Allow workspace switching** if the agent may create or activate
    GNOME workspaces and move windows between them.
-7. Check that **GNOME Shell integration** says the integration is ready.
+7. Check that **Computer Use integration** says the background desktop is ready.
 8. Enable **Agent** in the chat where you want to use it.
 
 Computer-use tools use Cusco's normal tool approval flow. Enabling the settings
 does not silently approve every action.
 
+Background starts on demand with its own virtual monitor, D-Bus session,
+clipboard, and application settings directories. Firefox, Chrome, and Chromium
+use a separate browser profile. Background windows are invisible on your
+physical desktop and do not include windows you already opened there. The
+agent can still access your files because both sessions use the same Unix
+account; this mode separates desktop interaction, not file permissions. The
+background session stays available for later agent turns until you click
+**Stop agent desktop**, the agent switches desktops, you disable Computer Use,
+or you close Cusco.
+An unavailable background session reports its error and does not switch to
+Current desktop automatically.
+
 ## Ask the agent to use the desktop
 
 You can describe the task normally. For example:
 
-- “List my open windows and tell me which workspace Firefox is on.”
-- “Open the browser window, inspect the page, and click the Sign in button.”
-- “Open Calculator in a new workspace.”
+- “Open Calculator on the background desktop and calculate 64 × 17.”
+- “Open Firefox in the background and inspect this page.”
+- “On my current desktop, list my open windows and tell me where Firefox is.”
 - “Switch to workspace 2 and focus Terminal.”
 - “Fill in this form, but stop before submitting it.”
 
 Behind the scenes the agent follows this tool workflow:
 
-1. `computer_list` returns GNOME workspaces and controllable windows.
-2. `computer_observe` focuses one window and captures it as a PNG for the next
+1. `computer_list` selects Background by default or Current desktop when the
+   user requested it, then returns GNOME workspaces and controllable windows on the
+   selected desktop.
+2. `computer_launch` opens an installed application on that desktop when needed.
+3. `computer_observe` focuses one window and captures it as a PNG for the next
    model turn. The model receives a synthetic `0`–`1000` grid drawn on a copy;
    the clean screenshot remains unchanged for verification.
-3. `computer_observe_region` enlarges a selected part of the latest screenshot
+4. `computer_observe_region` enlarges a selected part of the latest screenshot
    when a target is small or an earlier visual click did not change the screen.
-4. `computer_step` performs one or more safe actions and returns the updated
+5. `computer_step` performs one or more safe actions and returns the updated
    screenshot in the same tool call. When a click opens a small popup or other
    localized surface, the returned model image is automatically enlarged so
    its options are easier to target. When a click inside an enlarged region
    misses, Cusco retains that same crop and asks for one centered retry instead
    of falling back to the full window. It also reports unchanged screens and
    repeated open/close cycles so the agent can stop retrying a missed target.
-5. `computer_act` creates and switches workspaces, launches through global
+6. `computer_act` creates and switches workspaces, launches through global
    keyboard input, and performs individual actions that do not need an
    immediate screenshot.
-6. `computer_exit` ends desktop control and hides the top-panel indicator after
-   the agent has returned to Cusco.
+7. `computer_exit` ends desktop control. The background session remains
+   available for another turn until stopped from Cusco.
 
-Before launching an application, the agent lists the desktop and reuses a
-suitable existing window on its current workspace. It creates a workspace only
-when a genuinely new application must be launched. If an existing window must
+Before launching an application, the agent lists the selected desktop and
+reuses a suitable existing window. In Current desktop mode, it creates a
+workspace only when a genuinely new application must be launched. If an existing window must
 be isolated, `move_to_new_workspace` creates the workspace and moves the window
 in one Shell action so GNOME's dynamic workspace indices cannot change between
 the two operations. The agent maximizes the target when supported.
@@ -245,7 +271,11 @@ so Cusco always keeps the application-independent visual fallback available.
 
 ## Stop immediately
 
-After the first computer action in an agent turn, a cyan (`#42e6f5`) stop
+On the background desktop, **Stop agent desktop** in Cusco's header cancels
+the current computer-use operation and closes the private session. The Shell
+indicator described below appears only in Current desktop mode.
+
+After the first Current desktop action in an agent turn, a cyan (`#42e6f5`) stop
 control temporarily replaces the normal center item in the GNOME top panel.
 The clock or other displaced center item returns as soon as computer use
 stops. The control combines the computer-use icon with a short status such as
@@ -271,14 +301,24 @@ action, so the key does not continue into Chrome or another controlled app.
 
 | Setting | Effect |
 |---|---|
-| Enable computer use | Registers the six `computer_*` tools for Agent mode. |
+| Enable computer use | Registers the seven `computer_*` tools for Agent mode. |
 | Allow window capture | Allows a selected window to be focused and captured. |
 | Allow pointer and keyboard input | Allows focus, clicks, typing, shortcuts, scrolling, and dragging. |
 | Allow workspace switching | Allows workspace creation, activation, and window moves; input control must also be enabled. |
 | Action timeout | Limits one Shell operation to 5–120 seconds. |
-| GNOME Shell integration | Shows whether Cusco can register with the loaded extension. |
+| Computer Use integration | Shows readiness for the selected desktop. |
 
 ## Troubleshooting
+
+### Background desktop does not start
+
+The status row reports the missing command or extension. Background needs a
+GNOME Shell build with headless virtual monitor support. The session starts
+only when the agent first lists or opens an application. If startup fails, the
+agent receives the error and your physical desktop is not used instead.
+Ask the agent to use Current desktop explicitly if you want it to use an existing
+window. Some packaged browsers cannot yet be launched with a separate
+profile; use the system Firefox, Chrome, or Chromium launcher.
 
 ### “Extension does not exist”
 

@@ -2,8 +2,8 @@ import Gdk from 'gi://Gdk?version=4.0';
 import GLib from 'gi://GLib?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
 
-const SCROLL_TO_BOTTOM_ANIMATION_MS = 180;
-const SCROLL_TO_BOTTOM_ANIMATION_INTERVAL_MS = 16;
+const SCROLL_ANIMATION_MS = 180;
+const SCROLL_ANIMATION_INTERVAL_MS = 16;
 
 export class TranscriptScrollController {
     constructor({
@@ -173,7 +173,14 @@ export class TranscriptScrollController {
         const scroller = this._getScroller();
         const adjustment = scroller?.get_vadjustment?.();
 
-        if (!adjustment || this.getBottomValue() - adjustment.get_value() > 1)
+        if (!adjustment)
+            return false;
+
+        const lower = adjustment.get_lower?.() ?? 0;
+        const bottom = this.getBottomValue();
+        // A short loading view is both at the top and bottom; keep the pause
+        // until the transcript is scrollable again.
+        if (bottom <= lower + 1 || bottom - adjustment.get_value() > 1)
             return false;
 
         this.followLatest = true;
@@ -233,10 +240,10 @@ export class TranscriptScrollController {
 
         this._animationSourceId = GLib.timeout_add(
             GLib.PRIORITY_DEFAULT,
-            SCROLL_TO_BOTTOM_ANIMATION_INTERVAL_MS,
+            SCROLL_ANIMATION_INTERVAL_MS,
             () => {
                 const elapsedMs = (GLib.get_monotonic_time() - startTime) / 1000;
-                const progress = Math.min(1, elapsedMs / SCROLL_TO_BOTTOM_ANIMATION_MS);
+                const progress = Math.min(1, elapsedMs / SCROLL_ANIMATION_MS);
                 const easedProgress = 1 - Math.pow(1 - progress, 3);
                 const endValue = this.getBottomValue();
 
@@ -277,6 +284,63 @@ export class TranscriptScrollController {
 
             return GLib.SOURCE_REMOVE;
         });
+    }
+
+    scrollToTop(options = {}) {
+        const scroller = this._getScroller();
+
+        if (!scroller)
+            return;
+
+        this.followLatest = false;
+        this._pausedByUser = true;
+        this.stopAnimation();
+        this._cancelBottomPasses();
+        const adjustment = scroller.get_vadjustment();
+        const lower = adjustment.get_lower?.() ?? 0;
+
+        if (!options.animate || this._appSettings.reducedMotionEnabled) {
+            adjustment.set_value(lower);
+            this.syncButton();
+            return;
+        }
+
+        const maxValue = Math.max(lower, adjustment.get_upper() - adjustment.get_page_size());
+        // The loading view can leave the adjustment at zero. Start within one
+        // viewport of the new top so the newly loaded messages scroll into view.
+        const currentValue = Math.min(maxValue, adjustment.get_value());
+        const startValue = currentValue > lower + 1
+            ? Math.min(currentValue, lower + adjustment.get_page_size())
+            : Math.min(maxValue, lower + adjustment.get_page_size());
+        if (startValue - lower < 1) {
+            adjustment.set_value(lower);
+            this.syncButton();
+            return;
+        }
+
+        adjustment.set_value(startValue);
+        this.syncButton();
+        const startTime = GLib.get_monotonic_time();
+        this._animationSourceId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT,
+            SCROLL_ANIMATION_INTERVAL_MS,
+            () => {
+                const elapsedMs = (GLib.get_monotonic_time() - startTime) / 1000;
+                const progress = Math.min(1, elapsedMs / SCROLL_ANIMATION_MS);
+                const easedProgress = 1 - Math.pow(1 - progress, 3);
+
+                adjustment.set_value(startValue + ((lower - startValue) * easedProgress));
+                this.syncButton();
+
+                if (progress < 1)
+                    return GLib.SOURCE_CONTINUE;
+
+                adjustment.set_value(lower);
+                this._animationSourceId = 0;
+                this.syncButton();
+                return GLib.SOURCE_REMOVE;
+            },
+        );
     }
 
     scrollToBottom(options = {}) {

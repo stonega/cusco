@@ -7,6 +7,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Run Computer Use in an independent background GNOME desktop by default, with a separate browser profile, application launch tool, and a visible stop control.
+- Preview the live agent desktop by hovering over Stop agent desktop, and open the preview in a separate window.
+
+### Changed
+
+- Start each Computer Use turn on Background; agents can select Current desktop when the user requests the foreground or an already open window, without a fixed mode setting.
+- Keep the agent desktop hover preview compact, remove its heading, and use an icon button to open the separate window.
+
+### Fixed
+
+- Animate the chat transcript to the top after loading earlier messages.
+- Start Cusco from source when the installed GSettings schema lacks newer Computer Use keys by using the fallback settings store.
+
 ## [0.5.51] - 2026-09-25
 
 ### Changed

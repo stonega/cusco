@@ -40,6 +40,8 @@ if (!extensionSource.includes("addToStatusArea(this.uuid, this._indicator, 0, 'c
     || !extensionSource.includes('CaptureWindowPassive')) {
     throw new Error('Computer-use emergency stop was not installed in the panel center');
 }
+if (!extensionSource.includes('async CaptureDesktopAsync(_parameters, invocation)'))
+    throw new Error('The Shell extension does not expose background desktop capture.');
 if (!extensionSource.includes('new TextShimmerController(this._statusLabel)')
     || !extensionSource.includes("'changed::enable-animations'")
     || !extensionSource.includes('lookup_app(CUSCO_DESKTOP_ID)?.activate()')
@@ -304,8 +306,9 @@ const service = {
 const tools = createComputerUseTools(service);
 const byName = new Map(tools.map(tool => [tool.name, tool]));
 
-if (tools.length !== 6
+if (tools.length !== 7
     || !byName.has('computer_list')
+    || !byName.has('computer_launch')
     || !byName.has('computer_observe')
     || !byName.has('computer_observe_region')
     || !byName.has('computer_step')
@@ -371,7 +374,7 @@ if (!action.output.includes('switch_workspace'))
 
 const exit = await byName.get('computer_exit').run('{}', { cancellable: 'turn' });
 if (!exit.exited
-    || !exit.output.includes('top-bar indicator')
+    || !exit.output.includes('Computer use exited')
     || calls.at(-1)?.[0] !== 'exit'
     || calls.at(-1)?.[1] !== 'turn') {
     throw new Error('Computer exit did not release the active turn');

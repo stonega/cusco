@@ -246,15 +246,42 @@ export function createComputerUseTools(service) {
         {
             name: 'computer_list',
             label: 'List desktop windows',
-            description: 'List GNOME workspaces and controllable application windows on this Wayland desktop.',
-            inputDescription: 'An empty JSON object: {}.',
-            inputSchema: OBJECT_SCHEMA,
+            description: 'List GNOME workspaces and application windows. A new agent turn defaults to the independent background desktop. Set mode to current-desktop only when the user asks to use the physical desktop or an already open window; subsequent computer tools in this turn use that desktop.',
+            inputDescription: 'JSON: {} for the default background desktop, or {"mode":"current-desktop"} when the user requested the physical desktop. Use {"mode":"background"} to switch back within a turn.',
+            inputSchema: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                    mode: { type: 'string', enum: ['background', 'current-desktop'] },
+                },
+            },
             permissionPolicy: 'ask',
             concurrencySafe: false,
             async run(input, options) {
-                parseObject(input, 'computer_list', { allowEmpty: true });
-                const desktop = await service.listDesktop(options);
+                const args = parseObject(input, 'computer_list', { allowEmpty: true });
+                const desktop = await service.listDesktop({ ...options, mode: args.mode });
                 return { desktop, output: formatted(desktop) };
+            },
+        },
+        {
+            name: 'computer_launch',
+            label: 'Open application on computer desktop',
+            description: 'Open an installed desktop application by exact name or desktop ID on the desktop selected by computer_list. Background mode launches in the independent session. List again after launch to get its window ID.',
+            inputDescription: 'JSON: {"application":"Calculator"} or {"application":"org.gnome.Calculator.desktop"}.',
+            inputSchema: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['application'],
+                properties: {
+                    application: { type: 'string', minLength: 1 },
+                },
+            },
+            permissionPolicy: 'ask',
+            concurrencySafe: false,
+            async run(input, options) {
+                const args = parseObject(input, 'computer_launch');
+                const result = await service.launchApplication(args.application, options);
+                return { result, output: formatted(result) };
             },
         },
         {
@@ -316,7 +343,7 @@ export function createComputerUseTools(service) {
             },
             permissionPolicy: 'ask',
             concurrencySafe: false,
-            async run(input) {
+            async run(input, options) {
                 const args = parseObject(input, 'computer_observe_region');
                 const windowId = String(args.windowId ?? '').trim();
                 const observationId = String(args.observationId ?? '').trim();
@@ -328,6 +355,7 @@ export function createComputerUseTools(service) {
                     windowId,
                     observationId,
                     args.region,
+                    options,
                 );
                 const transcript = {
                     ...observationForTranscript(observation),
@@ -530,7 +558,7 @@ export function createComputerUseTools(service) {
         {
             name: 'computer_act',
             label: 'Control GNOME desktop',
-            description: 'Perform one bounded desktop action without returning a screenshot. Reuse an existing suitable window on its current workspace. Use create_workspace only before launching a genuinely new app; use move_to_new_workspace to atomically isolate an existing window without relying on a transient GNOME workspace index. Global paste_text, type, and keypress actions may omit windowId so an app can be launched on the active empty workspace. Prefer paste_text for non-sensitive text and type for sensitive values or fields that reject paste. Prefer computer_step for subsequent window actions. Coordinate actions should specify screenshot_pixels or normalized_1000 explicitly.',
+            description: 'Perform one bounded action on the selected desktop without returning a screenshot. Use computer_launch to open an installed application. Use move_to_new_workspace to isolate an existing window without relying on a transient GNOME workspace index. Global paste_text, type, and keypress actions may omit windowId. Prefer computer_step for subsequent window actions. Coordinate actions should specify screenshot_pixels or normalized_1000 explicitly.',
             inputDescription: 'JSON with action. Supported: create_workspace; switch_workspace {workspaceIndex}; move_to_workspace {windowId,workspaceIndex}; move_to_new_workspace {windowId}; maximize {windowId}; focus {windowId}; click/double_click/move {windowId,x,y,coordinateSpace,button?}; paste_text/type {text,windowId?,x?,y?,coordinateSpace?,replace?}; keypress {keys:["CTRL","L"],windowId?}; scroll {windowId,x,y,coordinateSpace,deltaX?,deltaY?}; drag {windowId,x,y,endX,endY,coordinateSpace}. A keypress keys array is one simultaneous chord. replace:true requires a coordinate-targeted text input action.',
             inputSchema: {
                 type: 'object',
@@ -554,7 +582,7 @@ export function createComputerUseTools(service) {
         {
             name: 'computer_exit',
             label: 'Exit computer use',
-            description: 'End the current computer-use session and hide the GNOME top-bar activity indicator without cancelling the agent response. Use this after returning to Cusco when no more desktop actions are needed.',
+            description: 'End the current computer-use turn without cancelling the agent response. Use this when no more desktop actions are needed.',
             inputDescription: 'An empty JSON object: {}.',
             inputSchema: OBJECT_SCHEMA,
             permissionPolicy: 'allow',
@@ -563,7 +591,7 @@ export function createComputerUseTools(service) {
                 parseObject(input, 'computer_exit', { allowEmpty: true });
                 const exited = await service.exitTurn(options?.cancellable);
                 const status = exited
-                    ? 'Computer use exited. The GNOME top-bar indicator is hidden.'
+                    ? 'Computer use exited.'
                     : 'Computer use was already inactive.';
                 return { exited, output: status };
             },

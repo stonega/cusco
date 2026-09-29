@@ -37,6 +37,8 @@ import {
     CronJobManager,
 } from '../src/cron/manager.js';
 import { ComputerUseService } from '../src/computerUse/service.js';
+import { ComputerUseManager } from '../src/computerUse/manager.js';
+import { BackgroundDesktopPreview } from '../src/computerUse/desktopPreview.js';
 import { createComputerUseTools } from '../src/computerUse/tools.js';
 import { GmailGoaConnector } from '../src/connectors/gmailGoa.js';
 import { MailGoaConnector } from '../src/connectors/mailGoa.js';

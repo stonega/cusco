@@ -93,7 +93,9 @@ composer_sources = files(
 
 computer_use_sources = files(
   'computerUse/accessibility.js',
+  'computerUse/desktopPreview.js',
   'computerUse/imageViews.js',
+  'computerUse/manager.js',
   'computerUse/protocol.js',
   'computerUse/service.js',
   'computerUse/tools.js',

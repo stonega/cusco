@@ -45,6 +45,16 @@ const nativeToolPrompt = buildAgentModeSystemPrompt([
     ...tools.listTools(),
     createAskUserTool(async () => ({ answers: null })),
     {
+        name: 'computer_list',
+        label: 'List desktop windows',
+        permissionPolicy: 'ask',
+    },
+    {
+        name: 'computer_launch',
+        label: 'Open application on computer desktop',
+        permissionPolicy: 'ask',
+    },
+    {
         name: 'computer_step',
         label: 'Act and observe desktop window',
         permissionPolicy: 'ask',
@@ -65,6 +75,11 @@ const nativeToolPrompt = buildAgentModeSystemPrompt([
         permissionPolicy: 'allow',
     },
 ], { nativeToolCalling: true });
+const backgroundToolPrompt = buildAgentModeSystemPrompt([
+    { name: 'computer_list', label: 'List desktop windows' },
+    { name: 'computer_step', label: 'Act and observe desktop window' },
+    { name: 'computer_launch', label: 'Open application on computer desktop' },
+]);
 
 const orderedConversationMessages = [];
 const orderedConversation = {
@@ -224,7 +239,7 @@ if (!nativeSearchPrompt.includes('Provider-managed tools are enabled: google_sea
 if (!nativeToolPrompt.includes('native function-calling interface')
     || !nativeToolPrompt.includes('call ask_user instead of asking in ordinary assistant text')
     || !nativeToolPrompt.includes('prefer computer_step')
-    || !nativeToolPrompt.includes('reuse a suitable existing window on its current workspace')
+    || !nativeToolPrompt.includes('reuse a suitable window if one is already present on the selected desktop')
     || !nativeToolPrompt.includes('move_to_new_workspace')
     || !nativeToolPrompt.includes('Maximize the target when canMaximize is true')
     || !nativeToolPrompt.includes('prefer keypress Down followed by Return')
@@ -259,7 +274,9 @@ if (!nativeToolPrompt.includes('native function-calling interface')
     || !nativeToolPrompt.includes('semantic verification was unavailable, not that the action failed')
     || !nativeToolPrompt.includes('text lands in browser chrome')
     || !nativeToolPrompt.includes('synthetic coordinate grid')
-    || !nativeToolPrompt.includes('whether the task succeeded or failed')
+    || !nativeToolPrompt.includes('If this turn used Current desktop')
+    || !nativeToolPrompt.includes('{"mode":"current-desktop"}')
+    || !nativeToolPrompt.includes('starts each new agent turn')
     || !nativeToolPrompt.includes('Cusco window and its workspaceIndex')
     || !nativeToolPrompt.includes('computer_act with switch_workspace for that workspace')
     || !nativeToolPrompt.includes('last desktop-control action computer_act with focus for the Cusco window')
@@ -268,6 +285,12 @@ if (!nativeToolPrompt.includes('native function-calling interface')
     || !nativeToolPrompt.includes('final computer-use tool')
     || nativeToolPrompt.includes('<cusco_tool_call>')) {
     throw new Error('Native Agent Mode prompt mixed native and XML tool protocols');
+}
+
+if (!backgroundToolPrompt.includes('independent Background desktop')
+    || !backgroundToolPrompt.includes('computer_launch')
+    || backgroundToolPrompt.includes('last desktop-control action computer_act with focus for the Cusco window')) {
+    throw new Error('Background Agent Mode prompt did not target the isolated desktop.');
 }
 
 const runtimeMessages = [

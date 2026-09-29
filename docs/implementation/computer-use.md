@@ -9,7 +9,10 @@ put together. For installation and everyday use, start with the
 - Support GNOME Shell on Wayland directly.
 - Avoid a cross-platform backend-selection layer.
 - Keep capture, input, and workspace switching separately user-controlled.
-- Give the user a centered Shell emergency stop and a desktop-wide Escape path.
+- Start each agent turn on Background; allow Current desktop only when the user
+  requests the physical desktop or an already open window.
+- Give the user a Shell emergency stop on Current desktop and a Cusco header
+  stop control for the background session.
 - Limit privileged Shell methods to the running Cusco process.
 - Keep screenshots private and short-lived.
 
@@ -24,22 +27,27 @@ or `wtype` layers. Attribution and the pinned upstream revision are in
 Chat with Agent enabled
         │
         ▼
-computer_list / computer_observe / computer_observe_region / computer_step / computer_act / computer_exit
+computer_list / computer_launch / computer_observe / computer_observe_region / computer_step / computer_act / computer_exit
         │
         ▼
-ComputerUseService (Cusco process)
-        │  session D-Bus
+ComputerUseManager (Cusco process)
+        ├── Current desktop: ComputerUseService → physical session bus
+        └── Background: ComputerUseService → private session bus
+                           └── headless Shell + virtual monitor + AT-SPI host
+        │
         ▼
-GNOME Shell extension
+GNOME Shell extension on the selected compositor
         ├── Mutter window and workspace discovery
         ├── Shell.Screenshot window capture
-        ├── Clutter virtual pointer and keyboard
-        └── cyan top-panel emergency stop
+        └── Clutter virtual pointer and keyboard
 ```
 
 | Component | Location | Responsibility |
 |---|---|---|
 | Tool definitions | `src/computerUse/tools.js` | Defines model-visible schemas and converts tool input/output. |
+| Mode router | `packages/computerUse/manager.js` | Routes each call to the selected desktop without fallback. |
+| Background runtime | `packages/computerUse/backgroundSession.js` | Starts a private bus, headless Shell, virtual monitor, accessibility host, and applications. |
+| Desktop preview | `src/computerUse/desktopPreview.js` | Shows the background desktop in a hover popover or separate GTK window and refreshes it only while visible. |
 | App-side service | `src/computerUse/service.js` | Enforces settings, calls D-Bus, maps coordinates, caches screenshots, and handles cancellation. |
 | Image views | `src/computerUse/imageViews.js` | Creates model-only coordinate grids and enlarged region views without altering clean screenshots. |
 | Accessibility adapter | `src/computerUse/accessibility.js` | Reads AT-SPI interactive elements and executes verified semantic activation and text actions. |
@@ -48,15 +56,23 @@ GNOME Shell extension
 | Shell extension | `data/gnome-shell/extensions/cusco-computer-use@stonega/` | Performs GNOME-specific discovery, capture, input, workspace creation/window movement, maximizing, and top-panel UI. |
 | Persistent settings | `data/io.github.stonega.Cusco.gschema.xml` | Stores the feature and capability gates in GSettings. |
 
+The physical desktop is used when the agent selects Current desktop through
+`computer_list` for a user request. Background is the default for each new turn,
+and switching mode does not change a saved setting. The background runtime
+uses the same Unix account, so it isolates
+desktop interaction but not access to files in the user's home. See the
+[background implementation note](background-computer-use-plan.md) for runtime
+details and remaining limits.
+
 ## D-Bus contract
 
-The extension exports this interface on the user's session bus:
+The extension exports this interface on the selected GNOME session bus:
 
 ```text
 Bus name:   org.gnome.Shell
 Object:     /io/github/stonega/Cusco/ComputerUse
 Interface:  io.github.stonega.Cusco.ComputerUse
-Protocol:   7
+Protocol:   8
 ```
 
 The extension exports an object under GNOME Shell's existing bus name; it does
@@ -73,11 +89,12 @@ an `UnknownMethod` or “Object does not exist” error even while
 | `ListDesktop()` | Returns screens, workspaces, and window metadata as JSON. |
 | `CaptureWindow(id)` | Focuses a window and returns a PNG as base64 JSON data. |
 | `CaptureWindowPassive(id)` | Captures a window without activating it for a just-in-time stale-state check. |
+| `CaptureDesktop()` | Captures the entire virtual desktop for the local preview. The app calls this only on its private background session. |
 | `PerformAction(json)` | Performs one validated input or workspace action. |
 | `StopRequested` | Tells Cusco that the Shell stop control was clicked. |
 
 Payloads are JSON strings inside typed D-Bus parameters. App and extension
-both require protocol version `7`; a version mismatch is shown in settings
+both require protocol version `8`; a version mismatch is shown in settings
 instead of allowing actions against an incompatible bridge. The version covers
 the method set and input semantics, so either kind of compatibility change must
 bump both sides even when the JSON shape itself is unchanged.
@@ -426,10 +443,15 @@ appear in that row.
 
 ```sh
 gjs -m tests/computer-use-smoke.js
+gjs -m tests/background-computer-use-smoke.js
 gjs -m tests/import-smoke.js
+gjs -m tests/background-desktop-preview-live.js
 glib-compile-schemas --strict --dry-run data
 ```
 
 The smoke test validates tool schemas, permission gates, capture persistence,
 coordinate remapping, and screenshot cleanup with a fake D-Bus proxy. Shell
-integration still requires an interactive GNOME Wayland session test.
+integration still requires an interactive GNOME Wayland session test. Run
+`gjs -m "$PWD/tests/background-computer-use-live.js"` to exercise the headless
+session with Calculator and desktop capture on a supported host. The preview
+window test needs a graphical GTK session.

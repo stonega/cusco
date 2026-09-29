@@ -168,8 +168,57 @@ assert(
     'Starting a new response did not reset the transcript pause',
 );
 
+controller.scrollToBottom({ passes: 3 });
+controller.scrollToTop();
+assert(
+    adjustment.value === 0 && !controller.followLatest && controller._pausedByUser,
+    'Loading earlier messages did not jump to the top and pause bottom following',
+);
+await delay(20);
+assert(
+    adjustment.value === 0 && controller._scrollSourceId === 0,
+    'A pending bottom pass overrode the jump to earlier messages',
+);
+controller.scrollToBottom();
+assert(adjustment.value === 0, 'An automatic bottom scroll overrode earlier messages');
+adjustment.upper = adjustment.pageSize;
+assert(
+    !controller.handleAdjustmentValueChanged() && controller._pausedByUser,
+    'The loading view resumed bottom following before earlier messages were laid out',
+);
+
 adjustment.upper = 1000;
 adjustment.pageSize = 200;
+controller.scrollToTop({ animate: true });
+assert(
+    adjustment.value === 200 && controller._animationSourceId !== 0,
+    'Earlier messages did not start an upward scroll animation',
+);
+await delay(60);
+assert(adjustment.value > 0 && adjustment.value < 200, 'Earlier-message scrolling did not move upward');
+await delay(180);
+assert(
+    adjustment.value === 0 && controller._animationSourceId === 0,
+    'Earlier-message scrolling did not settle at the top',
+);
+
+controller.scrollToTop({ animate: true });
+controller.scrollBy(2);
+const interruptedTopValue = adjustment.value;
+await delay(220);
+assert(
+    adjustment.value === interruptedTopValue && controller._animationSourceId === 0,
+    'User scrolling did not interrupt the upward animation',
+);
+
+controller._appSettings.reducedMotionEnabled = true;
+controller.scrollToTop({ animate: true });
+assert(
+    adjustment.value === 0 && controller._animationSourceId === 0,
+    'Reduced motion did not make the earlier-message jump immediate',
+);
+controller._appSettings.reducedMotionEnabled = false;
+
 adjustment.value = 100;
 assert(controller.scrollBy(2), 'Wheel input was not routed to the transcript');
 assert(adjustment.value === 180, `Wheel input used the wrong scroll distance: ${adjustment.value}`);
@@ -318,6 +367,16 @@ if (Gtk.init_check()) {
     assert(
         Math.abs(gtkAdjustment.get_value() - interruptedValue) <= 1 && !gtkController.followLatest,
         'Upward input did not cancel the jump-to-latest animation',
+    );
+
+    gtkController.scrollToBottom({ passes: 3 });
+    gtkController.scrollToTop({ animate: true });
+    assert(gtkAdjustment.get_value() > 0, 'GTK earlier-message scroll did not start above the top');
+    label.set_label(`${label.get_label()}\nEarlier transcript content`);
+    await delay(220);
+    assert(
+        Math.abs(gtkAdjustment.get_value()) <= 1 && !gtkController.followLatest,
+        'GTK layout moved the earlier-message viewport away from the top',
     );
 
     gtkController.dispose();
