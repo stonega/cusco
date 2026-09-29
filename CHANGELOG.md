@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.52] - 2026-09-29
+
 ### Added
 
 - Run Computer Use in an independent background GNOME desktop by default, with a separate browser profile, application launch tool, and a visible stop control.
@@ -565,7 +567,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.51...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.52...HEAD
+[0.5.52]: https://github.com/stonega/cusco/compare/v0.5.51...v0.5.52
 [0.5.51]: https://github.com/stonega/cusco/compare/v0.5.50...v0.5.51
 [0.5.50]: https://github.com/stonega/cusco/compare/v0.5.49...v0.5.50
 [0.5.49]: https://github.com/stonega/cusco/compare/v0.5.48...v0.5.49

@@ -1,7 +1,7 @@
 project(
   'cusco',
   'c',
-  version: '0.5.51',
+  version: '0.5.52',
   license: 'GPL-3.0-or-later',
   meson_version: '>= 0.62.0',
 )

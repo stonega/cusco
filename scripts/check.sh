@@ -87,6 +87,7 @@ gjs -m tests/ask-user-smoke.js
 gjs -m tests/accessibility-smoke.js
 gjs -m tests/computer-use-extension-enable-smoke.js
 gjs -m tests/computer-use-image-views-smoke.js
+gjs -m tests/background-computer-use-smoke.js
 gjs -m tests/computer-use-smoke.js
 gjs -m tests/computer-use-benchmark-smoke.js
 gjs -m tests/skills-smoke.js
