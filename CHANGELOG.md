@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.53] - 2026-10-05
+
 ### Added
 
 - Add Take over to the background desktop preview so users can click, drag, scroll, and type after stopping the agent's current turn.
@@ -572,7 +574,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.52...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.53...HEAD
+[0.5.53]: https://github.com/stonega/cusco/compare/v0.5.52...v0.5.53
 [0.5.52]: https://github.com/stonega/cusco/compare/v0.5.51...v0.5.52
 [0.5.51]: https://github.com/stonega/cusco/compare/v0.5.50...v0.5.51
 [0.5.50]: https://github.com/stonega/cusco/compare/v0.5.49...v0.5.50
