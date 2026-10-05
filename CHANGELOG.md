@@ -9,6 +9,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Add Take over to the background desktop preview so users can click, drag, scroll, and type after stopping the agent's current turn.
 - Add a Remove All button to Archived Chats; hold it for three seconds to permanently delete all archived chats.
 
 ## [0.5.52] - 2026-09-29

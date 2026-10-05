@@ -58,6 +58,9 @@ const INTERFACE_XML = `
     <method name="CaptureDesktop">
       <arg type="s" name="result" direction="out"/>
     </method>
+    <method name="DesktopInput">
+      <arg type="s" name="request" direction="in"/>
+    </method>
     <method name="PerformAction">
       <arg type="s" name="request" direction="in"/>
       <arg type="s" name="result" direction="out"/>
@@ -283,6 +286,8 @@ class ComputerUseBridge {
         const seat = backend.get_default_seat();
         this._pointer = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
         this._keyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+        this._heldDesktopKeys = new Set();
+        this._heldDesktopButtons = new Set();
     }
 
     _setStatus(description) {
@@ -378,6 +383,7 @@ class ComputerUseBridge {
     }
 
     _cancel() {
+        this._releaseDesktopInput();
         this._generation += 1;
         this._active = false;
         this._setEmergencyStopActive(false);
@@ -465,8 +471,10 @@ class ComputerUseBridge {
             else if (!this._active)
                 this._statusShimmer.set(this._status, false);
             this._setEmergencyStopActive(this._active);
-            if (!active)
+            if (!active) {
+                this._releaseDesktopInput();
                 this._generation += 1;
+            }
             invocation.return_value(null);
         } catch (error) {
             returnError(invocation, error);
@@ -552,6 +560,67 @@ class ComputerUseBridge {
                 mimeType: 'image/png',
                 imageBase64: GLib.base64_encode(stream.steal_as_bytes().get_data()),
             }));
+        } catch (error) {
+            returnError(invocation, error);
+        }
+    }
+
+    _releaseDesktopInput() {
+        for (const keyval of this._heldDesktopKeys)
+            this._keyboard.notify_keyval(nowMicros(), keyval, Clutter.KeyState.RELEASED);
+        for (const button of this._heldDesktopButtons)
+            this._pointer.notify_button(nowMicros(), button, Clutter.ButtonState.RELEASED);
+        this._heldDesktopKeys.clear();
+        this._heldDesktopButtons.clear();
+    }
+
+    DesktopInputAsync([payload], invocation) {
+        try {
+            this._requireClient(invocation);
+            if (this._active)
+                throw new Error('Stop agent control before sending desktop input.');
+            const request = JSON.parse(payload);
+            if (request.type === 'release_all') {
+                this._releaseDesktopInput();
+            } else if (request.type === 'key') {
+                const keyval = request.keyval;
+                if (!Number.isInteger(keyval) || keyval <= 0 || keyval > 0x1fffffff
+                    || typeof request.pressed !== 'boolean')
+                    throw new Error('Invalid desktop key event.');
+                this._keyboard.notify_keyval(nowMicros(), keyval,
+                    request.pressed ? Clutter.KeyState.PRESSED : Clutter.KeyState.RELEASED);
+                if (request.pressed)
+                    this._heldDesktopKeys.add(keyval);
+                else
+                    this._heldDesktopKeys.delete(keyval);
+            } else {
+                if (!Number.isFinite(request.x) || !Number.isFinite(request.y)
+                    || request.x < 0 || request.y < 0
+                    || request.x >= global.stage.width || request.y >= global.stage.height)
+                    throw new Error('Invalid desktop pointer coordinates.');
+                if (!['motion', 'button', 'scroll'].includes(request.type))
+                    throw new Error('Invalid desktop input event.');
+                if (request.type === 'button'
+                    && (![1, 2, 3].includes(request.button) || typeof request.pressed !== 'boolean'))
+                    throw new Error('Invalid desktop button event.');
+                if (request.type === 'scroll'
+                    && (!Number.isFinite(request.deltaX) || !Number.isFinite(request.deltaY)))
+                    throw new Error('Invalid desktop scroll event.');
+                this._move(request);
+                if (request.type === 'button') {
+                    this._pointer.notify_button(nowMicros(), request.button,
+                        request.pressed ? Clutter.ButtonState.PRESSED : Clutter.ButtonState.RELEASED);
+                    if (request.pressed)
+                        this._heldDesktopButtons.add(request.button);
+                    else
+                        this._heldDesktopButtons.delete(request.button);
+                } else if (request.type === 'scroll') {
+                    this._pointer.notify_scroll_continuous(nowMicros(),
+                        request.deltaX, request.deltaY, Clutter.ScrollSource.FINGER,
+                        Clutter.ScrollFinishFlags.NONE);
+                }
+            }
+            invocation.return_value(null);
         } catch (error) {
             returnError(invocation, error);
         }
@@ -943,6 +1012,7 @@ export default class CuscoComputerUseExtension extends Extension {
         if (this._nameOwnerSignal)
             Gio.DBus.session.signal_unsubscribe(this._nameOwnerSignal);
         this._nameOwnerSignal = 0;
+        this._bridge?._cancel();
         this._bridge?._exported?.unexport();
         this._emergencyStop?.destroy();
         this._statusShimmer?.destroy();

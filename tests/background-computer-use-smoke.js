@@ -61,6 +61,8 @@ class FakeDesktop {
         this.calls.push('preview');
         return { width: 1, height: 1, bytes: new Uint8Array([1]) };
     }
+    async beginDesktopControl() { this.calls.push('take-over'); }
+    async sendDesktopInput(event) { this.calls.push(event.type); }
     isTurnActive() { return false; }
     finishTurn(cancellable) {
         if (this.activeTurnCancellable !== cancellable)
@@ -69,7 +71,12 @@ class FakeDesktop {
         this.activeTurnCancellable = null;
         return true;
     }
-    stop() { this.calls.push('stop'); return false; }
+    stop() {
+        this.calls.push('stop');
+        this.activeTurnCancellable?.cancel();
+        this.activeTurnCancellable = null;
+        return false;
+    }
     shutdown() {
         this.calls.push('shutdown');
         this.activeTurnCancellable = null;
@@ -79,7 +86,7 @@ class FakeDesktop {
 const current = new FakeDesktop('current-desktop');
 const background = new FakeDesktop('background');
 const manager = new ComputerUseManager({
-    settings: { computerUseMode: 'current-desktop', computerUseCaptureEnabled: true },
+    settings: { computerUseMode: 'current-desktop', computerUseEnabled: true, computerUseCaptureEnabled: true },
     currentDesktop: current,
     background,
 });
@@ -157,6 +164,38 @@ assert(nextDesktop.desktop.mode === 'background' && manager.mode === 'background
     'A new user turn must return to Background even after a foreground task.');
 manager.finishTurn(nextTurn);
 background.running = true;
+const controlledTurn = new Gio.Cancellable();
+await manager.listDesktop({ cancellable: controlledTurn });
+await manager.takeOverBackgroundDesktop();
+assert(controlledTurn.is_cancelled() && background.running && background.calls.includes('take-over'),
+    'Take over must cancel the agent turn without shutting down its desktop.');
+await manager.sendBackgroundDesktopInput({ type: 'key', keyval: 49, pressed: true });
+assert(background.calls.includes('key') && !current.calls.includes('key'),
+    'Manual input must be routed only to the background desktop.');
+let agentBlocked = false;
+try {
+    await manager.listDesktop({ cancellable: new Gio.Cancellable() });
+} catch (_error) {
+    agentBlocked = true;
+}
+assert(agentBlocked, 'An agent must not control the desktop during user takeover.');
+let switchBlocked = false;
+try {
+    manager.setMode('current-desktop');
+} catch (_error) {
+    switchBlocked = true;
+}
+assert(switchBlocked, 'Take over must not permit switching to the physical desktop.');
+await manager.releaseBackgroundDesktopControl();
+assert(background.calls.includes('release_all'), 'Ending control must release held input.');
+let inputBlocked = false;
+try {
+    await manager.sendBackgroundDesktopInput({ type: 'key', keyval: 49, pressed: true });
+} catch (_error) {
+    inputBlocked = true;
+}
+assert(inputBlocked, 'A closed control view must not send input.');
+await manager.listDesktop();
 assert(manager.stop() && background.calls.includes('shutdown'),
     'The stop control must close a running background session.');
 manager.shutdown();

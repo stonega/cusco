@@ -102,6 +102,19 @@ class BackgroundComputerUseService extends ComputerUseService {
         return { bytes, width: response.width, height: response.height };
     }
 
+    async beginDesktopControl() {
+        await this._register();
+        await this._callRegistered('SetActive', new GLib.Variant('(b)', [false]));
+    }
+
+    async sendDesktopInput(event, cancellable = null) {
+        if (!this._runtime.running)
+            throw createComputerUseError('The background desktop is not running.');
+        await this._register();
+        await this._callRegistered('DesktopInput',
+            new GLib.Variant('(s)', [JSON.stringify(event)]), cancellable, 2_000);
+    }
+
     shutdown() {
         super.shutdown();
         this._accessibility = null;
@@ -116,6 +129,7 @@ export class ComputerUseManager {
         this._onStopRequested = options.onStopRequested ?? (() => {});
         this._mode = COMPUTER_USE_MODE_BACKGROUND;
         this._turnCancellable = null;
+        this._desktopControl = null;
 
         const serviceOptions = {
             settings: this._settings,
@@ -144,6 +158,50 @@ export class ComputerUseManager {
         return await this._background.captureDesktopPreview(cancellable);
     }
 
+    async takeOverBackgroundDesktop() {
+        if (this._mode !== COMPUTER_USE_MODE_BACKGROUND || !this.backgroundRunning
+            || !this._settings?.computerUseEnabled || !this._settings?.computerUseCaptureEnabled)
+            throw createComputerUseError('Background desktop control is unavailable.');
+        if (this._desktopControl)
+            return;
+
+        const control = new Gio.Cancellable();
+        this._desktopControl = control;
+        this._turnCancellable?.cancel();
+        this._turnCancellable = null;
+        this._background.stop();
+        try {
+            await this._background.beginDesktopControl();
+            if (control.is_cancelled())
+                throw createComputerUseError('Background desktop control was closed.');
+        } catch (error) {
+            if (this._desktopControl === control)
+                this._desktopControl = null;
+            throw error;
+        }
+    }
+
+    async sendBackgroundDesktopInput(event) {
+        const control = this._desktopControl;
+        if (!control || control.is_cancelled() || this._mode !== COMPUTER_USE_MODE_BACKGROUND)
+            throw createComputerUseError('Take over the background desktop before interacting with it.');
+        await this._background.sendDesktopInput(event, control);
+    }
+
+    async releaseBackgroundDesktopControl() {
+        const control = this._desktopControl;
+        if (!control)
+            return;
+        control.cancel();
+        try {
+            if (this.backgroundRunning)
+                await this._background.sendDesktopInput({ type: 'release_all' });
+        } finally {
+            if (this._desktopControl === control)
+                this._desktopControl = null;
+        }
+    }
+
     get activeTurnCancellable() {
         return this._background.activeTurnCancellable
             ?? this._currentDesktop.activeTurnCancellable;
@@ -161,6 +219,8 @@ export class ComputerUseManager {
     }
 
     _prepareTurn(options = {}) {
+        if (this._desktopControl)
+            throw createComputerUseError('The user is controlling the background desktop. End Take over before continuing computer use.');
         const cancellable = options.cancellable;
         if (!cancellable || cancellable === this._turnCancellable)
             return;
@@ -181,6 +241,8 @@ export class ComputerUseManager {
         const mode = normalizeComputerUseMode(value);
         if (mode === this._mode)
             return mode;
+        if (this._desktopControl)
+            throw createComputerUseError('Stop controlling the background desktop before changing desktops.');
 
         if (this._turnCancellable && this._turnCancellable !== options.cancellable
             && !this._turnCancellable.is_cancelled?.()) {
@@ -204,6 +266,8 @@ export class ComputerUseManager {
 
     async setEnabled(enabled) {
         if (!enabled) {
+            this._desktopControl?.cancel();
+            this._desktopControl = null;
             this._currentDesktop.stop();
             this._background.shutdown();
             this._mode = COMPUTER_USE_MODE_BACKGROUND;
@@ -309,6 +373,8 @@ export class ComputerUseManager {
     }
 
     stop() {
+        this._desktopControl?.cancel();
+        this._desktopControl = null;
         this._turnCancellable = null;
         const currentStopped = this._currentDesktop.stop();
         const backgroundStopped = this._background.stop();
@@ -320,6 +386,8 @@ export class ComputerUseManager {
     }
 
     shutdown() {
+        this._desktopControl?.cancel();
+        this._desktopControl = null;
         this._turnCancellable = null;
         this._mode = COMPUTER_USE_MODE_BACKGROUND;
         this._currentDesktop.shutdown();
