@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Add a Remove All button to Archived Chats; hold it for three seconds to permanently delete all archived chats.
+
 ## [0.5.52] - 2026-09-29
 
 ### Added
