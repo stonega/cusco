@@ -81,7 +81,6 @@ gjs -m tests/automation-smoke.js
 gjs -m tests/automation-run-smoke.js
 gjs -m tests/window-background-sync-smoke.js
 gjs -m tests/window-provider-fallback-smoke.js
-gjs -m tests/long-response-notification-smoke.js
 gjs -m tests/agent-mode-smoke.js
 gjs -m tests/ask-user-smoke.js
 gjs -m tests/accessibility-smoke.js

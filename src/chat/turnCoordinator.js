@@ -16,7 +16,6 @@ export class TurnCoordinator {
         renderActiveConversation,
         schedulePendingConversationSend,
         setComposerBusy,
-        stopLongResponseNotification,
     }) {
         this._computerUse = computerUse;
         this._conversations = conversations;
@@ -27,7 +26,6 @@ export class TurnCoordinator {
         this._renderActiveConversation = renderActiveConversation;
         this._schedulePendingConversationSend = schedulePendingConversationSend;
         this._setComposerBusy = setComposerBusy;
-        this._stopLongResponseNotification = stopLongResponseNotification;
     }
 
     begin(conversationId = null, cancellable = null, options = {}) {
@@ -56,8 +54,6 @@ export class TurnCoordinator {
             cancellable,
             turnId: GLib.uuid_string_random(),
             hookContexts: [],
-            longResponseNotificationSent: false,
-            longResponseTimeoutId: 0,
             finished,
             resolveFinished,
         });
@@ -73,7 +69,6 @@ export class TurnCoordinator {
         const finishedConversationId = runtimeEntry?.[0] ?? null;
         const runtime = runtimeEntry?.[1] ?? null;
 
-        this._stopLongResponseNotification(cancellable);
         if (finishedConversationId)
             this.turns.delete(finishedConversationId);
         runtime?.resolveFinished?.();
@@ -101,7 +96,6 @@ export class TurnCoordinator {
         if (!cancellable)
             return false;
 
-        this._stopLongResponseNotification(cancellable);
         if (!isCancelled(cancellable))
             cancellable.cancel();
 
@@ -110,7 +104,6 @@ export class TurnCoordinator {
 
     stopAll() {
         for (const runtime of this.turns.values()) {
-            this._stopLongResponseNotification(runtime.cancellable);
             if (!isCancelled(runtime.cancellable))
                 runtime.cancellable.cancel();
         }

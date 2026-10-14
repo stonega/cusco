@@ -26,10 +26,6 @@ export function shouldAutoSendQueuedMessages({
     return !cancelled || stoppedBeforeAssistantText;
 }
 
-export function shouldSendLongResponseNotification(window) {
-    return !Boolean(window.is_active);
-}
-
 export function shouldSendSudoPasswordNotification(window) {
     return !Boolean(window.is_active);
 }

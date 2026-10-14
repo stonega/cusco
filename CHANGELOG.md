@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Removed
+
+- Remove desktop notifications after 10 seconds without provider updates.
+
 ## [0.5.53] - 2026-10-05
 
 ### Added

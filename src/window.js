@@ -45,7 +45,6 @@ import {
     normalizeConversationMessageStartIndex,
     replacePendingAttachment,
     shouldAutoSendQueuedMessages,
-    shouldSendLongResponseNotification,
     shouldSendSudoPasswordNotification,
 } from './chat/presentation.js';
 import {
@@ -118,11 +117,9 @@ export {
     normalizeConversationMessageStartIndex,
     replacePendingAttachment,
     shouldAutoSendQueuedMessages,
-    shouldSendLongResponseNotification,
     shouldSendSudoPasswordNotification,
 };
 
-const LONG_RESPONSE_NOTIFICATION_DELAY_MS = 10000;
 const STREAMING_USAGE_UPDATE_INTERVAL_MS = 100;
 
 function isGioError(error, code) {
@@ -300,7 +297,6 @@ function createTurnCoordinator(window) {
         renderActiveConversation: call('_renderActiveConversation'),
         schedulePendingConversationSend: call('_schedulePendingConversationSend'),
         setComposerBusy: call('_setComposerBusy'),
-        stopLongResponseNotification: call('_stopLongResponseNotification'),
     });
 }
 
@@ -2834,21 +2830,11 @@ class CuscoWindow extends Adw.ApplicationWindow {
 
     async _collectProviderResponse(providerId, modelId, providerMessages, cancellable, onChunk = null, collectOptions = {}) {
         const requestConfigs = this._providerConfigs.forRequest?.(cancellable) ?? this._providerConfigs;
-        // Watch provider inactivity, excluding turn setup, tools, and approvals.
-        this._startLongResponseNotification(cancellable);
-        try {
-            return await collectProviderResponse({
-                providerConfigs: requestConfigs,
-                appSettings: this._appSettings,
-                conversations: this._conversations,
-            }, providerId, modelId, providerMessages, cancellable, (text, chunk, state) => {
-                // These callbacks reflect provider updates, not the UI reveal animation.
-                this._startLongResponseNotification(cancellable);
-                onChunk?.(text, chunk, state);
-            }, collectOptions);
-        } finally {
-            this._stopLongResponseNotification(cancellable);
-        }
+        return await collectProviderResponse({
+            providerConfigs: requestConfigs,
+            appSettings: this._appSettings,
+            conversations: this._conversations,
+        }, providerId, modelId, providerMessages, cancellable, onChunk, collectOptions);
     }
 
     async _collectProviderResponseWithFallback(conversation, providerMessages, cancellable, onChunk = null, collectOptions = {}) {
@@ -3114,57 +3100,6 @@ class CuscoWindow extends Adw.ApplicationWindow {
             ),
             addMessage: (...args) => this._addMessage(...args),
         });
-    }
-
-    _startLongResponseNotification(cancellable) {
-        const runtimeEntry = this._activeTurnEntryForCancellable(cancellable);
-
-        if (!runtimeEntry)
-            return;
-
-        const [conversationId, runtime] = runtimeEntry;
-        const notificationId = `long-response-${conversationId}`;
-        this._stopLongResponseNotification(cancellable);
-        if (isCancellableCancelled(cancellable))
-            return;
-
-        runtime.longResponseNotificationSent = false;
-        runtime.longResponseTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, LONG_RESPONSE_NOTIFICATION_DELAY_MS, () => {
-            runtime.longResponseTimeoutId = 0;
-            if (this._activeTurnEntryForCancellable(cancellable)?.[1] === runtime
-                && !isCancellableCancelled(cancellable)
-                && this._shouldSendLongResponseNotification()) {
-                const notification = new Gio.Notification();
-                notification.set_title('Cusco is waiting for a response');
-                notification.set_body('The provider has not sent an update for 10 seconds.');
-                this.get_application()?.send_notification(notificationId, notification);
-                runtime.longResponseNotificationSent = true;
-            }
-
-            return GLib.SOURCE_REMOVE;
-        });
-    }
-
-    _shouldSendLongResponseNotification() {
-        return shouldSendLongResponseNotification(this);
-    }
-
-    _stopLongResponseNotification(cancellable) {
-        const runtimeEntry = this._activeTurnEntryForCancellable(cancellable);
-
-        if (!runtimeEntry)
-            return;
-
-        const [conversationId, runtime] = runtimeEntry;
-        if (runtime.longResponseTimeoutId) {
-            GLib.source_remove(runtime.longResponseTimeoutId);
-            runtime.longResponseTimeoutId = 0;
-        }
-
-        if (runtime.longResponseNotificationSent)
-            this.get_application()?.withdraw_notification(`long-response-${conversationId}`);
-
-        runtime.longResponseNotificationSent = false;
     }
 
     _applyAccessibilityPreferences() {

@@ -128,8 +128,6 @@ assertEqual(capacityFailure.updates.length, 0, 'Capacity error does not change p
 
 const replacementStates = [];
 const replacementWindow = {
-    _startLongResponseNotification() {},
-    _stopLongResponseNotification() {},
     _providerConfigs: {
         createProvider() {
             return {

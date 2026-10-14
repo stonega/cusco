@@ -122,7 +122,6 @@ import {
     normalizeConversationMessageStartIndex,
     replacePendingAttachment,
     shouldAutoSendQueuedMessages,
-    shouldSendLongResponseNotification,
     shouldSendSudoPasswordNotification,
 } from '../src/window.js';
 
@@ -328,16 +327,10 @@ const fakeWindow = {
     is_active: true,
 };
 
-if (shouldSendLongResponseNotification(fakeWindow))
-    throw new Error('Active windows should not send long-response notifications');
-
 if (shouldSendSudoPasswordNotification(fakeWindow))
     throw new Error('Active windows should not send sudo-password notifications');
 
 fakeWindow.is_active = false;
-
-if (!shouldSendLongResponseNotification(fakeWindow))
-    throw new Error('Inactive windows should send long-response notifications');
 
 if (!shouldSendSudoPasswordNotification(fakeWindow))
     throw new Error('Inactive windows should send sudo-password notifications');
