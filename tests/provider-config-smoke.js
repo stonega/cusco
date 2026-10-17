@@ -434,6 +434,90 @@ if (defaultStore.getWebSearchApiKeyStatus().source !== 'secret'
 await defaultStore.clearWebSearchApiKey();
 defaultStore.setWebSearchProviderId('duckduckgo');
 
+const deepSeekSearchSettings = new MemorySettings({
+    strings: { 'web-search-provider': 'deepseek-search' },
+});
+const deepSeekSearchKeys = new MemoryApiKeyStore({
+    deepseek: 'shared-deepseek-key',
+    'exa-search': 'independent-exa-key',
+});
+const deepSeekSearchStore = new ProviderConfigStore(undefined, {
+    settings: deepSeekSearchSettings,
+    apiKeyStore: deepSeekSearchKeys,
+    envLookup: (name) => name === 'DEEPSEEK_API_KEY' ? 'environment-deepseek-key' : '',
+});
+
+if (deepSeekSearchStore.getWebSearchProviderId() !== 'deepseek-search'
+    || deepSeekSearchStore.createWebSearchFallbackConfig().id !== 'deepseek-search'
+    || deepSeekSearchStore.createWebSearchFallbackConfig().apiKey !== 'shared-deepseek-key'
+    || !deepSeekSearchStore.listWebSearchProviders().find((provider) => provider.id === 'deepseek-search')?.apiKeyConfigured
+    || deepSeekSearchStore.getWebSearchApiKeyStatus('deepseek-search').source !== 'secret') {
+    throw new Error('DeepSeek Search did not restore its selection and reuse the stored DeepSeek key');
+}
+
+deepSeekSearchStore.setProviderEnabled('deepseek', false);
+deepSeekSearchStore.setProviderCustomEndpoint('deepseek', 'https://gateway.example/v1');
+if (deepSeekSearchStore.createWebSearchFallbackConfig().apiKey !== 'shared-deepseek-key'
+    || deepSeekSearchStore.createWebSearchFallbackConfig().baseUrl) {
+    throw new Error('DeepSeek Search must work independently of chat enablement and endpoint overrides');
+}
+
+await deepSeekSearchStore.setWebSearchApiKey('updated-search-key');
+if (deepSeekSearchKeys.lookup('deepseek') !== 'updated-search-key'
+    || deepSeekSearchKeys.lookup('deepseek-search')
+    || deepSeekSearchStore.getApiKeyStatus('deepseek').source !== 'secret') {
+    throw new Error('Saving a DeepSeek Search key did not update the shared DeepSeek credential');
+}
+
+await deepSeekSearchStore.setApiKey('deepseek', 'updated-chat-key');
+if (deepSeekSearchStore.createWebSearchFallbackConfig().apiKey !== 'updated-chat-key')
+    throw new Error('DeepSeek Search did not pick up a key saved through chat settings');
+
+await deepSeekSearchStore.clearWebSearchApiKey();
+if (deepSeekSearchKeys.lookup('deepseek')
+    || deepSeekSearchKeys.lookup('exa-search') !== 'independent-exa-key'
+    || deepSeekSearchStore.getWebSearchApiKeyStatus('deepseek-search').source !== 'environment'
+    || deepSeekSearchStore.getApiKeyStatus('deepseek').source !== 'environment'
+    || deepSeekSearchStore.createWebSearchFallbackConfig().apiKey !== 'environment-deepseek-key') {
+    throw new Error('Clearing the shared DeepSeek key did not preserve Exa and fall back to the environment');
+}
+
+deepSeekSearchStore.setWebSearchProviderId('exa-search');
+if (deepSeekSearchSettings.get_string('web-search-provider') !== 'exa-search'
+    || deepSeekSearchStore.createWebSearchFallbackConfig().apiKey !== 'independent-exa-key') {
+    throw new Error('Switching from DeepSeek Search did not preserve the Exa key and selection');
+}
+
+deepSeekSearchStore.setWebSearchProviderId('deepseek-search');
+if (deepSeekSearchSettings.get_string('web-search-provider') !== 'deepseek-search')
+    throw new Error('DeepSeek Search selection was not persisted');
+
+const missingDeepSeekSearchStore = new ProviderConfigStore(undefined, {
+    settings: null,
+    apiKeyStore: new MemoryApiKeyStore(),
+    envLookup: () => '',
+});
+missingDeepSeekSearchStore.setWebSearchProviderId('deepseek-search');
+let missingDeepSeekSearchKeyRejected = false;
+try {
+    missingDeepSeekSearchStore.createWebSearchFallbackConfig();
+} catch (error) {
+    missingDeepSeekSearchKeyRejected = error.message.includes('DEEPSEEK_API_KEY');
+}
+if (!missingDeepSeekSearchKeyRejected)
+    throw new Error('DeepSeek Search accepted a request without credentials');
+
+// Search remains available in stores that do not include the DeepSeek chat provider.
+const searchOnlyStore = new ProviderConfigStore(configs, {
+    settings: null,
+    apiKeyStore: new MemoryApiKeyStore(),
+    envLookup: () => '',
+});
+await searchOnlyStore.setWebSearchApiKey('search-only-key', 'deepseek-search');
+searchOnlyStore.setWebSearchProviderId('deepseek-search');
+if (searchOnlyStore.createWebSearchFallbackConfig().apiKey !== 'search-only-key')
+    throw new Error('DeepSeek Search required the DeepSeek chat provider to be present');
+
 const grokProvider = defaultStore.getProvider('grok');
 
 if (grokProvider.defaultModelId !== 'grok-4.6'

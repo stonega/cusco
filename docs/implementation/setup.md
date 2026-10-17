@@ -26,8 +26,13 @@ API key, container, daemon, or additional dependency is required. Moderate
 Safe Search remains enabled, DuckDuckGo is attributed in the transcript, and
 sponsored results remain visibly labeled.
 
-Providers → Web Search can instead select Exa Search and store its API key
-in Secret Service.
+Providers → Web Search can instead select Exa Search or DeepSeek Search and
+store an API key in Secret Service. DeepSeek Search uses the same stored key
+as DeepSeek chat, or `DEEPSEEK_API_KEY` from the environment. Search works
+even when the DeepSeek chat provider is disabled, and always uses the official
+`https://api.deepseek.com/v1/tools/search` endpoint. See the
+[DeepSeek Search API guide](https://api-docs.deepseek.com/guides/search/) for
+search operators and account limits.
 
 Configure and compile:
 

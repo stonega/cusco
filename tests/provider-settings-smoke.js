@@ -228,13 +228,17 @@ if (Gtk.init_check()) {
     const searchProviderRow = findComboRowByTitle(page, 'Fallback service');
     const duckDuckGoStatusRow = findActionRowByTitle(page, 'DuckDuckGo search');
     const exaSearchApiKeyRow = findPasswordEntryRowByTitle(page, 'Exa Search API key');
+    const deepSeekSearchApiKeyRow = findPasswordEntryRowByTitle(page, 'DeepSeek Search API key');
+    const deepSeekCredentialsRow = findActionRowByTitle(page, 'DeepSeek credentials');
 
-    if (!searchProviderRow || !duckDuckGoStatusRow || !exaSearchApiKeyRow)
+    if (!searchProviderRow || !duckDuckGoStatusRow || !exaSearchApiKeyRow
+        || !deepSeekSearchApiKeyRow || !deepSeekCredentialsRow)
         throw new Error('Web search fallback settings were not created');
 
     if (searchProviderRow.get_model().get_string(searchProviderRow.get_selected()) !== 'DuckDuckGo'
         || !duckDuckGoStatusRow.get_sensitive()
-        || exaSearchApiKeyRow.get_sensitive()) {
+        || exaSearchApiKeyRow.get_sensitive()
+        || deepSeekSearchApiKeyRow.get_sensitive()) {
         throw new Error('Built-in DuckDuckGo was not shown as the default search fallback');
     }
 
@@ -244,6 +248,27 @@ if (Gtk.init_check()) {
         || duckDuckGoStatusRow.get_sensitive()
         || !exaSearchApiKeyRow.get_sensitive()) {
         throw new Error('Web search fallback selector did not activate Exa Search settings');
+    }
+
+    await providerConfigs.setApiKey('deepseek', 'shared-deepseek-key');
+    searchProviderRow.set_selected(2);
+
+    if (providerConfigs.getWebSearchProviderId() !== 'deepseek-search'
+        || searchProviderRow.get_model().get_string(2) !== 'DeepSeek Search'
+        || duckDuckGoStatusRow.get_sensitive()
+        || exaSearchApiKeyRow.get_sensitive()
+        || !deepSeekSearchApiKeyRow.get_sensitive()
+        || !deepSeekCredentialsRow.get_sensitive()
+        || !deepSeekCredentialsRow.get_subtitle().includes('Shared with DeepSeek chat. Stored in Secret Service.')) {
+        throw new Error('DeepSeek Search settings did not reflect the shared chat key and selected fallback');
+    }
+
+    await providerConfigs.clearApiKey('deepseek');
+    searchProviderRow.set_selected(1);
+    searchProviderRow.set_selected(2);
+    if (!deepSeekCredentialsRow.get_subtitle().includes('DEEPSEEK_API_KEY')
+        || deepSeekCredentialsRow.get_subtitle().includes('Stored in Secret Service.')) {
+        throw new Error('DeepSeek Search settings retained stale credentials after clearing the chat key');
     }
 
     searchProviderRow.set_selected(0);

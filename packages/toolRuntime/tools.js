@@ -58,7 +58,7 @@ const BUILT_IN_TOOLS = {
     search: {
         name: 'search',
         label: 'Web Search',
-        description: 'Search the web and return cited results. Models with native search use their provider; other models use built-in DuckDuckGo search or optional Exa Search.',
+        description: 'Search the web and return cited results. Models with native search use their provider; other models use the configured DuckDuckGo, Exa Search, or DeepSeek Search fallback.',
         inputDescription: 'A concise web search query.',
         permissionPolicy: TOOL_PERMISSION_ASK,
         requiresPermission: true,
@@ -404,6 +404,33 @@ export function extractExaSearchResults(response) {
     }).slice(0, 5);
 }
 
+export function extractDeepSeekSearchResults(response) {
+    if (!Array.isArray(response?.results))
+        throw userVisibleError('DeepSeek Search returned an invalid search response.');
+
+    const seenUrls = new Set();
+    const results = [];
+
+    for (const result of response.results) {
+        const url = String(result?.url ?? '').trim();
+        if (!url || seenUrls.has(url))
+            continue;
+
+        seenUrls.add(url);
+        results.push({
+            title: String(result?.title ?? '').trim() || url,
+            url,
+            snippet: htmlText(result?.summary || result?.snippet || result?.content || '').slice(0, 800),
+            ...(result?.date ? { publishedAt: String(result.date) } : {}),
+        });
+
+        if (results.length === 5)
+            break;
+    }
+
+    return results;
+}
+
 async function fetchText(url, {
     timeoutSeconds = DEFAULT_SEARCH_TIMEOUT_SECONDS,
     cancellable = null,
@@ -654,7 +681,7 @@ export async function searchWeb(query, options = {}) {
 
         if (results.length === 0
             && !/no results|result--no-result|no-results/i.test(html)) {
-            throw userVisibleError('DuckDuckGo returned a search page Cusco could not read. Try again later or select Exa Search in Settings.');
+            throw userVisibleError('DuckDuckGo returned a search page Cusco could not read. Try again later or select another search service in Settings.');
         }
 
         return {
@@ -702,6 +729,43 @@ export async function searchWeb(query, options = {}) {
             results: extractExaSearchResults(response),
             providerId,
             providerName: 'Exa Search',
+        };
+    }
+
+    if (providerId === 'deepseek-search') {
+        if (Array.from(normalizedQuery).length > 128)
+            throw userVisibleError('DeepSeek Search queries must be at most 128 characters. Shorten the query and try again.');
+
+        const apiKey = String(options.apiKey ?? GLib.getenv('DEEPSEEK_API_KEY') ?? '').trim();
+
+        if (!apiKey)
+            throw userVisibleError('Configure DeepSeek Search credentials in Settings before searching.');
+
+        const response = await (options.fetcher ?? fetchJson)('https://api.deepseek.com/v1/tools/search', {
+            ...options,
+            method: 'POST',
+            body: {
+                query: normalizedQuery,
+                count: 5,
+                need_content: false,
+            },
+            serviceName: 'DeepSeek Search',
+            headers: {
+                Accept: 'application/json',
+                Authorization: `Bearer ${apiKey}`,
+            },
+            statusMessages: {
+                401: 'DeepSeek Search rejected the configured API key.',
+                402: 'DeepSeek Search has insufficient balance. Top up your DeepSeek account or select another search service in Settings.',
+                403: 'DeepSeek Search denied access. Check your DeepSeek account permissions.',
+            },
+        });
+
+        return {
+            query: normalizedQuery,
+            results: extractDeepSeekSearchResults(response),
+            providerId,
+            providerName: 'DeepSeek Search',
         };
     }
 

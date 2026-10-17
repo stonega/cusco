@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Add DeepSeek Search as a web search fallback, sharing the DeepSeek API key and returning cited web results.
+
 ## [0.5.54] - 2026-10-14
 
 ### Removed

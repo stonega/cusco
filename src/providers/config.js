@@ -493,6 +493,21 @@ export const DUCKDUCKGO_SEARCH_CONFIG = {
     apiKeyConfigured: true,
 };
 
+export const DEEPSEEK_SEARCH_CONFIG = {
+    id: 'deepseek-search',
+    name: 'DeepSeek Search',
+    apiKeyRequired: true,
+    apiKeyConfigured: false,
+    apiKeyEnvVar: 'DEEPSEEK_API_KEY',
+    apiKeyProviderId: 'deepseek',
+};
+
+const WEB_SEARCH_CONFIGS = [
+    DUCKDUCKGO_SEARCH_CONFIG,
+    EXA_SEARCH_CONFIG,
+    DEEPSEEK_SEARCH_CONFIG,
+];
+
 function parseDiscoveredModelSettings(value) {
     try {
         const parsed = JSON.parse(value || '{}');
@@ -538,12 +553,6 @@ export class ProviderConfigStore {
         this._defaultImageProviderId = '';
         this._defaultImageModelId = '';
         this._webSearchProviderId = DUCKDUCKGO_SEARCH_CONFIG.id;
-        this._webSearchConfig = { ...EXA_SEARCH_CONFIG };
-        this._webSearchApiKeyStatus = {
-            configured: false,
-            source: null,
-            error: null,
-        };
         this._configs = configs.map((config) => ({
             ...config,
             authMethods: [
@@ -673,10 +682,11 @@ export class ProviderConfigStore {
             }
         }
 
-        this._setApiKeyStatus(
-            this._webSearchConfig,
-            this._resolveApiKeyStatus(this._webSearchConfig),
-        );
+        for (const config of WEB_SEARCH_CONFIGS.filter((item) => item.apiKeyRequired)) {
+            const keyProvider = this._webSearchApiKeyProvider(config.id);
+            if (!this.getProvider(keyProvider.id))
+                this._setApiKeyStatus(keyProvider, this._resolveApiKeyStatus(keyProvider));
+        }
 
         if (enabledProvidersChanged)
             this._persistEnabledProviders();
@@ -742,21 +752,28 @@ export class ProviderConfigStore {
             : [];
     }
 
-    getWebSearchApiKeyStatus() {
-        return { ...this._webSearchApiKeyStatus };
+    _webSearchApiKeyProvider(providerId) {
+        const config = WEB_SEARCH_CONFIGS.find((item) => item.id === providerId);
+
+        if (!config)
+            throw new Error(`Web search provider does not exist: ${providerId}`);
+
+        const keyProviderId = config.apiKeyProviderId ?? config.id;
+        return this.getProvider(keyProviderId) ?? { ...config, id: keyProviderId };
+    }
+
+    getWebSearchApiKeyStatus(providerId = this._webSearchProviderId) {
+        const provider = this._webSearchApiKeyProvider(providerId);
+        return { ...(this._apiKeyStatuses.get(provider.id) ?? this._resolveApiKeyStatus(provider)) };
     }
 
     listWebSearchProviders() {
-        return [
-            {
-                ...DUCKDUCKGO_SEARCH_CONFIG,
-                selected: this._webSearchProviderId === DUCKDUCKGO_SEARCH_CONFIG.id,
-            },
-            {
-                ...this._webSearchConfig,
-                selected: this._webSearchProviderId === EXA_SEARCH_CONFIG.id,
-            },
-        ];
+        return WEB_SEARCH_CONFIGS.map((config) => ({
+            ...config,
+            apiKeyConfigured: !config.apiKeyRequired
+                || this.getWebSearchApiKeyStatus(config.id).configured,
+            selected: this._webSearchProviderId === config.id,
+        }));
     }
 
     getWebSearchProviderId() {
@@ -766,7 +783,7 @@ export class ProviderConfigStore {
     setWebSearchProviderId(providerId) {
         const normalizedProviderId = String(providerId ?? '').trim();
 
-        if (![DUCKDUCKGO_SEARCH_CONFIG.id, EXA_SEARCH_CONFIG.id].includes(normalizedProviderId))
+        if (!WEB_SEARCH_CONFIGS.some((config) => config.id === normalizedProviderId))
             throw new Error(`Web search provider does not exist: ${providerId}`);
 
         this._webSearchProviderId = normalizedProviderId;
@@ -775,43 +792,62 @@ export class ProviderConfigStore {
         return this._webSearchProviderId;
     }
 
-    async setWebSearchApiKey(apiKey) {
+    async setWebSearchApiKey(apiKey, providerId = this._webSearchProviderId) {
+        const provider = this._webSearchApiKeyProvider(providerId);
+
+        if (!provider.apiKeyRequired)
+            throw new Error(`${provider.name} does not use API keys`);
+
+        if (this.getProvider(provider.id))
+            return this.setApiKey(provider.id, apiKey);
+
         const normalizedApiKey = String(apiKey ?? '').trim();
 
         if (!normalizedApiKey)
-            return this.clearWebSearchApiKey();
+            return this.clearWebSearchApiKey(providerId);
 
         const stored = await this._apiKeyStore.store(
-            this._webSearchConfig.id,
-            this._webSearchConfig.name,
+            provider.id,
+            provider.name,
             normalizedApiKey,
         );
 
         if (stored === false)
-            throw new Error('Secret Service did not store the Exa Search API key');
+            throw new Error(`Secret Service did not store the ${provider.name} API key`);
 
-        return this._setApiKeyStatus(this._webSearchConfig, {
+        return this._setApiKeyStatus(provider, {
             configured: true,
             source: 'secret',
             error: null,
         });
     }
 
-    async clearWebSearchApiKey() {
-        await this._apiKeyStore.clear(this._webSearchConfig.id);
+    async clearWebSearchApiKey(providerId = this._webSearchProviderId) {
+        const provider = this._webSearchApiKeyProvider(providerId);
+
+        if (!provider.apiKeyRequired)
+            throw new Error(`${provider.name} does not use API keys`);
+
+        if (this.getProvider(provider.id))
+            return this.clearApiKey(provider.id);
+
+        await this._apiKeyStore.clear(provider.id);
         return this._setApiKeyStatus(
-            this._webSearchConfig,
-            this._environmentApiKeyStatus(this._webSearchConfig),
+            provider,
+            this._environmentApiKeyStatus(provider),
         );
     }
 
     createWebSearchFallbackConfig() {
-        if (this._webSearchProviderId === DUCKDUCKGO_SEARCH_CONFIG.id)
-            return { ...DUCKDUCKGO_SEARCH_CONFIG };
-
+        const config = WEB_SEARCH_CONFIGS.find((provider) => provider.id === this._webSearchProviderId);
         return {
-            ...this._webSearchConfig,
-            apiKey: this._getApiKey(this._webSearchConfig),
+            ...config,
+            ...(config.apiKeyRequired
+                ? {
+                    apiKeyConfigured: this.getWebSearchApiKeyStatus(config.id).configured,
+                    apiKey: this._getApiKey(this._webSearchApiKeyProvider(config.id)),
+                }
+                : {}),
         };
     }
 
@@ -1699,9 +1735,6 @@ export class ProviderConfigStore {
         this._apiKeyStatuses.set(provider.id, normalizedStatus);
         provider.apiKeyConfigured = normalizedStatus.configured;
 
-        if (provider.id === this._webSearchConfig.id)
-            this._webSearchApiKeyStatus = normalizedStatus;
-
         return { ...normalizedStatus };
     }
 
@@ -1821,7 +1854,7 @@ export class ProviderConfigStore {
 
         const webSearchProviderId = this._settings.get_string('web-search-provider');
 
-        if ([DUCKDUCKGO_SEARCH_CONFIG.id, EXA_SEARCH_CONFIG.id].includes(webSearchProviderId))
+        if (WEB_SEARCH_CONFIGS.some((config) => config.id === webSearchProviderId))
             this._webSearchProviderId = webSearchProviderId;
 
         this._loadCustomProviderSettings();

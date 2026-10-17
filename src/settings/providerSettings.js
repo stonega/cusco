@@ -139,19 +139,22 @@ function getAuthenticationSubtitle(providerConfigs, provider) {
     return `Connect ${method?.name ?? 'this account'} to use it for chat requests.`;
 }
 
-function getWebSearchApiKeySubtitle(providerConfigs) {
-    const status = providerConfigs.getWebSearchApiKeyStatus();
+function getWebSearchApiKeySubtitle(providerConfigs, provider) {
+    const status = providerConfigs.getWebSearchApiKeyStatus(provider.id);
+    const sharedKeyNotice = provider.apiKeyProviderId === 'deepseek'
+        ? 'Shared with DeepSeek chat. '
+        : '';
 
     if (status.source === 'secret')
-        return 'Stored in Secret Service.';
+        return `${sharedKeyNotice}Stored in Secret Service.`;
 
     if (status.source === 'environment')
-        return 'EXA_API_KEY is available in the environment.';
+        return `${sharedKeyNotice}${provider.apiKeyEnvVar} is available in the environment.`;
 
     if (status.error)
-        return 'Secret Service is unavailable; EXA_API_KEY can still be used.';
+        return `${sharedKeyNotice}Secret Service is unavailable; ${provider.apiKeyEnvVar} can still be used.`;
 
-    return 'Required only when Exa Search is selected as the fallback service.';
+    return `${sharedKeyNotice}Store a key in Secret Service or set ${provider.apiKeyEnvVar}.`;
 }
 
 function canDiscoverModels(provider) {
@@ -917,22 +920,6 @@ function createWebSearchSettingsGroup(providerConfigs, onChanged, syncAllRows) {
         title: 'DuckDuckGo search',
         subtitle: 'Built in. No API key or additional software required.',
     });
-    const apiKeyRow = new Adw.PasswordEntryRow({
-        title: 'Exa Search API key',
-    });
-    const clearKeyButton = new Gtk.Button({
-        icon_name: 'edit-clear-symbolic',
-        tooltip_text: 'Clear stored Exa Search key',
-        valign: Gtk.Align.CENTER,
-    });
-    const statusRow = new Adw.ActionRow({
-        title: 'Exa credentials',
-    });
-
-    apiKeyRow.set_show_apply_button(true);
-    clearKeyButton.add_css_class('flat');
-    apiKeyRow.add_suffix(clearKeyButton);
-
     providerRow.connect('notify::selected', () => {
         const selectedProvider = searchProviders[providerRow.get_selected()];
 
@@ -946,63 +933,87 @@ function createWebSearchSettingsGroup(providerConfigs, onChanged, syncAllRows) {
         onChanged();
     });
 
-    apiKeyRow.connect('apply', async () => {
-        const apiKey = apiKeyRow.get_text().trim();
+    group.add(providerRow);
+    group.add(duckDuckGoStatusRow);
 
-        if (!apiKey)
-            return;
+    const credentialRows = searchProviders.filter((provider) => provider.apiKeyRequired).map((provider) => {
+        const apiKeyRow = new Adw.PasswordEntryRow({
+            title: `${provider.name} API key`,
+        });
+        const clearKeyButton = new Gtk.Button({
+            icon_name: 'edit-clear-symbolic',
+            tooltip_text: provider.apiKeyProviderId === 'deepseek'
+                ? 'Clear stored key for DeepSeek chat and search'
+                : `Clear stored ${provider.name} key`,
+            valign: Gtk.Align.CENTER,
+        });
+        const statusRow = new Adw.ActionRow({
+            title: `${provider.name.replace(/ Search$/, '')} credentials`,
+        });
 
-        apiKeyRow.set_sensitive(false);
+        apiKeyRow.set_show_apply_button(true);
+        clearKeyButton.add_css_class('flat');
+        apiKeyRow.add_suffix(clearKeyButton);
 
-        try {
-            await providerConfigs.setWebSearchApiKey(apiKey);
-            apiKeyRow.set_text('');
-            onChanged();
-        } catch (error) {
-            showProviderMessage(
-                apiKeyRow.get_root() ?? apiKeyRow,
-                'Could Not Save API Key',
-                error.userMessage ?? error.message,
-            );
-            logError(error, 'Failed to store Exa Search API key');
-        } finally {
-            apiKeyRow.set_sensitive(true);
-            syncAllRows();
-        }
-    });
+        apiKeyRow.connect('apply', async () => {
+            const apiKey = apiKeyRow.get_text().trim();
 
-    clearKeyButton.connect('clicked', async () => {
-        clearKeyButton.set_sensitive(false);
+            if (!apiKey)
+                return;
 
-        try {
-            await providerConfigs.clearWebSearchApiKey();
-            apiKeyRow.set_text('');
-            onChanged();
-        } catch (error) {
-            logError(error, 'Failed to clear Exa Search API key');
-        } finally {
-            syncAllRows();
-        }
+            apiKeyRow.set_sensitive(false);
+
+            try {
+                await providerConfigs.setWebSearchApiKey(apiKey, provider.id);
+                apiKeyRow.set_text('');
+                onChanged();
+            } catch (error) {
+                showProviderMessage(
+                    apiKeyRow.get_root() ?? apiKeyRow,
+                    'Could Not Save API Key',
+                    error.userMessage ?? error.message,
+                );
+                logError(error, `Failed to store ${provider.name} API key`);
+            } finally {
+                syncAllRows();
+            }
+        });
+
+        clearKeyButton.connect('clicked', async () => {
+            clearKeyButton.set_sensitive(false);
+
+            try {
+                await providerConfigs.clearWebSearchApiKey(provider.id);
+                apiKeyRow.set_text('');
+                onChanged();
+            } catch (error) {
+                logError(error, `Failed to clear ${provider.name} API key`);
+            } finally {
+                syncAllRows();
+            }
+        });
+
+        group.add(apiKeyRow);
+        group.add(statusRow);
+        return { provider, apiKeyRow, clearKeyButton, statusRow };
     });
 
     const sync = () => {
         const providerId = providerConfigs.getWebSearchProviderId();
         const providerIndex = searchProviders.findIndex((provider) => provider.id === providerId);
-        const status = providerConfigs.getWebSearchApiKeyStatus();
-        const usesDuckDuckGo = providerId === 'duckduckgo';
 
         providerRow.set_selected(selectedIndexOrNone(providerIndex, searchProviders.length));
-        duckDuckGoStatusRow.set_sensitive(usesDuckDuckGo);
-        apiKeyRow.set_sensitive(!usesDuckDuckGo);
-        statusRow.set_subtitle(getWebSearchApiKeySubtitle(providerConfigs));
-        statusRow.set_sensitive(!usesDuckDuckGo);
-        clearKeyButton.set_sensitive(!usesDuckDuckGo && status.source === 'secret');
+        duckDuckGoStatusRow.set_sensitive(providerId === 'duckduckgo');
+        for (const { provider, apiKeyRow, clearKeyButton, statusRow } of credentialRows) {
+            const selected = providerId === provider.id;
+            const status = providerConfigs.getWebSearchApiKeyStatus(provider.id);
+            apiKeyRow.set_sensitive(selected);
+            statusRow.set_subtitle(getWebSearchApiKeySubtitle(providerConfigs, provider));
+            statusRow.set_sensitive(selected);
+            clearKeyButton.set_sensitive(selected && status.source === 'secret');
+        }
     };
 
-    group.add(providerRow);
-    group.add(duckDuckGoStatusRow);
-    group.add(apiKeyRow);
-    group.add(statusRow);
     sync();
     return { group, sync };
 }

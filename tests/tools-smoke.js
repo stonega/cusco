@@ -14,6 +14,7 @@ import {
 import {
     calculateExpression,
     commandUsesSudo,
+    extractDeepSeekSearchResults,
     extractDuckDuckGoSearchResults,
     extractExaSearchResults,
     formatToolResultForTranscript,
@@ -132,6 +133,106 @@ if (exaSearchResult.providerId !== 'exa-search'
     throw new Error('Exa Search fallback request was not configured correctly');
 }
 
+const deepSeekFixture = {
+    results: [
+        {
+            title: 'Cusco',
+            url: 'https://example.com/cusco',
+            summary: 'A model-facing summary with &amp; entities.',
+            snippet: 'Short UI snippet',
+            date: '2026-10-17T00:00:00+00:00',
+        },
+        { url: 'https://example.com/cusco', summary: 'Duplicate' },
+        { title: 'No URL' },
+        null,
+        { url: 'https://example.com/extra', snippet: 'Snippet fallback', date: null },
+    ],
+};
+const deepSeekResults = extractDeepSeekSearchResults(deepSeekFixture);
+if (deepSeekResults.length !== 2
+    || deepSeekResults[0].snippet !== 'A model-facing summary with & entities.'
+    || deepSeekResults[0].publishedAt !== '2026-10-17T00:00:00+00:00'
+    || deepSeekResults[1].title !== 'https://example.com/extra'
+    || deepSeekResults[1].snippet !== 'Snippet fallback'
+    || 'publishedAt' in deepSeekResults[1]) {
+    throw new Error('DeepSeek results did not preserve citations, prefer summaries, and discard duplicates');
+}
+
+const boundedDeepSeekResults = extractDeepSeekSearchResults({
+    results: Array.from({ length: 8 }, (_, index) => ({
+        url: `https://example.com/${index}`,
+        summary: 's'.repeat(1200),
+    })),
+});
+if (boundedDeepSeekResults.length !== 5 || boundedDeepSeekResults[0].snippet.length !== 800)
+    throw new Error('DeepSeek result count and summary length were not bounded');
+
+let deepSeekSearchUrl = '';
+let deepSeekSearchOptions = null;
+const deepSeekCancellable = new Gio.Cancellable();
+const deepSeekSearchResult = await searchWeb('  GNOME site:gnome.org lang:en  ', {
+    id: 'deepseek-search',
+    apiKey: 'deepseek-test-key',
+    timeoutSeconds: 23,
+    cancellable: deepSeekCancellable,
+    fetcher: async (url, options) => {
+        deepSeekSearchUrl = url;
+        deepSeekSearchOptions = options;
+        return deepSeekFixture;
+    },
+});
+if (deepSeekSearchResult.providerId !== 'deepseek-search'
+    || deepSeekSearchUrl !== 'https://api.deepseek.com/v1/tools/search'
+    || deepSeekSearchOptions.method !== 'POST'
+    || deepSeekSearchOptions.headers.Authorization !== 'Bearer deepseek-test-key'
+    || deepSeekSearchOptions.body.query !== 'GNOME site:gnome.org lang:en'
+    || deepSeekSearchOptions.body.count !== 5
+    || deepSeekSearchOptions.body.need_content !== false
+    || deepSeekSearchOptions.cancellable !== deepSeekCancellable
+    || deepSeekSearchOptions.timeoutSeconds !== 23) {
+    throw new Error('DeepSeek Search request did not match the documented API contract');
+}
+
+if (!formatToolResultForTranscript({
+    ...deepSeekSearchResult,
+    name: 'search',
+    input: deepSeekSearchResult.query,
+}).includes('via DeepSeek Search')) {
+    throw new Error('DeepSeek Search attribution was not included in the transcript');
+}
+
+const unicodeDeepSeekResult = await searchWeb('😀'.repeat(128), {
+    id: 'deepseek-search',
+    apiKey: 'test-key',
+    fetcher: async () => ({ results: [] }),
+});
+if (unicodeDeepSeekResult.results.length !== 0)
+    throw new Error('DeepSeek empty results were not accepted for a valid Unicode query');
+
+for (const { query, apiKey, response, expected } of [
+    { query: '😀'.repeat(129), apiKey: 'test-key', expected: '128 characters' },
+    { query: '   ', apiKey: 'test-key', expected: 'cannot be empty' },
+    { query: 'GNOME', apiKey: '', expected: 'Configure DeepSeek Search credentials' },
+    { query: 'GNOME', apiKey: 'test-key', response: {}, expected: 'invalid search response' },
+]) {
+    let failure = null;
+    let requested = false;
+    try {
+        await searchWeb(query, {
+            id: 'deepseek-search',
+            apiKey,
+            fetcher: async () => {
+                requested = true;
+                return response;
+            },
+        });
+    } catch (error) {
+        failure = error;
+    }
+    if (!failure?.userMessage?.includes(expected) || (response === undefined && requested))
+        throw new Error(`DeepSeek Search did not reject invalid input or response: ${expected}`);
+}
+
 const configuredSearchManager = new ToolManager({
     searchConfig: () => ({
         id: 'duckduckgo',
@@ -145,6 +246,20 @@ const configuredSearchResult = await configuredSearchManager.runRequest(
 
 if (configuredSearchResult.providerId !== 'duckduckgo')
     throw new Error('The active chat provider overrode the configured search fallback');
+
+const deepSeekSearchManager = new ToolManager({
+    searchConfig: () => ({
+        id: 'deepseek-search',
+        apiKey: 'test-key',
+        fetcher: async () => deepSeekFixture,
+    }),
+});
+const managedDeepSeekResult = await deepSeekSearchManager.runRequest(
+    deepSeekSearchManager.createRequest('search', 'native GNOME chat'),
+    { providerId: 'kimi' },
+);
+if (managedDeepSeekResult.providerId !== 'deepseek-search' || managedDeepSeekResult.results.length !== 2)
+    throw new Error('The configured DeepSeek fallback was not used for another chat provider');
 
 const request = parseToolRequest('/search native GNOME chat app');
 

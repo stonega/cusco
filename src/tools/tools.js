@@ -6,6 +6,7 @@ export const {
     calculateExpression,
     summarizeStructuredData,
     extractExaSearchResults,
+    extractDeepSeekSearchResults,
     extractDuckDuckGoSearchResults,
     searchWeb,
     listLocalDirectory,
