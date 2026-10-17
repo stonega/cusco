@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.55] - 2026-10-17
+
 ### Added
 
 - Add DeepSeek Search as a web search fallback, sharing the DeepSeek API key and returning cited web results.
@@ -584,7 +586,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.54...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.55...HEAD
+[0.5.55]: https://github.com/stonega/cusco/compare/v0.5.54...v0.5.55
 [0.5.54]: https://github.com/stonega/cusco/compare/v0.5.53...v0.5.54
 [0.5.53]: https://github.com/stonega/cusco/compare/v0.5.52...v0.5.53
 [0.5.52]: https://github.com/stonega/cusco/compare/v0.5.51...v0.5.52
