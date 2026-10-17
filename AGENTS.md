@@ -34,6 +34,10 @@ Cusco is a native GNOME AI chat application built with GJS, GTK 4, and libadwait
 - Compile: `meson compile -C builddir`
 - Install locally: `meson install -C builddir`
 
+Run UI tests in an isolated virtual GNOME desktop using the background session
+runtime in `packages/computerUse/backgroundSession.js`. Use temporary test profile
+data and stop the virtual desktop afterward.
+
 Do not run `meson install -C builddir`, copy files into `~/.local/share/cusco`, or otherwise update the user's installed Cusco app unless the user explicitly asks for an install. Default to source changes, tests, and clear restart/install instructions instead.
 
 ## Structure
