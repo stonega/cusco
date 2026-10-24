@@ -52,6 +52,7 @@ support keep the chat picker disabled.
 | Google Gemini | `gemini-3.7-flash` | `gemini-3.7-flash` | `Low`, `Medium`, `High` |
 | Google Gemini | `gemini-3.7-flash` | `gemini-3.6-flash`, `gemini-3.5-flash-lite` | `Minimal`, `Auto`, `Low`, `Medium`, `High` |
 | Google Gemini | `gemini-3.7-flash` | `gemini-3.1-pro-preview` | `Auto`, `Low`, `Medium`, `High` |
+| Kimi | `kimi-k3` | `kimi-k3.1-pro` | `Low`, `High`, `Max` |
 | Kimi | `kimi-k3` | `kimi-k3` | `Max` |
 | Kimi | `kimi-k3` | `kimi-k2.7-code` | `Auto` |
 | Kimi | `kimi-k3` | `kimi-k2.6` | `Off`, `Auto` |
@@ -95,6 +96,7 @@ from the built-in model metadata.
 | Google Gemini | `gemini-3.6-flash` | 1,048,576 tokens |
 | Google Gemini | `gemini-3.5-flash-lite` | 1,048,576 tokens |
 | Google Gemini | `gemini-3.1-pro-preview` | 1,048,576 tokens |
+| Kimi | `kimi-k3.1-pro` | 1,048,576 tokens |
 | Kimi | `kimi-k3` | 1M tokens |
 | Kimi | `kimi-k2.7-code` | 256K tokens |
 | Kimi | `kimi-k2.6` | 256K tokens |
@@ -155,10 +157,13 @@ models that use its OpenAI-compatible image generation endpoint.
   Their explicit effort levels are sent in `output_config`, default to `High`,
   and support `X-High` and `Max`. Haiku 4.5 continues to use manual
   extended-thinking budgets and does not support those two higher efforts.
-- Kimi is intentionally limited to `kimi-k3`, `kimi-k2.7-code`, and
-  `kimi-k2.6`. Persisted Moonshot V1 and older Kimi models are ignored. Kimi K3
-  uses always-on thinking with its only currently supported effort, `Max`; requests use
-  top-level `reasoning_effort` and `max_completion_tokens`, not the K2.x
+- Kimi is intentionally limited to `kimi-k3.1-pro`, `kimi-k3`, `kimi-k2.7-code`,
+  and `kimi-k2.6`. Persisted Moonshot V1 and older Kimi models are ignored.
+  Kimi K3.1 Pro supports image input and always-on thinking with `Low`, `High`,
+  and `Max` efforts, defaulting to `Max`. Its documented maximum output is
+  1,048,576 tokens; Cusco defaults to 131,072 output tokens per request.
+  Kimi K3 uses always-on thinking with its only currently supported effort, `Max`.
+  Both K3 models use top-level `reasoning_effort` and `max_completion_tokens`, not the K2.x
   `thinking` parameter. Kimi K2.7 Code uses always-on thinking through `Auto`;
   only Kimi K2.6 exposes `Off`.
 - DeepSeek uses `deepseek-v4-pro` as its default and offers `deepseek-flash`
@@ -214,6 +219,7 @@ models that use its OpenAI-compatible image generation endpoint.
 | Google Gemini | `gemini-3.6-flash` | Stable Gemini model balancing speed and intelligence for agentic and multimodal tasks. | `Minimal`, `Auto`, `Low`, `Medium`, `High` |
 | Google Gemini | `gemini-3.5-flash-lite` | Low-latency, cost-effective multimodal model for high-throughput agentic workflows and document parsing. | `Minimal`, `Auto`, `Low`, `Medium`, `High` |
 | Google Gemini | `gemini-3.1-pro-preview` | Advanced intelligence and agentic coding model. | `Auto`, `Low`, `Medium`, `High` |
+| Kimi | `kimi-k3.1-pro` | Kimi flagship model for coding, 3D creation, financial research, reasoning, and visual understanding. Context 1M. | `Low`, `High`, `Max` |
 | Kimi | `kimi-k3` | Kimi flagship model for long-horizon coding, knowledge work, reasoning, and visual understanding. Context 1M. | `Max` |
 | Kimi | `kimi-k2.7-code` | Kimi coding model with stronger long-context instruction following and higher coding task success. Context 256k. | `Auto` |
 | Kimi | `kimi-k2.6` | Kimi intelligent multimodal model for agent, code, visual understanding, and general tasks with thinking and non-thinking modes. Context 256k. | `Off`, `Auto` |
@@ -233,6 +239,8 @@ models that use its OpenAI-compatible image generation endpoint.
 - Claude adaptive thinking: https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking
 - Claude effort levels: https://platform.claude.com/docs/en/build-with-claude/effort
 - Claude extended thinking: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+- Kimi K3.1 Pro quickstart: https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart
+- Kimi pricing and context windows: https://platform.kimi.ai/docs/pricing/chat
 - Kimi K3 quickstart: https://platform.kimi.ai/docs/guide/kimi-k3-quickstart
 - Gemini 3.7 Flash model: https://ai.google.dev/gemini-api/docs/models/gemini-3.7-flash
 - Gemini 3.7 Flash announcement: https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-3-7-flash/

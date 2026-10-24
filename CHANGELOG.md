@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Add Kimi K3.1 Pro with a 1M-token context window, image input, and Low, High, and Max reasoning efforts.
+
 ## [0.5.55] - 2026-10-17
 
 ### Added

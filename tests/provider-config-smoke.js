@@ -812,7 +812,7 @@ if (staleGeminiImageStore.getDefaultImageModel('gemini').id !== 'gemini-3.1-flas
 
 const kimiProvider = defaultStore.getProvider('kimi');
 const kimiModelIds = kimiProvider.models.map((model) => model.id);
-const expectedKimiModelIds = ['kimi-k3', 'kimi-k2.7-code', 'kimi-k2.6'];
+const expectedKimiModelIds = ['kimi-k3.1-pro', 'kimi-k3', 'kimi-k2.7-code', 'kimi-k2.6'];
 
 if (defaultStore.getDefaultModel('kimi').id !== 'kimi-k3')
     throw new Error('Kimi default model should be Kimi K3');
@@ -826,7 +826,7 @@ if (!kimiProvider.models.every((model) => model.description.includes('Context'))
 if (defaultStore.resolve('kimi', 'kimi-k3').model.contextWindowTokens !== 1000000)
     throw new Error('Kimi K3 metadata should include its 1M context window');
 
-if (kimiProvider.models.filter((model) => model.id !== 'kimi-k3').some((model) => model.contextWindowTokens !== 256000))
+if (kimiProvider.models.filter((model) => model.id.startsWith('kimi-k2.')).some((model) => model.contextWindowTokens !== 256000))
     throw new Error('Kimi K2 model metadata should retain 256K context windows');
 
 if (defaultStore.getThinkingLevels('kimi', 'kimi-k3').join(',') !== 'max'

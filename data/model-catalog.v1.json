@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "revision": 2,
-  "publishedAt": "2026-09-11T11:26:15Z",
+  "revision": 3,
+  "publishedAt": "2026-10-24T02:57:22Z",
   "minAppVersion": "0.5.46",
   "requiredRuntimeFeatures": [
     "model-catalog-v1"
@@ -654,6 +654,62 @@
       ],
       "notes": "Migrated from the existing Cusco catalog and docs/user/provider-models.md. Unrecorded parameter support remains unknown; verify official documentation before changing it.",
       "models": [
+        {
+          "id": "kimi-k3.1-pro",
+          "name": "Kimi K3.1 Pro",
+          "description": "Kimi flagship model for coding, 3D creation, financial research, reasoning, and visual understanding. Context 1M.",
+          "contextWindowTokens": 1048576,
+          "maxOutputTokens": 1048576,
+          "requestDefaults": {
+            "maxOutputTokens": 131072
+          },
+          "supportsImageAttachments": true,
+          "supportsFunctionCalling": true,
+          "supportsStreaming": true,
+          "thinking": {
+            "api": "kimi-k3-reasoning",
+            "levels": [
+              "low",
+              "high",
+              "max"
+            ],
+            "defaultLevel": "max",
+            "alwaysOn": true,
+            "maxOutputTokensParameter": "max_completion_tokens"
+          },
+          "parameters": {
+            "temperature": {
+              "support": "unsupported",
+              "type": "number",
+              "runtime": false,
+              "notes": "Fixed at 1.0 by the API; omit from requests."
+            },
+            "topP": {
+              "support": "unsupported",
+              "type": "number",
+              "runtime": false,
+              "notes": "Fixed at 0.95 by the API; omit from requests."
+            },
+            "frequencyPenalty": {
+              "support": "unsupported",
+              "type": "number",
+              "runtime": false,
+              "notes": "Fixed at 0 by the API; omit from requests."
+            },
+            "presencePenalty": {
+              "support": "unsupported",
+              "type": "number",
+              "runtime": false,
+              "notes": "Fixed at 0 by the API; omit from requests."
+            }
+          },
+          "sources": [
+            "https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart",
+            "https://platform.kimi.ai/docs/pricing/chat",
+            "https://platform.kimi.ai/docs/guide/use-kimi-vision-model"
+          ],
+          "verifiedAt": "2026-10-24"
+        },
         {
           "id": "kimi-k3",
           "name": "Kimi K3",

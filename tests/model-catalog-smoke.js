@@ -42,7 +42,7 @@ function service(fetch, storage = new MemoryStorage()) {
 function ok(data, etag = '"updated-catalog"') { return { status: 200, text: JSON.stringify(data), headers: { etag } }; }
 
 equal(BUNDLED_CATALOG.data.providers.length, 7, 'Provider count changed');
-equal(BUNDLED_CATALOG.data.providers.reduce((n, p) => n + p.models.length, 0), 26, 'Chat model count changed');
+equal(BUNDLED_CATALOG.data.providers.reduce((n, p) => n + p.models.length, 0), 27, 'Chat model count changed');
 equal(BUNDLED_CATALOG.data.providers.reduce((n, p) => n + p.imageModels.length, 0), 7, 'Image model count changed');
 equal(BUNDLED_CATALOG.getModel('kimi', 'kimi-k3').thinking.maxOutputTokensParameter,
     'max_completion_tokens', 'Kimi output token parameter was lost');
@@ -92,7 +92,9 @@ for (const oldProvider of baseline) {
     const current = defaults.getProvider(oldProvider.id);
     for (const [key, expected] of Object.entries(oldProvider)) {
         if (['models', 'imageModels'].includes(key)) {
-            equal(current[key].map(model => model.id), [...new Set(expected.map(model => model.id))], `${oldProvider.id} order`);
+            // New models may be inserted; legacy models keep their relative order.
+            const baselineIds = [...new Set(expected.map(model => model.id))];
+            equal(current[key].map(model => model.id).filter(id => baselineIds.includes(id)), baselineIds, `${oldProvider.id} order`);
             for (const oldModel of expected) {
                 const model = current[key].find(item => item.id === oldModel.id);
                 for (const [field, value] of Object.entries(oldModel))
@@ -102,6 +104,26 @@ for (const oldProvider of baseline) {
             equal(current[key], expected, `${oldProvider.id}.${key}`);
     }
 }
+
+// Resolve the new catalog entry through the store and serialize its API request.
+const kimiK31 = defaults.resolve('kimi', 'kimi-k3.1-pro');
+for (const level of ['low', 'high', 'max']) {
+    const body = buildOpenAiCompatibleChatBody([], kimiK31.model.id, {
+        provider: kimiK31.provider,
+        model: kimiK31.model,
+        maxOutputTokens: kimiK31.model.maxOutputTokens,
+        thinkingLevel: level,
+    });
+    equal(body.model, 'kimi-k3.1-pro', 'Kimi K3.1 Pro resolved to another model');
+    equal(body.reasoning_effort, level, 'Kimi K3.1 Pro reasoning choice did not reach the API');
+    equal(body.max_completion_tokens, 131072, 'Kimi K3.1 Pro request default became its documented maximum');
+    assert(!['max_tokens', 'thinking', 'temperature', 'top_p', 'frequency_penalty', 'presence_penalty']
+        .some(field => field in body), 'Kimi K3.1 Pro sent unsupported request fields');
+}
+equal(defaults.getDefaultThinkingLevel('kimi', 'kimi-k3.1-pro'), 'max',
+    'Kimi K3.1 Pro did not default to Max reasoning');
+assert(!defaults.getThinkingLevels('kimi', 'kimi-k3.1-pro').includes('off'),
+    'Kimi K3.1 Pro allowed thinking to be disabled');
 
 let calls = 0;
 const storage = new MemoryStorage();
