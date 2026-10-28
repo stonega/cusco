@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.56] - 2026-10-28
+
 ### Added
 
 - Add Kimi K3.1 Pro with a 1M-token context window, image input, and Low, High, and Max reasoning efforts.
@@ -594,7 +596,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Earlier releases are available on the [GitHub releases page](https://github.com/stonega/cusco/releases).
 
-[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.55...HEAD
+[Unreleased]: https://github.com/stonega/cusco/compare/v0.5.56...HEAD
+[0.5.56]: https://github.com/stonega/cusco/compare/v0.5.55...v0.5.56
 [0.5.55]: https://github.com/stonega/cusco/compare/v0.5.54...v0.5.55
 [0.5.54]: https://github.com/stonega/cusco/compare/v0.5.53...v0.5.54
 [0.5.53]: https://github.com/stonega/cusco/compare/v0.5.52...v0.5.53

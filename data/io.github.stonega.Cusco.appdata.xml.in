@@ -21,6 +21,6 @@
     <binary>cusco</binary>
   </provides>
   <releases>
-    <release version="@VERSION@" date="2026-10-17" />
+    <release version="@VERSION@" date="2026-10-28" />
   </releases>
 </component>
