@@ -305,32 +305,49 @@ function writeFileAtomically(path, contents) {
     }
 }
 
-function writeFileAtomicallyAsync(path, contents, cancellable = null) {
+async function writeFileAtomicallyAsync(path, contents, cancellable = null) {
     prepareAtomicWrite(path);
-    const file = Gio.File.new_for_path(path);
+    const tempPath = GLib.build_filenamev([
+        GLib.path_get_dirname(path),
+        `.${GLib.path_get_basename(path)}.${GLib.uuid_string_random()}.tmp`,
+    ]);
+    const file = Gio.File.new_for_path(tempPath);
     const bytes = new TextEncoder().encode(contents);
 
-    return new Promise((resolve, reject) => {
-        file.replace_contents_async(
-            bytes,
-            null,
-            false,
-            Gio.FileCreateFlags.PRIVATE | Gio.FileCreateFlags.REPLACE_DESTINATION,
+    try {
+        await new Promise((resolve, reject) => {
+            file.replace_contents_async(
+                bytes,
+                null,
+                false,
+                Gio.FileCreateFlags.PRIVATE | Gio.FileCreateFlags.REPLACE_DESTINATION,
+                cancellable,
+                (source, result) => {
+                    try {
+                        source.replace_contents_finish(result);
+                        resolve();
+                    } catch (error) {
+                        reject(error);
+                    }
+                },
+            );
+        });
+
+        if (GLib.chmod(tempPath, 0o600) !== 0)
+            throw new Error(`Could not secure temporary conversation data: ${tempPath}`);
+
+        // New destinations can be visible before replace_contents_async finishes.
+        // Publish only a complete file, just as the synchronous writer does.
+        file.move(
+            Gio.File.new_for_path(path),
+            Gio.FileCopyFlags.OVERWRITE,
             cancellable,
-            (source, result) => {
-                try {
-                    source.replace_contents_finish(result);
-
-                    if (GLib.chmod(path, 0o600) !== 0)
-                        throw new Error(`Could not secure conversation data: ${path}`);
-
-                    resolve();
-                } catch (error) {
-                    reject(error);
-                }
-            },
+            null,
         );
-    });
+    } finally {
+        if (GLib.file_test(tempPath, GLib.FileTest.EXISTS))
+            GLib.unlink(tempPath);
+    }
 }
 
 function readJsonFile(path) {
@@ -753,7 +770,7 @@ export class ConversationFileStore {
         const entries = [];
         const directory = Gio.File.new_for_path(this.pendingIndexPath);
         const enumerator = directory.enumerate_children(
-            Gio.FILE_ATTRIBUTE_STANDARD_NAME,
+            `${Gio.FILE_ATTRIBUTE_STANDARD_NAME},${Gio.FILE_ATTRIBUTE_STANDARD_TYPE}`,
             Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS,
             null,
         );
@@ -762,15 +779,35 @@ export class ConversationFileStore {
             let info;
 
             while ((info = enumerator.next_file(null)) !== null) {
-                const path = GLib.build_filenamev([this.pendingIndexPath, info.get_name()]);
+                const name = info.get_name();
+
+                // Atomic writes and interrupted writes can leave temporary files.
+                if (info.get_file_type() !== Gio.FileType.REGULAR
+                    || !/^[a-f0-9]{64}\.json$/.test(name)) {
+                    continue;
+                }
+
+                const path = GLib.build_filenamev([this.pendingIndexPath, name]);
 
                 try {
-                    const id = String(readJsonFile(path)?.conversationId ?? '').trim();
+                    const id = normalizeString(readJsonFile(path)?.conversationId).trim();
 
-                    if (id)
-                        entries.push({ id, path });
+                    if (!id || this._pendingMarkerPath(id) !== path)
+                        throw new SyntaxError('Pending index marker has an invalid conversation ID.');
+
+                    entries.push({ id, path });
                 } catch (error) {
-                    logError(error, `Failed to read pending index marker ${path}`);
+                    if (!(error instanceof SyntaxError)) {
+                        logError(error, `Failed to read pending index marker ${path}`);
+                        continue;
+                    }
+
+                    const id = this._recoverPendingMarker(path);
+
+                    if (id) {
+                        entries.push({ id, path });
+                        logError(error, `Recovered pending index marker ${path}`);
+                    }
                 }
             }
         } finally {
@@ -778,6 +815,50 @@ export class ConversationFileStore {
         }
 
         return entries;
+    }
+
+    _recoverPendingMarker(path) {
+        // The digest also names the transcript, so a damaged marker need not lose
+        // an interrupted update, including a chat that is absent from the index.
+        const recordPath = GLib.build_filenamev([
+            this.recordsPath,
+            GLib.path_get_basename(path),
+        ]);
+
+        if (GLib.file_test(recordPath, GLib.FileTest.EXISTS)) {
+            let record;
+
+            try {
+                record = readJsonFile(recordPath);
+            } catch (error) {
+                if (!(error instanceof SyntaxError))
+                    throw error;
+            }
+
+            const id = normalizeString((record?.conversation ?? record)?.id).trim();
+
+            if (id && this._pendingMarkerPath(id) === path) {
+                this._markIndexUpdatePending(id);
+                return id;
+            }
+        }
+
+        // Keep the evidence outside the scan directory instead of retrying the
+        // same parse on every save. Transcript files are never changed here.
+        const quarantinePath = GLib.build_filenamev([
+            `${this.pendingIndexPath}.corrupt`,
+            `${GLib.path_get_basename(path)}.${GLib.uuid_string_random()}`,
+        ]);
+        prepareAtomicWrite(quarantinePath);
+        Gio.File.new_for_path(path).move(
+            Gio.File.new_for_path(quarantinePath),
+            Gio.FileCopyFlags.NONE,
+            null,
+            null,
+        );
+        logError(new Error('Pending index marker could not be recovered.'),
+            `Quarantined pending index marker ${path} to ${quarantinePath}`);
+        return null;
     }
 
     _pendingMarkerPath(conversationId) {

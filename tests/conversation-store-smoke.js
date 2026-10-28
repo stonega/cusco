@@ -1,3 +1,4 @@
+import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 
 import { CONTEXT_COMPACTION_SUMMARY_KIND } from '../src/chat/compaction.js';
@@ -512,6 +513,188 @@ const afterPendingDelete = new ConversationFileStore({ path: migrationDatabasePa
 if (afterPendingDelete.conversations.some((conversation) => conversation.id === migrationSecondId)
     || recoveredStore.hasPendingIndexUpdates()) {
     throw new Error('Deleting a conversation resurrected a pending index update');
+}
+
+async function checkDamagedPendingMarkers(mode) {
+    const recoveryPath = GLib.build_filenamev([
+        GLib.get_tmp_dir(),
+        `cusco-pending-marker-${mode}-${GLib.uuid_string_random()}`,
+        'conversations.json',
+    ]);
+    const seedStore = new ConversationFileStore({ path: recoveryPath });
+    seedStore.save({ conversations: [], activeConversationId: null });
+    const staleDatabase = seedStore.load();
+    const damagedContents = ['', '{"version":1,', '{}', '{"conversationId":42}',
+        '{"conversationId":"another-chat"}'];
+    const expectedConversations = damagedContents.map((contents, index) => {
+        const conversation = {
+            id: `recover-${index}`,
+            title: `Recovered marker ${index}`,
+            messages: [createMessage('user', `Preserved transcript ${index}`)],
+        };
+
+        // The first record has an outdated index entry; the rest were saved
+        // just before an interruption and have not reached the index yet.
+        if (index === 0) {
+            staleDatabase.conversations.push(seedStore.saveConversation({
+                ...conversation,
+                title: 'Outdated title',
+            }));
+            seedStore.saveIndex(staleDatabase);
+        }
+
+        seedStore.saveConversation(conversation);
+        GLib.file_set_contents(seedStore._pendingMarkerPath(conversation.id), contents);
+        return conversation;
+    });
+    const orphanPath = seedStore._pendingMarkerPath('missing-transcript');
+    GLib.file_set_contents(orphanPath, '');
+    const mismatchedPath = seedStore._pendingMarkerPath('mismatched-transcript');
+    GLib.file_set_contents(mismatchedPath, '{');
+    const mismatchedRecordPath = seedStore._conversationRecordPath('mismatched-transcript');
+    const mismatchedRecord = JSON.stringify({ conversation: expectedConversations[0] });
+    GLib.file_set_contents(mismatchedRecordPath, mismatchedRecord);
+    const damagedRecordMarkerPath = seedStore._pendingMarkerPath('damaged-transcript');
+    const damagedRecordPath = seedStore._conversationRecordPath('damaged-transcript');
+    GLib.file_set_contents(damagedRecordMarkerPath, '{');
+    GLib.file_set_contents(damagedRecordPath, '{');
+    const temporaryPath = GLib.build_filenamev([
+        seedStore.pendingIndexPath,
+        `.${GLib.path_get_basename(orphanPath)}.interrupted.tmp`,
+    ]);
+    GLib.file_set_contents(temporaryPath, '{');
+
+    // A fresh store must recover without relying on in-memory pending summaries.
+    const recoveryStore = new ConversationFileStore({ path: recoveryPath });
+    const markerErrors = [];
+    const originalLogError = globalThis.logError;
+
+    try {
+        globalThis.logError = (error, message) => markerErrors.push({ error, message });
+
+        if (mode === 'load')
+            recoveryStore.load();
+        else if (mode === 'sync')
+            recoveryStore.saveIndex(staleDatabase);
+        else
+            await recoveryStore.saveIndexAsync(staleDatabase);
+
+        const recovered = new ConversationFileStore({ path: recoveryPath }).load();
+
+        if (recovered.conversations.length !== expectedConversations.length)
+            throw new Error(`${mode}: Damaged markers lost unindexed conversations`);
+
+        for (const expected of expectedConversations) {
+            const summary = recovered.conversations.find((item) => item.id === expected.id);
+
+            if (summary?.title !== expected.title
+                || recoveryStore.loadConversation(expected.id).messages[0]?.content
+                    !== expected.messages[0].content) {
+                throw new Error(`${mode}: Damaged marker recovery lost conversation data`);
+            }
+        }
+
+        const recoveryErrorCount = markerErrors.length;
+
+        for (let attempt = 0; attempt < 3; attempt++) {
+            recoveryStore.saveIndex(recovered);
+            await recoveryStore.saveIndexAsync(recovered);
+
+            if (recoveryStore.hasPendingIndexUpdates())
+                throw new Error(`${mode}: Damaged markers remained pending after recovery`);
+        }
+
+        if (recoveryErrorCount !== damagedContents.length + 3
+            || markerErrors.length !== recoveryErrorCount) {
+            throw new Error(`${mode}: Damaged markers or temporary files caused repeated errors`);
+        }
+
+        const quarantine = Gio.File.new_for_path(`${recoveryStore.pendingIndexPath}.corrupt`);
+        const quarantined = quarantine.enumerate_children(
+            Gio.FILE_ATTRIBUTE_STANDARD_NAME, Gio.FileQueryInfoFlags.NONE, null,
+        );
+        const quarantinedContents = new Map();
+
+        try {
+            let info;
+
+            while ((info = quarantined.next_file(null)) !== null) {
+                const [, bytes] = quarantine.get_child(info.get_name()).load_contents(null);
+                quarantinedContents.set(info.get_name().split('.json.')[0],
+                    new TextDecoder().decode(bytes));
+            }
+        } finally {
+            quarantined.close(null);
+        }
+
+        if (quarantinedContents.size !== 3)
+            throw new Error(`${mode}: Recovery quarantined the wrong number of markers`);
+
+        for (const [markerPath, contents] of [
+            [orphanPath, ''], [mismatchedPath, '{'], [damagedRecordMarkerPath, '{'],
+        ]) {
+            const digest = GLib.path_get_basename(markerPath).replace('.json', '');
+
+            if (GLib.file_test(markerPath, GLib.FileTest.EXISTS)
+                || quarantinedContents.get(digest) !== contents) {
+                throw new Error(`${mode}: An unrecoverable marker was not preserved in quarantine`);
+            }
+        }
+
+        const [, temporaryBytes] = GLib.file_get_contents(temporaryPath);
+        const [, mismatchedBytes] = GLib.file_get_contents(mismatchedRecordPath);
+        const [, damagedRecordBytes] = GLib.file_get_contents(damagedRecordPath);
+
+        if (new TextDecoder().decode(temporaryBytes) !== '{'
+            || new TextDecoder().decode(mismatchedBytes) !== mismatchedRecord
+            || new TextDecoder().decode(damagedRecordBytes) !== '{') {
+            throw new Error(`${mode}: Marker recovery changed a temporary file or transcript`);
+        }
+    } finally {
+        globalThis.logError = originalLogError;
+    }
+}
+
+for (const mode of ['load', 'sync', 'async'])
+    await checkDamagedPendingMarkers(mode);
+
+const cancelledStore = new ConversationFileStore({ path: GLib.build_filenamev([
+    GLib.get_tmp_dir(),
+    `cusco-cancelled-conversation-${GLib.uuid_string_random()}`,
+    'conversations.json',
+]) });
+const cancelledConversation = {
+    id: 'cancelled-chat',
+    title: 'Committed title',
+    messages: [createMessage('user', 'Committed transcript')],
+};
+cancelledStore.save({ conversations: [cancelledConversation], activeConversationId: 'cancelled-chat' });
+const cancellable = new Gio.Cancellable();
+cancellable.cancel();
+
+for (const operation of [
+    () => cancelledStore.saveConversationAsync({ ...cancelledConversation, title: 'Cancelled title' },
+        { cancellable }),
+    () => cancelledStore.saveIndexAsync({ conversations: [], activeConversationId: null },
+        { cancellable }),
+    () => cancelledStore.saveActiveConversationIdAsync(null, { cancellable }),
+]) {
+    let cancelled = false;
+
+    try {
+        await operation();
+    } catch (error) {
+        cancelled = error.matches?.(Gio.io_error_quark(), Gio.IOErrorEnum.CANCELLED);
+    }
+
+    if (!cancelled)
+        throw new Error('An asynchronous write did not report cancellation');
+}
+
+if (GLib.file_test(cancelledStore._pendingMarkerPath(cancelledConversation.id), GLib.FileTest.EXISTS)
+    || cancelledStore.load().activeConversationId !== cancelledConversation.id
+    || cancelledStore.loadConversation(cancelledConversation.id).title !== cancelledConversation.title) {
+    throw new Error('Cancelled asynchronous writes changed committed data or left a pending marker');
 }
 
 const asyncDatabasePath = GLib.build_filenamev([

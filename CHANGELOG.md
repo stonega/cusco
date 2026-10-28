@@ -11,6 +11,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Add Kimi K3.1 Pro with a 1M-token context window, image input, and Low, High, and Max reasoning efforts.
 
+### Fixed
+
+- Recover damaged conversation index markers or quarantine unrecoverable ones to stop repeated parse errors during saves, and publish asynchronous writes only after they are complete.
+
 ## [0.5.55] - 2026-10-17
 
 ### Added
